@@ -1,4 +1,5 @@
 {
+  "tier": "extended",
   "kind": "vendor",
   "description": "Flyer with three sections and two size-priced noodles (small/large must become separate items).",
   "vendor": {

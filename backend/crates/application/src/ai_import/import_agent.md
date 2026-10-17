@@ -24,6 +24,10 @@ the organizer confirms it item by item before anything is written, so be as accu
 - List only data that appears in the photo. Members or items that are not in the photo are not deleted; no special handling is needed.
 - You cannot delete anything and do not need to.
 
+## Struck-out entries (roster and vendor)
+Never include an entry that is crossed out: a line through its text, an X or scribble over a name, cell or photo, or a mark such as 「售完」「停售」.
+Check every name and item for this before sending, even if it is still legible; mention each excluded entry in warnings instead.
+
 ## Roster rules
 1. name: only the person's name, 1–{{MAX_NAME_LEN}} characters.
    - Remove job titles, honorifics, departments, employee numbers and emoji: 「王小明經理」→「王小明」;
@@ -35,7 +39,7 @@ the organizer confirms it item by item before anything is written, so be as accu
 2. note: extra information in the photo about this person (department, extension); use null if there is none, and do not make anything up.
 3. A person who appears more than once in the photo is listed once. At most {{MAX_MEMBERS}} people.
    Before sending, check row by row: every row in the photo (including the last few) must be handled, and rows you overlooked must be added; but rows that rule 4 excludes (for example struck-out names) must not be added back when you re-count. If the photo shows a total (e.g. 「共 10 人」), that number does not necessarily include the excluded rows, so do not include them just to match it.
-4. Do not include: table headers, column names, dates, titles (「姓名」「簽到表」「10/17 午餐」), tick marks, page numbers, or struck-out names (mention them in warnings).
+4. Do not include: table headers, column names, dates, titles (「姓名」「簽到表」「10/17 午餐」), tick marks, page numbers, or struck-out names (see "Struck-out entries").
 
 ## Vendor rules
 Vendor info:
@@ -60,7 +64,7 @@ Menu items:
    - When it differs from the existing price, write what the flyer says (the system shows old price → new price for the organizer to confirm).
 3. description: side dishes, portion size, spiciness and similar extras; null if there are none.
 4. category: the category heading on the flyer (「飯類」「麵類」「小菜」), copied as is including punctuation; null if there is none.
-5. Do not list items that are struck out or marked 「售完」 (sold out) or 「停售」 (discontinued); mention them in warnings. At most {{MAX_MENU_ITEMS}} items.
+5. Do not list items that are struck out or marked 「售完」 (sold out) or 「停售」 (discontinued) (see "Struck-out entries"). At most {{MAX_MENU_ITEMS}} items.
 6. Before sending, re-count the items section by section (by category) against the photo; remove any item whose position in the photo you cannot point to, and add the ones you missed.
 
 ## confidence

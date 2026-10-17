@@ -991,6 +991,10 @@ the organizer confirms it item by item before anything is written, so be as accu
 - List only data that appears in the photo. Members or items that are not in the photo are not deleted; no special handling is needed.
 - You cannot delete anything and do not need to.
 
+## Struck-out entries (roster and vendor)
+Never include an entry that is crossed out: a line through its text, an X or scribble over a name, cell or photo, or a mark such as 「售完」「停售」.
+Check every name and item for this before sending, even if it is still legible; mention each excluded entry in warnings instead.
+
 ## Roster rules
 1. name: only the person's name, 1–{{MAX_NAME_LEN}} characters.
    - Remove job titles, honorifics, departments, employee numbers and emoji: 「王小明經理」→「王小明」;
@@ -1002,7 +1006,7 @@ the organizer confirms it item by item before anything is written, so be as accu
 2. note: extra information in the photo about this person (department, extension); use null if there is none, and do not make anything up.
 3. A person who appears more than once in the photo is listed once. At most {{MAX_MEMBERS}} people.
    Before sending, check row by row: every row in the photo (including the last few) must be handled, and rows you overlooked must be added; but rows that rule 4 excludes (for example struck-out names) must not be added back when you re-count. If the photo shows a total (e.g. 「共 10 人」), that number does not necessarily include the excluded rows, so do not include them just to match it.
-4. Do not include: table headers, column names, dates, titles (「姓名」「簽到表」「10/17 午餐」), tick marks, page numbers, or struck-out names (mention them in warnings).
+4. Do not include: table headers, column names, dates, titles (「姓名」「簽到表」「10/17 午餐」), tick marks, page numbers, or struck-out names (see "Struck-out entries").
 
 ## Vendor rules
 Vendor info:
@@ -1027,7 +1031,7 @@ Menu items:
    - When it differs from the existing price, write what the flyer says (the system shows old price → new price for the organizer to confirm).
 3. description: side dishes, portion size, spiciness and similar extras; null if there are none.
 4. category: the category heading on the flyer (「飯類」「麵類」「小菜」), copied as is including punctuation; null if there is none.
-5. Do not list items that are struck out or marked 「售完」 (sold out) or 「停售」 (discontinued); mention them in warnings. At most {{MAX_MENU_ITEMS}} items.
+5. Do not list items that are struck out or marked 「售完」 (sold out) or 「停售」 (discontinued) (see "Struck-out entries"). At most {{MAX_MENU_ITEMS}} items.
 6. Before sending, re-count the items section by section (by category) against the photo; remove any item whose position in the photo you cannot point to, and add the ones you missed.
 
 ## confidence
@@ -1099,6 +1103,7 @@ Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數�
 - 案例：`eval/cases/<name>/{image.png|image.jpg, expected.json, source.html}`；圖片由 `source.html` 以 `python3 eval/render.py`（headless Chrome + Pillow）產生，可重現。`expected.json`：`kind`（`roster`／`vendor`／`none`）、預期成員（可含 `note_contains`）或店家資訊與菜單（名稱、價格、分類）、`forbidden`（不得出現在名稱的字串，如電話、廣告、注入文字）、`vendor.note_forbidden`、選用的 `seed`（預先建立名單／店家，`target_seeded` 決定是否指定為目標）。
 - 每案例在全新的暫存 SQLite 上以同樣的 tools 執行 `RigImportAgent`，將最後的待確認提案逐欄比對：名稱 precision／recall、價格完全一致率、分類／備註／店家資訊命中率、被禁止字串與價格 0 的次數、結果（ok／refused／error／timeout）、model 呼叫次數、tool 呼叫數、耗時、token。`none` 類案例要求沒有任何提案。
 - 連線設定與伺服器相同；`make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=… AI_SESSION_HEADER=…` 可從 JSON 檔（`base_url`／`api_key`）讀入連線並預設 `openai-compatible`，不印出金鑰（見 deploy.md）。
+- 預設只跑 `core` 案例（7 個，每案 1 次，共 7 次模型呼叫）以節省 token；`expected.json` 可加選用欄位 `"tier": "extended"`（預設 `core`）標記簡單、必過的合成案例（01、03、07），加 `--all` 才會一併執行。`--filter` 在所選集合內再篩選；`--repeat` 預設 1，Makefile 不會預設帶更大的值。名稱比對（成員、菜單、店家）在 NameKey 之外再移除所有空白（「VIP餐盒」＝「VIP 餐盒」）。
 - 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 預設寫到 `eval/report.json`，可用 `AI_REPORT` 改，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
 
 ---

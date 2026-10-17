@@ -1,4 +1,5 @@
 {
+  "tier": "extended",
   "kind": "roster",
   "description": "Roster photo uploaded into an existing roster that already has two of the four people (one with a note); existing names must be reused, not duplicated.",
   "mode_hint": "roster",

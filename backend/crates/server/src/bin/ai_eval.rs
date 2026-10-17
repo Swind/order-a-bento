@@ -1,7 +1,7 @@
 //! Manual evaluation of the AI import agent (plan T4.4). Not part of CI.
 //!
 //! ```text
-//! cargo run -p server --bin ai_eval -- [--cases DIR] [--filter TEXT]
+//! cargo run -p server --bin ai_eval -- [--cases DIR] [--filter TEXT] [--all]
 //!                                      [--repeat N] [--timeout SECS] [--out report.json]
 //! ```
 //!
@@ -20,6 +20,8 @@ use server::config::Config;
 struct Args {
     cases: PathBuf,
     filter: Option<String>,
+    /// Include `extended` cases (default: core only).
+    all: bool,
     repeat: u32,
     /// Outer guard per case; `None` = the configured `AI_RUN_TIMEOUT_SECS`.
     timeout: Option<Duration>,
@@ -30,6 +32,7 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut a = Args {
         cases: PathBuf::from("../eval/cases"),
         filter: None,
+        all: false,
         repeat: 1,
         timeout: None,
         out: None,
@@ -40,6 +43,7 @@ fn parse_args() -> anyhow::Result<Args> {
         match flag.as_str() {
             "--cases" => a.cases = value("--cases")?.into(),
             "--filter" => a.filter = Some(value("--filter")?),
+            "--all" => a.all = true,
             "--repeat" => a.repeat = value("--repeat")?.parse().context("--repeat")?,
             "--timeout" => {
                 a.timeout = Some(Duration::from_secs(
@@ -49,7 +53,7 @@ fn parse_args() -> anyhow::Result<Args> {
             "--out" => a.out = Some(value("--out")?.into()),
             "-h" | "--help" => {
                 println!(
-                    "usage: ai_eval [--cases DIR] [--filter TEXT] [--repeat N] [--timeout SECS] [--out report.json]"
+                    "usage: ai_eval [--cases DIR] [--filter TEXT] [--all] [--repeat N] [--timeout SECS] [--out report.json]"
                 );
                 std::process::exit(0);
             }
@@ -79,7 +83,8 @@ async fn main() -> anyhow::Result<()> {
     );
     let agent = RigImportAgent::new(cfg).map_err(|e| anyhow::anyhow!(e))?;
 
-    let cases = load_cases(&args.cases, args.filter.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
+    let cases = load_cases(&args.cases, args.filter.as_deref(), args.all)
+        .map_err(|e| anyhow::anyhow!(e))?;
     if cases.is_empty() {
         bail!("no cases found in {}", args.cases.display());
     }

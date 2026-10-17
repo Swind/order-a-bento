@@ -93,10 +93,22 @@ pub struct SeedVendor {
     pub menu: Vec<ExpectedItem>,
 }
 
+/// Which default run a case belongs to: `core` cases always run, `extended` ones (easy,
+/// always-passing) only with `--all`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    #[default]
+    Core,
+    Extended,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expected {
     pub kind: Kind,
+    #[serde(default)]
+    pub tier: Tier,
     #[serde(default)]
     pub description: String,
     /// `roster` | `vendor`: what the request tells the agent (default: nothing).
@@ -128,7 +140,8 @@ pub struct Case {
     pub expected: Expected,
 }
 
-pub fn load_cases(dir: &Path, filter: Option<&str>) -> Result<Vec<Case>, String> {
+/// Loads the cases whose name contains `filter`; `extended` cases only when `all` is set.
+pub fn load_cases(dir: &Path, filter: Option<&str>, all: bool) -> Result<Vec<Case>, String> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|e| format!("reading {}: {e}", dir.display()))?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -155,6 +168,9 @@ pub fn load_cases(dir: &Path, filter: Option<&str>) -> Result<Vec<Case>, String>
             .map_err(|e| format!("{name}/expected.json: {e}"))?;
         let expected: Expected =
             serde_json::from_str(&text).map_err(|e| format!("{name}/expected.json: {e}"))?;
+        if expected.tier == Tier::Extended && !all {
+            continue;
+        }
         cases.push(Case {
             name,
             image: ImageInput {
@@ -199,8 +215,10 @@ pub struct Metrics {
     pub wrong_prices: Vec<String>,
 }
 
+/// Comparison key for names: `NameKey` plus all whitespace removed ("VIP餐盒" == "VIP 餐盒").
 fn key(s: &str) -> NameKey {
-    NameKey::from(s)
+    let squeezed: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    NameKey::from(squeezed.as_str())
 }
 
 fn digits(s: &str) -> String {
@@ -758,6 +776,49 @@ mod tests {
 
     fn expected(json: &str) -> Expected {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn whitespace_only_name_differences_match() {
+        let exp: Expected =
+            serde_json::from_str(r#"{"kind":"vendor","menu":[{"name":"VIP餐盒","price":100}]}"#)
+                .unwrap();
+        let p = vendor("", vec![item("VIP 餐盒", Some(100), None)]);
+        let m = score(&exp, &p);
+        assert_eq!(m.recall, Some(1.0));
+        assert_eq!(m.precision, Some(1.0));
+        let exp: Expected =
+            serde_json::from_str(r#"{"kind":"roster","members":[{"name":"Amy 林美玲"}]}"#).unwrap();
+        let m = score(&exp, &roster(vec![member("Amy林美玲", None)]));
+        assert_eq!(m.recall, Some(1.0));
+    }
+
+    #[test]
+    fn default_selection_skips_extended_cases() {
+        let dir = std::env::temp_dir().join(format!("ai_eval_tiers_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (name, json) in [
+            ("01-easy", r#"{"kind":"none","tier":"extended"}"#),
+            ("02-hard", r#"{"kind":"none"}"#),
+            ("03-easy", r#"{"kind":"none","tier":"extended"}"#),
+        ] {
+            let d = dir.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("image.png"), b"x").unwrap();
+            std::fs::write(d.join("expected.json"), json).unwrap();
+        }
+        let names = |f: Option<&str>, all| -> Vec<String> {
+            load_cases(&dir, f, all)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.name)
+                .collect()
+        };
+        assert_eq!(names(None, false), ["02-hard"]);
+        assert_eq!(names(None, true), ["01-easy", "02-hard", "03-easy"]);
+        assert_eq!(names(Some("03"), false), Vec::<String>::new());
+        assert_eq!(names(Some("03"), true), ["03-easy"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

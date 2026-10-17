@@ -51,9 +51,10 @@ docker-build: ## Build the Docker image (order-a-bento:latest)
 #   - when no key is set, STRATA_API_KEY / STRATA_ANTHROPIC_BASE_URL / STRATA_MODEL (environment or .env)
 #     with AI_PROVIDER=anthropic-compatible.
 # Values given on the make command line win over .env. Secrets are never printed.
-# Extra flags: make ai-eval ARGS="--filter 03 --repeat 3"; report path: AI_REPORT=/tmp/x.json
+# Default = core cases only, 1 run each (7 model runs, cheap). Extra flags: ARGS="--all" adds the easy
+# extended cases (01, 03, 07); ARGS="--filter 03 --all --repeat 3"; report path: AI_REPORT=/tmp/x.json
 AI_REPORT ?= ../eval/report.json
-ai-eval: ## Run the AI import eval (eval/cases) against the configured model; report in eval/report.json
+ai-eval: ## Run the core AI import eval cases (ARGS=--all for all) against the configured model; report in eval/report.json
 	@cli_model="$$AI_MODEL"; cli_provider="$$AI_PROVIDER"; \
 	set -a; [ -f .env ] && . ./.env; set +a; \
 	[ -n "$$cli_model" ] && AI_MODEL="$$cli_model"; [ -n "$$cli_provider" ] && AI_PROVIDER="$$cli_provider"; \
