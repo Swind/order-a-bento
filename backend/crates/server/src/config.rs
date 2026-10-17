@@ -15,6 +15,22 @@ pub enum AiMode {
     Disabled,
 }
 
+/// A secret that never shows up in `Debug` output (logs, panics).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("invalid value for {key}: {value:?} ({reason})")]
@@ -34,6 +50,13 @@ pub struct Config {
     pub database_url: String,
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
+    /// Resolved `GOOGLE_OAUTH_ENABLED`: Google login is available. Always implies both credentials.
+    pub google_oauth_enabled: bool,
+    /// `PASSWORD_LOGIN_ENABLED` (default true): local-account password login endpoint.
+    pub password_login_enabled: bool,
+    /// `ADMIN_EMAIL` / `ADMIN_PASSWORD` (both or neither): local admin created at startup if missing.
+    pub admin_email: Option<String>,
+    pub admin_password: Option<Secret>,
     pub anthropic_api_key: Option<String>,
     /// `ANTHROPIC_BASE_URL`: API origin override (mock servers, gateways).
     pub anthropic_base_url: Option<String>,
@@ -96,10 +119,12 @@ impl Config {
                 });
             }
         };
-        let boolean = |key: &'static str| -> Result<bool, ConfigError> {
+        // `None` when the variable is unset or empty.
+        let tri_state = |key: &'static str| -> Result<Option<bool>, ConfigError> {
             match get(key).map(str::to_ascii_lowercase).as_deref() {
-                None | Some("false") | Some("0") | Some("no") | Some("off") => Ok(false),
-                Some("true") | Some("1") | Some("yes") | Some("on") => Ok(true),
+                None => Ok(None),
+                Some("false") | Some("0") | Some("no") | Some("off") => Ok(Some(false)),
+                Some("true") | Some("1") | Some("yes") | Some("on") => Ok(Some(true)),
                 Some(other) => Err(ConfigError::Invalid {
                     key,
                     value: other.to_owned(),
@@ -107,7 +132,61 @@ impl Config {
                 }),
             }
         };
+        let boolean = |key: &'static str| -> Result<bool, ConfigError> {
+            Ok(tri_state(key)?.unwrap_or(false))
+        };
         let dev_login = boolean("DEV_LOGIN")?;
+        let google_client_id = opt("GOOGLE_CLIENT_ID");
+        let google_client_secret = opt("GOOGLE_CLIENT_SECRET");
+        let has_google_credentials = google_client_id.is_some() && google_client_secret.is_some();
+        // Unset = auto (on iff both credentials are set); false = off even with credentials.
+        let google_oauth_enabled = match tri_state("GOOGLE_OAUTH_ENABLED")? {
+            None => has_google_credentials,
+            Some(false) => false,
+            Some(true) if has_google_credentials => true,
+            Some(true) => {
+                return Err(ConfigError::Invalid {
+                    key: "GOOGLE_OAUTH_ENABLED",
+                    value: "true".into(),
+                    reason: "requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET",
+                });
+            }
+        };
+        let password_login_enabled = tri_state("PASSWORD_LOGIN_ENABLED")?.unwrap_or(true);
+        let (admin_email, admin_password) = match (opt("ADMIN_EMAIL"), opt("ADMIN_PASSWORD")) {
+            (None, None) => (None, None),
+            (Some(email), Some(password)) => {
+                let email = domain::identity::parse_local_email(&email).map_err(|_| {
+                    ConfigError::Invalid {
+                        key: "ADMIN_EMAIL",
+                        value: email.clone(),
+                        reason: "expected an email address",
+                    }
+                })?;
+                domain::identity::validate_password(&password).map_err(|_| {
+                    ConfigError::Invalid {
+                        key: "ADMIN_PASSWORD",
+                        value: "<redacted>".into(),
+                        reason: "must be 10 to 256 characters",
+                    }
+                })?;
+                (Some(email), Some(Secret(password)))
+            }
+            (Some(_), None) => {
+                return Err(ConfigError::Invalid {
+                    key: "ADMIN_PASSWORD",
+                    value: String::new(),
+                    reason: "required when ADMIN_EMAIL is set",
+                });
+            }
+            (None, Some(_)) => {
+                return Err(ConfigError::Invalid {
+                    key: "ADMIN_EMAIL",
+                    value: String::new(),
+                    reason: "required when ADMIN_PASSWORD is set",
+                });
+            }
+        };
         let ai_demo = boolean("AI_DEMO")?;
         let ai_fallbacks = match get("AI_FALLBACKS").map(str::to_ascii_lowercase).as_deref() {
             None | Some("default") => true,
@@ -160,8 +239,12 @@ impl Config {
             dev_login,
             app_base_url: string("APP_BASE_URL", "http://localhost:3000"),
             database_url: string("DATABASE_URL", "sqlite://data/bento.db"),
-            google_client_id: opt("GOOGLE_CLIENT_ID"),
-            google_client_secret: opt("GOOGLE_CLIENT_SECRET"),
+            google_client_id,
+            google_client_secret,
+            google_oauth_enabled,
+            password_login_enabled,
+            admin_email,
+            admin_password,
             anthropic_api_key: opt("ANTHROPIC_API_KEY"),
             anthropic_base_url: opt("ANTHROPIC_BASE_URL"),
             ai_model: string("AI_MODEL", "claude-opus-5-5"),
@@ -356,6 +439,103 @@ mod tests {
         assert_eq!(c.anthropic_base_url.as_deref(), Some("http://127.0.0.1:9"));
         assert!(Config::from_map(&m(&[("AI_FALLBACKS", "maybe")])).is_err());
         assert!(Config::from_map(&m(&[("AI_DEMO", "perhaps")])).is_err());
+    }
+
+    fn env(kv: &[(&str, &str)]) -> HashMap<String, String> {
+        kv.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn google_oauth_enabled_auto_true_false() {
+        const CREDS: [(&str, &str); 2] =
+            [("GOOGLE_CLIENT_ID", "id"), ("GOOGLE_CLIENT_SECRET", "s")];
+        let with = |extra: &[(&str, &str)]| {
+            let mut kv = CREDS.to_vec();
+            kv.extend_from_slice(extra);
+            Config::from_map(&env(&kv))
+        };
+        // auto: on iff both credentials are set
+        assert!(!Config::from_map(&env(&[])).unwrap().google_oauth_enabled);
+        assert!(with(&[]).unwrap().google_oauth_enabled);
+        let only_id = Config::from_map(&env(&[("GOOGLE_CLIENT_ID", "id")])).unwrap();
+        assert!(!only_id.google_oauth_enabled);
+        // explicit false wins over credentials
+        assert!(
+            !with(&[("GOOGLE_OAUTH_ENABLED", "false")])
+                .unwrap()
+                .google_oauth_enabled
+        );
+        assert!(
+            with(&[("GOOGLE_OAUTH_ENABLED", "TRUE")])
+                .unwrap()
+                .google_oauth_enabled
+        );
+        // explicit true needs both credentials
+        for kv in [
+            vec![("GOOGLE_OAUTH_ENABLED", "true")],
+            vec![("GOOGLE_OAUTH_ENABLED", "true"), ("GOOGLE_CLIENT_ID", "id")],
+        ] {
+            let err = Config::from_map(&env(&kv)).unwrap_err();
+            assert!(matches!(
+                err,
+                ConfigError::Invalid {
+                    key: "GOOGLE_OAUTH_ENABLED",
+                    ..
+                }
+            ));
+        }
+        assert!(Config::from_map(&env(&[("GOOGLE_OAUTH_ENABLED", "maybe")])).is_err());
+        // empty = unset
+        assert!(
+            !Config::from_map(&env(&[("GOOGLE_OAUTH_ENABLED", "")]))
+                .unwrap()
+                .google_oauth_enabled
+        );
+    }
+
+    #[test]
+    fn password_login_defaults_on() {
+        assert!(Config::from_map(&env(&[])).unwrap().password_login_enabled);
+        let c = Config::from_map(&env(&[("PASSWORD_LOGIN_ENABLED", "false")])).unwrap();
+        assert!(!c.password_login_enabled);
+        assert!(Config::from_map(&env(&[("PASSWORD_LOGIN_ENABLED", "x")])).is_err());
+    }
+
+    #[test]
+    fn admin_bootstrap_vars_come_in_pairs() {
+        let c = Config::from_map(&env(&[])).unwrap();
+        assert!(c.admin_email.is_none() && c.admin_password.is_none());
+        let c = Config::from_map(&env(&[
+            ("ADMIN_EMAIL", " Root@Example.com "),
+            ("ADMIN_PASSWORD", "long enough pw"),
+        ]))
+        .unwrap();
+        assert_eq!(c.admin_email.as_deref(), Some("root@example.com"));
+        assert_eq!(
+            c.admin_password.as_ref().unwrap().expose(),
+            "long enough pw"
+        );
+        // the password never shows in Debug output
+        assert!(!format!("{c:?}").contains("long enough pw"));
+
+        for kv in [
+            vec![("ADMIN_EMAIL", "root@example.com")],
+            vec![("ADMIN_PASSWORD", "long enough pw")],
+            vec![
+                ("ADMIN_EMAIL", "not-an-email"),
+                ("ADMIN_PASSWORD", "long enough pw"),
+            ],
+            vec![
+                ("ADMIN_EMAIL", "root@example.com"),
+                ("ADMIN_PASSWORD", "short"),
+            ],
+        ] {
+            let err = Config::from_map(&env(&kv)).unwrap_err();
+            assert!(!err.to_string().contains("long enough pw"));
+            assert!(!err.to_string().contains("short\""));
+        }
     }
 
     #[test]

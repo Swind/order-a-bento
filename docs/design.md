@@ -380,18 +380,26 @@ impl SubmitOrder {
 ## 6. 資料庫設計（SQLite）
 
 > 時間一律存 UTC ISO-8601 TEXT；金額 INTEGER（元）；ID 為 UUIDv7 TEXT。
+>
+> `organizers` 在 `0001_init.sql` 是 `google_sub NOT NULL`；`0002_local_accounts.sql` 以 SQLite 的 12 步驟重建資料表（SQLite 無法移除 NOT NULL）。重建時 `DROP TABLE` 在 `foreign_keys=ON` 下會連帶 `ON DELETE CASCADE` 刪光 sessions／rosters／…，而 `PRAGMA foreign_keys` 在 transaction 內無效，所以該檔以 `-- no-transaction` 開頭（sqlx 不包 transaction），自行 `PRAGMA foreign_keys=OFF; BEGIN; … COMMIT; PRAGMA foreign_keys=ON;`。測試會用 0001 的資料升級並驗證資料、FK 與 cascade 都還在。
 
 ```sql
 -- Identity -------------------------------------------------------------
 CREATE TABLE organizers (
   id            TEXT PRIMARY KEY,
-  google_sub    TEXT NOT NULL UNIQUE,
-  email         TEXT NOT NULL,
+  google_sub    TEXT UNIQUE,               -- NULL = 本機帳號（email + 密碼，migration 0002）
+  email         TEXT NOT NULL,             -- 本機帳號：app 層 trim + lowercase 後存入
   display_name  TEXT NOT NULL,
   avatar_url    TEXT,
   created_at    TEXT NOT NULL,
-  last_login_at TEXT NOT NULL
+  last_login_at TEXT NOT NULL,
+  password_hash TEXT,                      -- Argon2id PHC 字串（預設參數）；只有本機帳號會寫入
+  CHECK (google_sub IS NOT NULL OR password_hash IS NOT NULL)   -- 每個帳號至少有一種登入方式
 );
+-- email 只在「本機帳號」之間唯一；Google/dev 帳號以 google_sub 識別，不依 email 自動綁定本機帳號，
+-- 同 email 的 Google 帳號與本機帳號是兩個獨立的開團者（資料不共用）。
+CREATE UNIQUE INDEX idx_organizers_local_email ON organizers(email) WHERE google_sub IS NULL;
+CREATE INDEX idx_organizers_email_lower ON organizers(lower(email));
 
 CREATE TABLE sessions (
   token_hash    BLOB PRIMARY KEY,          -- SHA-256(session token)，DB 外洩也無法冒用
@@ -629,6 +637,8 @@ HAVING names > 1;
 |--------|------|------|
 | GET | `/auth/google/login?returnTo=` | 302 到 Google（PKCE、state、nonce） |
 | GET | `/auth/google/callback` | 交換 code、驗證 id_token、建立 session、302 回前端 |
+| POST | `/auth/password-login` | `{ email, password }`，本機帳號登入，成功 204 並設定與 Google 登入相同的 session cookie；失敗一律 401 `invalid_credentials`（email 不存在／密碼錯誤／無密碼無法區分，帳號不存在時仍做一次 dummy 驗證以拉平時間）；每個 client IP burst 10、每 5 秒補 1 次，超過回 429；`PASSWORD_LOGIN_ENABLED=false` 時不註冊（404） |
+| GET | `/auth/config` | 公開；`{ googleEnabled, passwordLoginEnabled, devLoginEnabled, aiImportEnabled, aiDemo }`，登入頁只顯示啟用的登入方式 |
 | POST | `/auth/logout` | 刪除 session |
 | GET | `/me` | 目前登入者資訊（401 表示未登入） |
 
@@ -1056,6 +1066,8 @@ let res = agent
 | 個資保存 | 下單頁告知會記錄 IP 與裝置資訊；團關閉 90 天後背景工作把 `order_submissions` 的 ClientInfo 欄位清為 NULL；開團者介面只顯示 UA 摘要與裝置 ID 前 3 碼 |
 | Session 竊取 | Cookie `HttpOnly; Secure; SameSite=Lax`；DB 只存 token 的 SHA-256；14 天滑動過期 |
 | CSRF | SameSite=Lax + 狀態變更請求檢查 `Origin` 與 host 相符 |
+| 密碼登入暴力破解 | Argon2id（預設參數 19 MiB／t=2／p=1，在 `spawn_blocking` 執行）；`/auth/password-login` 每個 client IP 限速 burst 10、0.2/s（另受公開端點限速）；統一的 401 `invalid_credentials` 不洩漏帳號是否存在；帳號不存在時做 dummy 驗證拉平回應時間；沿用 Origin（CSRF）檢查；請求內容（email／密碼）不寫入日誌；密碼長度 10～256 |
+| 本機帳號建立 | 網頁沒有註冊功能；只能用 CLI `server admin create`（互動輸入或 `--password-stdin`）或啟動時的 `ADMIN_EMAIL`／`ADMIN_PASSWORD` bootstrap（帳號已存在就不動，永不以環境變數覆寫密碼）。Google 登入不會依 email 綁定本機帳號 |
 | OAuth 攻擊 | PKCE、`state`、`nonce`，驗證 id_token 的 `iss`、`aud`、`exp`、簽章；只接受 `email_verified=true` |
 | 越權存取 | 所有管理端 repo 查詢都帶 `organizer_id`；找不到一律回 404（不洩漏存在與否） |
 | AI 越權 | tools 的 `organizer_id` 由後端注入，不在 tool 參數中；沒有刪除 tool；寫入類 tool 只寫提案 |
@@ -1073,6 +1085,10 @@ APP_BASE_URL=https://bento.example.com
 DATABASE_URL=sqlite:///data/bento.db
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_ENABLED=              # 空＝自動（兩個憑證都有才啟用）；false＝停用；true＝缺憑證時拒絕啟動
+PASSWORD_LOGIN_ENABLED=true        # 本機帳號 email + 密碼登入
+ADMIN_EMAIL=                       # 與 ADMIN_PASSWORD 成對；啟動時帳號不存在才建立（容器 bootstrap，優先用 CLI）
+ADMIN_PASSWORD=
 ANTHROPIC_API_KEY=...
 AI_MODEL=claude-opus-5-5
 AI_DAILY_QUOTA_PER_USER=30
@@ -1082,6 +1098,8 @@ SESSION_TTL_DAYS=14
 TRUSTED_PROXIES=10.0.0.0/8          # 反向代理的 IP 範圍；空值 = 不信任 X-Forwarded-For
 CLIENT_INFO_RETENTION_DAYS=90
 ```
+
+**CLI（不經網頁建立管理員）**：`server admin create --email <e> --name <名稱> [--password-stdin]`、`server admin set-password --email <e> [--password-stdin]`、`server admin list`。同一個 `server` 執行檔（不帶參數仍是啟動伺服器），讀取相同設定與 `.env`，連線 `DATABASE_URL` 並先跑 migration。密碼由無回顯提示輸入兩次，或 `--password-stdin` 讀一行。結束碼：0 成功／1 內部錯誤／2 參數錯誤／3 輸入不合法／4 帳號已存在／5 找不到帳號。`make admin EMAIL=… NAME=…` 是本機開發的捷徑。
 
 **部署**
 - 多階段 Dockerfile：`node` build 前端 → `rust` build（嵌入前端）→ `distroless` / `debian-slim` 執行。

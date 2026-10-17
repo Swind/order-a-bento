@@ -13,6 +13,7 @@ use infrastructure::identity_repo::{SqliteOAuthStateRepo, SqliteOrganizerRepo, S
 use infrastructure::ordering_repo::{
     SqliteGroupOrderRepo, SqliteOrderReadModel, SqliteSettlementRepo, SqliteSubmissionRepo,
 };
+use infrastructure::password::Argon2PasswordHasher;
 use infrastructure::sqlite::{Db, TempDir};
 use infrastructure::tokens::OsRngTokenGenerator;
 
@@ -87,6 +88,7 @@ pub async fn test_app_with(
         sessions: Arc::new(SqliteSessionRepo::new(db.clone())),
         oauth_states: Arc::new(SqliteOAuthStateRepo::new(db.clone())),
         identity,
+        hasher: Arc::new(Argon2PasswordHasher::new()),
         tokens: Arc::new(OsRngTokenGenerator),
         clock: Arc::new(SystemClock),
         config: AuthConfig::from_days(14),
@@ -113,9 +115,12 @@ pub async fn test_app_with(
         &["http://localhost:5173".to_string()],
         dev_login,
     )
+    .with_password_login(true)
     .with_trusted_proxies(trusted_proxies);
     TestApp {
-        state: AppState::new(db, true, auth, directory, ordering, web).with_rate_limit(rate),
+        state: AppState::new(db, true, auth, directory, ordering, web)
+            .with_rate_limit(rate)
+            .with_login_rate_limit(rate),
         _dir: dir,
     }
 }

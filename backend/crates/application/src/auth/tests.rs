@@ -5,35 +5,123 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use domain::identity::OrganizerId;
 
+use super::accounts::{AccountError, AccountService, BootstrapOutcome};
 use super::*;
-use crate::ports::{IdentityError, PortResult, VerifiedIdentity};
+use crate::ports::{
+    AccountSummary, CreateLocalOutcome, IdentityError, LocalAccount, PortResult, VerifiedIdentity,
+};
 
 #[derive(Default)]
-struct FakeOrganizers(Mutex<HashMap<String, Organizer>>);
+struct FakeOrganizers(Mutex<Vec<(Organizer, Option<String>)>>);
 
 #[async_trait]
 impl OrganizerRepo for FakeOrganizers {
     async fn find_by_google_sub(&self, sub: &str) -> PortResult<Option<Organizer>> {
-        Ok(self.0.lock().unwrap().get(sub).cloned())
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(o, _)| o.google_sub.as_deref() == Some(sub))
+            .map(|(o, _)| o.clone()))
     }
     async fn find_by_id(&self, id: OrganizerId) -> PortResult<Option<Organizer>> {
         Ok(self
             .0
             .lock()
             .unwrap()
-            .values()
-            .find(|o| o.id == id)
-            .cloned())
+            .iter()
+            .find(|(o, _)| o.id == id)
+            .map(|(o, _)| o.clone()))
     }
     async fn upsert_from_identity(&self, c: Organizer, _: SystemTime) -> PortResult<Organizer> {
         let mut m = self.0.lock().unwrap();
-        let id = m.get(&c.google_sub).map(|o| o.id).unwrap_or(c.id);
-        let o = Organizer { id, ..c };
-        m.insert(o.google_sub.clone(), o.clone());
-        Ok(o)
+        if let Some((o, _)) = m.iter_mut().find(|(o, _)| o.google_sub == c.google_sub) {
+            *o = Organizer { id: o.id, ..c };
+            return Ok(o.clone());
+        }
+        m.push((c.clone(), None));
+        Ok(c)
     }
     async fn touch_last_login(&self, _: OrganizerId, _: SystemTime) -> PortResult<()> {
         Ok(())
+    }
+    async fn find_local_by_email(&self, email: &str) -> PortResult<Option<LocalAccount>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(o, _)| o.is_local() && o.email == email)
+            .map(|(o, h)| LocalAccount {
+                organizer: o.clone(),
+                password_hash: h.clone(),
+            }))
+    }
+    async fn exists_by_email(&self, email: &str) -> PortResult<bool> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(o, _)| o.email.to_lowercase() == email))
+    }
+    async fn create_local(
+        &self,
+        o: Organizer,
+        hash: String,
+        _: SystemTime,
+    ) -> PortResult<CreateLocalOutcome> {
+        let mut m = self.0.lock().unwrap();
+        if m.iter().any(|(x, _)| x.is_local() && x.email == o.email) {
+            return Ok(CreateLocalOutcome::EmailTaken);
+        }
+        m.push((o, Some(hash)));
+        Ok(CreateLocalOutcome::Created)
+    }
+    async fn set_password_hash(&self, id: OrganizerId, hash: String) -> PortResult<bool> {
+        let mut m = self.0.lock().unwrap();
+        match m.iter_mut().find(|(o, _)| o.id == id) {
+            Some((_, h)) => {
+                *h = Some(hash);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+    async fn list_accounts(&self) -> PortResult<Vec<AccountSummary>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(o, h)| AccountSummary {
+                email: o.email.clone(),
+                display_name: o.display_name.clone(),
+                has_google: o.google_sub.is_some(),
+                has_password: h.is_some(),
+                created_at: SystemTime::UNIX_EPOCH,
+            })
+            .collect())
+    }
+}
+
+/// Fast stand-in for Argon2: `hash:<password>`; counts dummy verifications.
+#[derive(Default)]
+struct FakeHasher {
+    dummy_verifies: AtomicU64,
+}
+
+#[async_trait]
+impl PasswordHasher for FakeHasher {
+    async fn hash(&self, password: &str) -> PortResult<String> {
+        Ok(format!("hash:{password}"))
+    }
+    async fn verify(&self, password: &str, hash: &str) -> PortResult<bool> {
+        Ok(hash == format!("hash:{password}"))
+    }
+    async fn verify_dummy(&self, _: &str) {
+        self.dummy_verifies.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -154,6 +242,8 @@ struct Fixture {
     clock: Arc<TestClock>,
     sessions: Arc<FakeSessions>,
     idp: Arc<FakeIdp>,
+    organizers: Arc<FakeOrganizers>,
+    hasher: Arc<FakeHasher>,
 }
 
 fn fixture() -> Fixture {
@@ -166,11 +256,14 @@ fn fixture() -> Fixture {
         name: Some("Alice".into()),
         picture: None,
     })));
+    let organizers = Arc::new(FakeOrganizers::default());
+    let hasher = Arc::new(FakeHasher::default());
     let svc = AuthService {
-        organizers: Arc::new(FakeOrganizers::default()),
+        organizers: organizers.clone(),
         sessions: sessions.clone(),
         oauth_states: Arc::new(FakeStates::default()),
         identity: Some(idp.clone()),
+        hasher: hasher.clone(),
         tokens: Arc::new(Counter(AtomicU64::new(0))),
         clock: clock.clone(),
         config: AuthConfig::from_days(14),
@@ -180,6 +273,16 @@ fn fixture() -> Fixture {
         clock,
         sessions,
         idp,
+        organizers,
+        hasher,
+    }
+}
+
+fn accounts(f: &Fixture) -> AccountService {
+    AccountService {
+        organizers: f.organizers.clone(),
+        hasher: f.hasher.clone(),
+        clock: f.clock.clone(),
     }
 }
 
@@ -296,7 +399,7 @@ async fn dev_login_creates_dev_organizer() {
     let f = fixture();
     let s = f.svc.dev_login("x@y.z", None, None).await.unwrap();
     let r = f.svc.resolve_session(&s.token).await.unwrap();
-    assert_eq!(r.organizer.google_sub, "dev:x@y.z");
+    assert_eq!(r.organizer.google_sub.as_deref(), Some("dev:x@y.z"));
     assert_eq!(r.organizer.display_name, "x");
     // Logging in again keeps the same organizer.
     let s2 = f
@@ -345,4 +448,150 @@ async fn expired_session_and_logout() {
     assert!(f.sessions.0.lock().unwrap().len() == 1);
     f.svc.purge_expired().await.unwrap();
     assert!(f.sessions.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn password_login_success_and_uniform_failures() {
+    let f = fixture();
+    accounts(&f)
+        .create(" Admin@Example.com ", "Root", "correct horse")
+        .await
+        .unwrap();
+
+    // Email matching is case/space insensitive.
+    let s = f
+        .svc
+        .password_login("ADMIN@example.com ", "correct horse", Some("UA"))
+        .await
+        .unwrap();
+    assert_eq!(s.expires_at, f.clock.now() + 14 * DAY);
+    let r = f.svc.resolve_session(&s.token).await.unwrap();
+    assert_eq!(r.organizer.email, "admin@example.com");
+    assert_eq!(f.hasher.dummy_verifies.load(Ordering::Relaxed), 0);
+
+    // Wrong password, unknown email and over-long input look the same.
+    for (e, p) in [
+        ("admin@example.com", "wrong password"),
+        ("nobody@example.com", "correct horse"),
+        ("admin@example.com", &"x".repeat(300)),
+    ] {
+        let err = f.svc.password_login(e, p, None).await.unwrap_err();
+        assert!(matches!(err, AuthError::InvalidCredentials), "{e}");
+    }
+    // The unknown account paid for a dummy verification (timing equalised).
+    assert_eq!(f.hasher.dummy_verifies.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn password_login_ignores_google_accounts_and_passwordless_locals() {
+    let f = fixture();
+    // A Google account sharing the email is never a password-login target.
+    f.svc.dev_login("g@x.y", None, None).await.unwrap();
+    let err = f
+        .svc
+        .password_login("g@x.y", "anything at all", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::InvalidCredentials));
+
+    let o = Organizer::new_local("np@x.y", "NP").unwrap();
+    f.organizers.0.lock().unwrap().push((o, None));
+    let err = f
+        .svc
+        .password_login("np@x.y", "anything at all", None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::InvalidCredentials));
+    assert_eq!(f.hasher.dummy_verifies.load(Ordering::Relaxed), 2);
+}
+
+#[tokio::test]
+async fn account_create_set_password_and_list() {
+    let f = fixture();
+    let a = accounts(&f);
+    assert!(matches!(
+        a.create("bad", "N", "long enough pw").await,
+        Err(AccountError::Invalid(_))
+    ));
+    assert!(matches!(
+        a.create("a@b.c", "N", "short").await,
+        Err(AccountError::Invalid(_))
+    ));
+    a.create("a@b.c", "Ann", "long enough pw").await.unwrap();
+    assert!(matches!(
+        a.create("A@B.C", "Other", "long enough pw").await,
+        Err(AccountError::EmailTaken)
+    ));
+
+    a.set_password("A@b.c", "another long pw").await.unwrap();
+    assert!(
+        f.svc
+            .password_login("a@b.c", "long enough pw", None)
+            .await
+            .is_err()
+    );
+    f.svc
+        .password_login("a@b.c", "another long pw", None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        a.set_password("zz@b.c", "another long pw").await,
+        Err(AccountError::NotFound)
+    ));
+    assert!(matches!(
+        a.set_password("a@b.c", "short").await,
+        Err(AccountError::Invalid(_))
+    ));
+
+    // A Google account with the same email can coexist and is not a set-password target.
+    f.svc.dev_login("g@b.c", None, None).await.unwrap();
+    assert!(matches!(
+        a.set_password("g@b.c", "another long pw").await,
+        Err(AccountError::NotFound)
+    ));
+    let list = a.list().await.unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(
+        list.iter()
+            .any(|s| s.email == "a@b.c" && s.has_password && !s.has_google)
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_admin_is_idempotent_and_never_overwrites() {
+    let f = fixture();
+    let a = accounts(&f);
+    assert_eq!(
+        a.bootstrap_admin("Root@X.io", "first password")
+            .await
+            .unwrap(),
+        BootstrapOutcome::Created
+    );
+    assert_eq!(
+        a.bootstrap_admin("root@x.io", "changed password")
+            .await
+            .unwrap(),
+        BootstrapOutcome::AlreadyExists
+    );
+    // The original password still works; the env value did not replace it.
+    f.svc
+        .password_login("root@x.io", "first password", None)
+        .await
+        .unwrap();
+    assert!(
+        f.svc
+            .password_login("root@x.io", "changed password", None)
+            .await
+            .is_err()
+    );
+    // Any existing organizer with the email (here a dev/Google one) blocks creation.
+    f.svc.dev_login("g@x.io", None, None).await.unwrap();
+    assert_eq!(
+        a.bootstrap_admin("g@x.io", "some password").await.unwrap(),
+        BootstrapOutcome::AlreadyExists
+    );
+    assert!(matches!(
+        a.bootstrap_admin("root2@x.io", "short").await,
+        Err(AccountError::Invalid(_))
+    ));
 }

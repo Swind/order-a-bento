@@ -28,6 +28,15 @@ export function useDevLogin() {
   });
 }
 
+export function usePasswordLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { email: string; password: string }) =>
+      unwrap(await api.POST("/auth/password-login", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  });
+}
+
 export function useLogout() {
   const qc = useQueryClient();
   return useMutation({

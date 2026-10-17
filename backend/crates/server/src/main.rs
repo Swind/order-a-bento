@@ -1,14 +1,20 @@
+use server::cli::{self, Cli, Command};
 use server::config::{AiMode, Config};
 
 use std::net::SocketAddr;
 
 use anyhow::Context;
+use clap::Parser;
 use infrastructure::sqlite::Db;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
     let config = Config::from_env().context("loading config")?;
+    if let Some(Command::Admin(cmd)) = cli.command {
+        return run_admin(&config, cmd).await;
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -22,13 +28,30 @@ async fn main() -> anyhow::Result<()> {
         .context("connecting to database")?;
     db.migrate().await.context("running migrations")?;
 
+    match server::wiring::bootstrap_admin(&config, &db).await? {
+        None => {}
+        Some(application::BootstrapOutcome::Created) => {
+            tracing::info!("created local admin account from ADMIN_EMAIL/ADMIN_PASSWORD")
+        }
+        Some(application::BootstrapOutcome::AlreadyExists) => tracing::info!(
+            "ADMIN_EMAIL already has an account; leaving it (and its password) unchanged"
+        ),
+    }
     if config.dev_login {
         tracing::warn!(
             "DEV_LOGIN is enabled: POST /auth/dev-login is available (development only)"
         );
     }
-    if config.google_client_id.is_none() || config.google_client_secret.is_none() {
-        tracing::warn!("Google login is not configured; /auth/google/* will return 503");
+    if !config.google_oauth_enabled {
+        tracing::warn!(
+            "Google login is disabled (GOOGLE_OAUTH_ENABLED=false or no credentials); /auth/google/* will return 503"
+        );
+    }
+    if config.admin_email.is_some() && !config.password_login_enabled {
+        tracing::warn!("ADMIN_EMAIL is set but PASSWORD_LOGIN_ENABLED=false: nobody can use it");
+    }
+    if !config.password_login_enabled {
+        tracing::info!("password login is disabled (PASSWORD_LOGIN_ENABLED=false)");
     }
     match config.ai_mode() {
         AiMode::Anthropic => tracing::info!(model = %config.ai_model, "AI import: Anthropic"),
@@ -57,6 +80,27 @@ async fn main() -> anyhow::Result<()> {
     let _ = stop_tx.send(true);
     let _ = job.await;
     served
+}
+
+/// `server admin ...`: connect, migrate, run the subcommand; exits with its code on failure.
+async fn run_admin(config: &Config, cmd: cli::AdminCommand) -> anyhow::Result<()> {
+    let db = Db::connect(&config.database_url)
+        .await
+        .context("connecting to database")?;
+    db.migrate().await.context("running migrations")?;
+    let svc = server::wiring::account_service(&db);
+    let mut source = match &cmd {
+        cli::AdminCommand::Create { password_stdin, .. }
+        | cli::AdminCommand::SetPassword { password_stdin, .. } => {
+            cli::password_source(*password_stdin)
+        }
+        cli::AdminCommand::List => cli::password_source(true),
+    };
+    if let Err(e) = cli::run_admin(&svc, &cmd, source.as_mut(), &mut std::io::stdout()).await {
+        eprintln!("error: {e}");
+        std::process::exit(e.exit_code());
+    }
+    Ok(())
 }
 
 /// Run housekeeping shortly after startup, then every `interval`, until `stop` fires.

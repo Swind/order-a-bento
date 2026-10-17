@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import os from "node:os";
 import path from "node:path";
+import { E2E_ADMIN_EMAIL, E2E_ADMIN_NAME, E2E_ADMIN_PASSWORD } from "./admin-account";
 
 const PORT = 3990;
 export const BASE_URL = `http://localhost:${PORT}`;
@@ -51,7 +52,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `rm -rf "${DB_DIR}" && mkdir -p "${DB_DIR}" && exec ../backend/target/release/server`,
+    // Fresh DB, then the local admin via the CLI (no web UI, no Google), then the server itself.
+    command:
+      `rm -rf "${DB_DIR}" && mkdir -p "${DB_DIR}" && ` +
+      `printf '%s\\n' '${E2E_ADMIN_PASSWORD}' | ` +
+      `../backend/target/release/server admin create --email '${E2E_ADMIN_EMAIL}' --name '${E2E_ADMIN_NAME}' --password-stdin && ` +
+      `exec ../backend/target/release/server`,
     url: `${BASE_URL}/healthz`,
     reuseExistingServer: false,
     timeout: 60_000,
@@ -61,6 +67,8 @@ export default defineConfig({
       PORT: String(PORT),
       APP_ENV: "development",
       DEV_LOGIN: "true",
+      GOOGLE_OAUTH_ENABLED: "false",
+      PASSWORD_LOGIN_ENABLED: "true",
       AI_DEMO: "true",
       APP_BASE_URL: BASE_URL,
       ALLOWED_ORIGINS: BASE_URL,

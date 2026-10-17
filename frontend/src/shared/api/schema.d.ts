@@ -536,6 +536,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/password-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Log in with a local account's email and password. Registered only when
+         *     `PASSWORD_LOGIN_ENABLED` (default true). Subject to a stricter per-IP limit.
+         */
+        post: operations["password_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -612,8 +632,10 @@ export interface components {
             aiImportEnabled: boolean;
             /** @description Whether the development-only login form is available. */
             devLoginEnabled: boolean;
-            /** @description Whether Google login is configured. */
+            /** @description Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured. */
             googleEnabled: boolean;
+            /** @description Whether email + password login for local accounts is available. */
+            passwordLoginEnabled: boolean;
         };
         /** @enum {string} */
         ChangeActionDto: "create" | "update" | "unchanged";
@@ -950,6 +972,10 @@ export interface components {
             submittedAt?: string | null;
             /** @description A device id used by this participant was also used for another participant in this group. */
             suspiciousDevice: boolean;
+        };
+        PasswordLoginRequest: {
+            email: string;
+            password: string;
         };
         PatchGroupOrderRequest: {
             /**
@@ -3168,6 +3194,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    password_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Logged in; session cookie set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown email, wrong password or no password (code invalid_credentials) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Too many attempts (code rate_limited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
             };
         };
     };

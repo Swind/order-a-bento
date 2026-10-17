@@ -1,14 +1,16 @@
-//! `/auth/*`: Google OIDC login, logout and the dev-only login shortcut.
+//! `/auth/*`: Google OIDC login, password login, logout and the dev-only login shortcut.
 
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
+use crate::client::{ClientCtx, rate_limited};
 use crate::error::{AppError, ProblemDetails};
 use crate::openapi::TAG_AUTH;
 use crate::session::{auth_error, clear_cookie, session_cookie, session_token};
@@ -37,6 +39,14 @@ pub struct DevLoginRequest {
     pub email: String,
     pub display_name: Option<String>,
 }
+
+#[derive(Deserialize, ToSchema)]
+pub struct PasswordLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+// Never derive `Debug` for the request: it carries a password.
 
 fn redirect(location: &str) -> Response {
     let mut res = StatusCode::FOUND.into_response();
@@ -181,11 +191,50 @@ pub async fn dev_login(
     Ok(res)
 }
 
+/// Log in with a local account's email and password. Registered only when
+/// `PASSWORD_LOGIN_ENABLED` (default true). Subject to a stricter per-IP limit.
+#[utoipa::path(
+    post,
+    path = "/auth/password-login",
+    tag = TAG_AUTH,
+    request_body = PasswordLoginRequest,
+    responses(
+        (status = 204, description = "Logged in; session cookie set"),
+        (status = 401, description = "Unknown email, wrong password or no password (code invalid_credentials)",
+         body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Too many attempts (code rate_limited)", body = ProblemDetails,
+         content_type = "application/problem+json"),
+    )
+)]
+pub async fn password_login(
+    State(state): State<AppState>,
+    client: ClientCtx,
+    headers: HeaderMap,
+    Json(body): Json<PasswordLoginRequest>,
+) -> Result<Response, AppError> {
+    if let Err(retry) = state.login_limiter.check(client.ip, Instant::now()) {
+        return Ok(rate_limited(retry));
+    }
+    let s = state
+        .auth
+        .password_login(&body.email, &body.password, user_agent(&headers))
+        .await
+        .map_err(auth_error)?;
+    let mut res = StatusCode::NO_CONTENT.into_response();
+    res.headers_mut().append(
+        header::SET_COOKIE,
+        session_cookie(&state.web, &s.token, s.expires_at, state.auth.clock.now()),
+    );
+    Ok(res)
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthConfigResponse {
-    /// Whether Google login is configured.
+    /// Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured.
     pub google_enabled: bool,
+    /// Whether email + password login for local accounts is available.
+    pub password_login_enabled: bool,
     /// Whether the development-only login form is available.
     pub dev_login_enabled: bool,
     /// Whether AI import is available (an API key or the demo agent is configured).
@@ -204,6 +253,7 @@ pub struct AuthConfigResponse {
 pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigResponse> {
     Json(AuthConfigResponse {
         google_enabled: state.auth.identity.is_some(),
+        password_login_enabled: state.web.password_login,
         dev_login_enabled: state.web.dev_login,
         ai_import_enabled: state.ai_import.is_some(),
         ai_demo: state.ai_import.is_some() && state.ai_demo,
@@ -215,17 +265,19 @@ pub fn v1_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(auth_config))
 }
 
-/// `dev_login` is only included when `with_dev_login` is true.
-pub fn router(with_dev_login: bool) -> OpenApiRouter<AppState> {
-    let r = OpenApiRouter::new()
+/// `dev_login` and `password_login` are only included when their flag is true.
+pub fn router(with_dev_login: bool, with_password_login: bool) -> OpenApiRouter<AppState> {
+    let mut r = OpenApiRouter::new()
         .routes(routes!(google_login))
         .routes(routes!(google_callback))
         .routes(routes!(logout));
     if with_dev_login {
-        r.routes(routes!(dev_login))
-    } else {
-        r
+        r = r.routes(routes!(dev_login));
     }
+    if with_password_login {
+        r = r.routes(routes!(password_login));
+    }
+    r
 }
 
 #[cfg(test)]
@@ -359,7 +411,179 @@ mod tests {
             let v = json(res).await;
             assert_eq!(v["devLoginEnabled"], dev);
             assert_eq!(v["googleEnabled"], google);
+            assert_eq!(v["passwordLoginEnabled"], true);
         }
+    }
+
+    async fn make_admin(t: &crate::testing::TestApp, email: &str, password: &str) {
+        application::AccountService {
+            organizers: t.state.auth.organizers.clone(),
+            hasher: t.state.auth.hasher.clone(),
+            clock: t.state.auth.clock.clone(),
+        }
+        .create(email, "Root", password)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn password_login_then_me() {
+        let (app, t) = app(false, false).await;
+        make_admin(&t, "admin@example.com", "correct horse").await;
+        let res = send(
+            &app,
+            post_json(
+                "/auth/password-login",
+                r#"{"email":" Admin@Example.com","password":"correct horse"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        // Same cookie as every other login method.
+        let set = header_str(&res, header::SET_COOKIE).to_owned();
+        assert!(set.contains("HttpOnly") && set.contains("SameSite=Lax") && set.contains("Path=/"));
+        assert!(set.contains("Max-Age=1209600"), "{set}");
+        let sid = sid_pair(&res);
+
+        let me = json(send(&app, get_with_cookie("/api/v1/me", &sid)).await).await;
+        assert_eq!(me["email"], "admin@example.com");
+        assert_eq!(me["displayName"], "Root");
+
+        let (ll, ca): (String, String) =
+            sqlx::query_as("SELECT last_login_at, created_at FROM organizers")
+                .fetch_one(&t.state.db.read)
+                .await
+                .unwrap();
+        assert!(ll >= ca);
+    }
+
+    #[tokio::test]
+    async fn password_login_failures_are_identical() {
+        let (app, t) = app(false, false).await;
+        make_admin(&t, "admin@example.com", "correct horse").await;
+        let mut bodies = Vec::new();
+        for body in [
+            r#"{"email":"admin@example.com","password":"wrong wrong wrong"}"#,
+            r#"{"email":"nobody@example.com","password":"correct horse"}"#,
+            r#"{"email":"","password":""}"#,
+        ] {
+            let res = send(&app, post_json("/auth/password-login", body)).await;
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                header_str(&res, header::CONTENT_TYPE),
+                "application/problem+json"
+            );
+            assert!(res.headers().get(header::SET_COOKIE).is_none());
+            bodies.push(json(res).await);
+        }
+        assert_eq!(bodies[0]["code"], "invalid_credentials");
+        assert_eq!(bodies[0], bodies[1]);
+        assert_eq!(bodies[0], bodies[2]);
+    }
+
+    #[tokio::test]
+    async fn password_login_does_not_reach_google_accounts() {
+        let (app, _t) = app(true, false).await;
+        // A dev/Google organizer (no password) cannot be logged into with a password.
+        dev_login(&app).await;
+        let res = send(
+            &app,
+            post_json(
+                "/auth/password-login",
+                r#"{"email":"a@b.c","password":"whatever it is"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn password_login_not_registered_when_disabled() {
+        let mut t = test_app(false, false).await;
+        t.state.web = std::sync::Arc::new(
+            crate::WebSettings::new("http://localhost:3000", &[], false).with_password_login(false),
+        );
+        let app = router(t.state.clone());
+        let res = send(
+            &app,
+            post_json(
+                "/auth/password-login",
+                r#"{"email":"a@b.c","password":"x"}"#,
+            ),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let cfg = json(
+            send(
+                &app,
+                Request::get("/api/v1/auth/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cfg["passwordLoginEnabled"], false);
+    }
+
+    #[tokio::test]
+    async fn password_login_is_rate_limited_per_ip_and_origin_checked() {
+        let t = test_app(false, false).await;
+        let state = t
+            .state
+            .clone()
+            .with_login_rate_limit(crate::RateLimitConfig {
+                burst: 3,
+                per_sec: 0.001,
+            });
+        let app = router(state);
+        let bad = r#"{"email":"a@b.c","password":"nope nope nope"}"#;
+        for _ in 0..3 {
+            let res = send(&app, post_json("/auth/password-login", bad)).await;
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
+        let res = send(&app, post_json("/auth/password-login", bad)).await;
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(header::RETRY_AFTER));
+        assert_eq!(json(res).await["code"], "rate_limited");
+
+        let forged = Request::post("/auth/password-login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ORIGIN, "https://evil.com")
+            .body(Body::from(bad))
+            .unwrap();
+        let res = send(&app, forged).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(json(res).await["code"], "bad_origin");
+    }
+
+    #[tokio::test]
+    async fn google_endpoints_503_when_disabled() {
+        let (app, _t) = app(false, false).await;
+        let res = send(
+            &app,
+            Request::get("/auth/google/callback?code=good&state=x")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        // The callback reports failures by redirecting to the login page.
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert_eq!(
+            header_str(&res, header::LOCATION),
+            "/login?error=google_not_configured"
+        );
+        let cfg = json(
+            send(
+                &app,
+                Request::get("/api/v1/auth/config")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(cfg["googleEnabled"], false);
     }
 
     #[tokio::test]
@@ -614,6 +838,7 @@ mod tests {
             ("/auth/google/callback", "get"),
             ("/auth/logout", "post"),
             ("/auth/dev-login", "post"),
+            ("/auth/password-login", "post"),
             ("/api/v1/me", "get"),
         ] {
             assert!(doc["paths"][p][m].is_object(), "{p} {m}");

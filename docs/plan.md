@@ -98,6 +98,15 @@
 
 ---
 
+## Phase 6：部署彈性（使用者回饋）
+
+| Task | 內容 | 依賴 |
+|------|------|------|
+| **T6.1 登入方式可設定 + 本機管理員** | `GOOGLE_OAUTH_ENABLED`（未設＝有憑證才啟用）、`PASSWORD_LOGIN_ENABLED`；`organizers.google_sub` 改可空、加 `password_hash`（Argon2id）；`POST /auth/password-login`（限流、統一錯誤）；CLI `server admin create/set-password/list` 不需 Web UI 建帳號，另可用 `ADMIN_EMAIL`/`ADMIN_PASSWORD` 於容器啟動時建立；登入頁只顯示啟用的方式；E2E 以 CLI 建帳號後密碼登入 | Phase 1 |
+| **T6.2 相容 Anthropic API 的閘道** | `AI_PROVIDER` 等設定，讓 AI 匯入可指向非 Claude 的相容閘道（如 Strata）；預設行為不變 | T4.2 |
+
+---
+
 ## 進度
 
 | Task | 狀態 | 備註 |
@@ -121,6 +130,8 @@
 | T5.1 | ✅ 驗收通過 | 218 個後端測試；維護工作（session、ClientInfo 90 天、卡住的 AI run）；Litestream v0.3.13；docker 實跑 non-root、production+DEV_LOGIN 拒絕啟動（真實 S3 備份還原未測） |
 | T5.3a | ✅ 驗收通過 | 111 個前端測試；bundle 865 kB → 最大 chunk 262 kB；瀏覽器實測 toast 在標題列下方、下單頁隱私告知露出於 sticky bar 上方 |
 | T5.2 | ✅ 驗收通過 | 5 個 spec、mobile+desktop 共 7 個測試，連跑 3 次全過（約 5 秒）；CI 加 e2e job（workflow 本身尚未在 GitHub 執行過） |
-| T4.4 | ⏸ 待 API 金鑰 | eval 腳本需真實 ANTHROPIC_API_KEY 才有意義 |
+| T4.4 | 🔄 進行中 | 以使用者提供的 Strata 閘道（Qwen）跑 eval；合成測試圖 6 組 |
 | T5.3b | ✅ 驗收通過 | 歷史與明細 API 加 itemId；代為修改改以 itemId 對應 |
 | T2.4 | ✅ 驗收通過 | 151 個後端測試；XSS 跳脫測試、未知與格式錯誤 token 輸出相同；完整流程待與 T2.3 一起以瀏覽器驗 |
+| T6.1 | ✅ 驗收通過 | 241 個後端、116 個前端測試、E2E 8 個；實測 CLI 結束碼（3 無效／4 已存在／5 找不到）、ADMIN_* 啟動建帳號、Google 關閉時 503、錯誤統一 401、第 7 次起 429、log 無密碼；0002 migration 以含資料的舊 DB 測過 |
+| T6.2 | 🔄 進行中 | 與 T4.4 同一個 subagent |

@@ -45,6 +45,59 @@ pub trait OrganizerRepo: Send + Sync {
         now: SystemTime,
     ) -> PortResult<Organizer>;
     async fn touch_last_login(&self, id: OrganizerId, now: SystemTime) -> PortResult<()>;
+
+    /// The local (password) account with this normalised email, with its PHC hash.
+    async fn find_local_by_email(&self, email: &str) -> PortResult<Option<LocalAccount>>;
+    /// Whether any organizer (Google, dev or local) has this email, ignoring case.
+    async fn exists_by_email(&self, email: &str) -> PortResult<bool>;
+    /// Insert a local account. `EmailTaken` when another local account has the email.
+    async fn create_local(
+        &self,
+        organizer: Organizer,
+        password_hash: String,
+        now: SystemTime,
+    ) -> PortResult<CreateLocalOutcome>;
+    /// Replace the password hash of a local account; false when it does not exist.
+    async fn set_password_hash(&self, id: OrganizerId, password_hash: String) -> PortResult<bool>;
+    /// All organizers, oldest first, without secrets.
+    async fn list_accounts(&self) -> PortResult<Vec<AccountSummary>>;
+}
+
+/// A local account together with its stored password hash (PHC string).
+#[derive(Debug, Clone)]
+pub struct LocalAccount {
+    pub organizer: Organizer,
+    pub password_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateLocalOutcome {
+    Created,
+    EmailTaken,
+}
+
+/// One row of `server admin list`; never contains the hash itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSummary {
+    pub email: String,
+    pub display_name: String,
+    /// `google_sub` is set (Google or dev login).
+    pub has_google: bool,
+    pub has_password: bool,
+    pub created_at: SystemTime,
+}
+
+/// Password hashing (Argon2id in production). Hashing is CPU-heavy, so adapters
+/// run it off the async executor.
+#[async_trait]
+pub trait PasswordHasher: Send + Sync {
+    /// Hash `password` into a self-describing PHC string with a fresh salt.
+    async fn hash(&self, password: &str) -> PortResult<String>;
+    /// Check `password` against a PHC string; `Ok(false)` on mismatch.
+    async fn verify(&self, password: &str, hash: &str) -> PortResult<bool>;
+    /// Burn the same work as [`Self::verify`] against a fixed hash, so that an
+    /// unknown account takes as long as a wrong password. The result is discarded.
+    async fn verify_dummy(&self, password: &str);
 }
 
 #[async_trait]

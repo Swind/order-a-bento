@@ -9,7 +9,11 @@ describe("AdminLayout auth gating", () => {
     server.use(
       http.get("*/api/v1/me", () => problem(401, "unauthorized")),
       http.get("*/api/v1/auth/config", () =>
-        HttpResponse.json({ googleEnabled: true, devLoginEnabled: false }),
+        HttpResponse.json({
+          googleEnabled: true,
+          passwordLoginEnabled: false,
+          devLoginEnabled: false,
+        }),
       ),
     );
     const { router } = renderApp("/rosters?x=1");

@@ -1,13 +1,17 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
 
-.PHONY: help dev-backend dev-frontend gen-api check build e2e docker-build
+.PHONY: help dev-backend dev-frontend gen-api check build e2e docker-build admin
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 dev-backend: ## Run the backend with dev login enabled (SQLite at backend/data/dev.db)
 	cd backend && DEV_LOGIN=true APP_ENV=development DATABASE_URL=sqlite://data/dev.db cargo run -p server
+
+admin: ## Create a local admin without Google or the web UI: make admin EMAIL=you@example.com NAME="You" (prompts for the password)
+	@test -n "$(EMAIL)" -a -n "$(NAME)" || { echo 'usage: make admin EMAIL=you@example.com NAME="Your Name"' >&2; exit 1; }
+	cd backend && DATABASE_URL=$${DATABASE_URL:-sqlite://data/dev.db} cargo run -q -p server -- admin create --email "$(EMAIL)" --name "$(NAME)"
 
 dev-frontend: ## Run the Vite dev server
 	cd frontend && npm run dev

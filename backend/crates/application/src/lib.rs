@@ -15,6 +15,7 @@ pub use ai_import::{
     AcceptedChange, AiError, AiImportConfig, AiImportError, AiImportService, ApplyCmd, ApplyResult,
     ImportAgent, ImportRunView, ImportToolContext, StartImportCmd,
 };
+pub use auth::accounts::{AccountError, AccountService, BootstrapOutcome};
 pub use auth::{AuthConfig, AuthError, AuthService};
 pub use directory::{DirectoryError, DirectoryService, NewVendor};
 pub use maintenance::{Maintenance, MaintenanceRepo, MaintenanceReport};

@@ -32,12 +32,13 @@ pub const DOCS_PATH: &str = "/api/docs";
 
 /// All routes registered with their OpenAPI metadata.
 ///
-/// `dev_login` controls whether `POST /auth/dev-login` exists at all.
-fn api_router(dev_login: bool) -> OpenApiRouter<AppState> {
+/// `dev_login` / `password_login` control whether `POST /auth/dev-login` /
+/// `POST /auth/password-login` exist at all.
+fn api_router(dev_login: bool, password_login: bool) -> OpenApiRouter<AppState> {
     // Further business routes are nested under `/api/v1` by later tasks.
     OpenApiRouter::with_openapi(openapi::ApiDoc::base())
         .merge(routes::health::router())
-        .merge(routes::auth::router(dev_login))
+        .merge(routes::auth::router(dev_login, password_login))
         .nest(
             "/api/v1",
             routes::auth::v1_router()
@@ -50,9 +51,9 @@ fn api_router(dev_login: bool) -> OpenApiRouter<AppState> {
         )
 }
 
-/// The OpenAPI document (including the dev-only login). Needs no database or environment.
+/// The OpenAPI document (including the dev-only and password logins). Needs no database or environment.
 pub fn openapi() -> OpenApi {
-    api_router(true).split_for_parts().1
+    api_router(true, true).split_for_parts().1
 }
 
 /// Build the full axum application serving the embedded SPA.
@@ -63,7 +64,8 @@ pub fn router(state: AppState) -> Router {
 /// Like [`router`] with a custom static asset source (used by tests).
 pub fn router_with_assets(state: AppState, assets: web::Assets) -> Router {
     let docs_enabled = state.docs_enabled;
-    let (router, spec) = api_router(state.web.dev_login).split_for_parts();
+    let (router, spec) =
+        api_router(state.web.dev_login, state.web.password_login).split_for_parts();
 
     let spec_for_json = spec.clone();
     let mut app = router.route(

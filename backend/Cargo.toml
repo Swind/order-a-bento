@@ -33,6 +33,7 @@ proptest = "1"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v7"] }
 async-trait = "0.1"
+argon2 = "0.5"
 base64 = "0.22"
 openidconnect = "4"
 rand = "0.9"
@@ -41,3 +42,11 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 woothee = "0.13"
 ipnet = "2"
 schemars = "1"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+
+# Argon2 is unusably slow unoptimised; keep debug/test builds of it fast.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

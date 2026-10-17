@@ -24,6 +24,33 @@ make docker-build            # 等同 docker build -t order-a-bento:latest .
 4. 「已授權的重新導向 URI」填入 `APP_BASE_URL/auth/google/callback`，例如 `https://bento.example.com/auth/google/callback`（必須與 `APP_BASE_URL` 完全一致，含 scheme）。
 5. 把 Client ID／Client secret 設為 `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET`。未設定時 `/auth/google/*` 回 503。
 
+### 3.1 不使用 Google：本機帳號（email + 密碼）
+
+測試、內網或尚未申請 Google OAuth 時，可以完全不設定 Google，改用本機帳號登入管理區：
+
+- `GOOGLE_OAUTH_ENABLED`：留空＝自動（`GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET` 都有才啟用）；`false`＝即使有憑證也停用；`true` 但缺任一憑證會拒絕啟動。停用時 `/auth/google/*` 回 503，登入頁不顯示 Google 按鈕。
+- `PASSWORD_LOGIN_ENABLED`（預設 `true`）：開放 `POST /auth/password-login`；設為 `false` 時該端點回 404。登入嘗試每個 client IP 限速（burst 10，之後約每 5 秒 1 次），失敗一律回相同的 401 `invalid_credentials`。
+- 帳號只能用 CLI（或下面的環境變數 bootstrap）建立，網頁上沒有註冊功能。Google 登入不會依 email 自動綁定本機帳號：本機帳號的 email 只在本機帳號間唯一，同 email 的 Google 帳號是另一個開團者。
+
+**建議用 CLI 建立帳號**（密碼不會出現在環境變數或 shell 歷史）。CLI 是同一個 `server` 執行檔，讀取相同的設定／`.env`，連到 `DATABASE_URL` 並先套用 migration：
+
+```sh
+# Docker（映像內 server 位於 /usr/local/bin/server；docker exec 會沿用容器的環境變數與使用者 bento）
+docker exec -it bento server admin create --email you@example.com --name "你的名字"   # 互動輸入密碼兩次（不顯示）
+docker exec -it bento server admin set-password --email you@example.com
+docker exec bento server admin list    # email、名稱、登入方式（google/password）、建立時間；不含 hash
+
+# 非互動（密碼由 stdin 讀一行；腳本／CI）
+printf '%s\n' "$PASSWORD" | docker exec -i bento server admin create --email you@example.com --name "你的名字" --password-stdin
+
+# 本機開發（預設資料庫 backend/data/dev.db，與 make dev-backend 相同）
+make admin EMAIL=you@example.com NAME="你的名字"
+```
+
+密碼長度 10～256 字元，以 Argon2id 雜湊儲存。結束碼：`0` 成功、`1` 內部錯誤、`2` 參數錯誤、`3` 輸入不合法（email 格式、密碼太短…）、`4` 帳號已存在、`5` 找不到帳號。`create` 對已存在的 email 會失敗，請改用 `set-password`。
+
+**容器用的環境變數 bootstrap**：設定 `ADMIN_EMAIL` 與 `ADMIN_PASSWORD`（必須同時設定）時，啟動後若資料庫裡沒有任何該 email 的開團者，就會建立本機管理員；已存在則只記一行 info 日誌，**不會**變更既有帳號或覆寫密碼。密碼不會寫進日誌。因為密碼放在環境變數，建議首次啟動後移除 `ADMIN_PASSWORD`，並優先使用上面的 CLI。
+
 ## 4. 環境變數
 
 | 變數 | 預設 | 說明 |
@@ -34,6 +61,9 @@ make docker-build            # 等同 docker build -t order-a-bento:latest .
 | `ALLOWED_ORIGINS` | production 為空 | 額外允許送出狀態變更請求的 Origin（逗號分隔，CSRF 檢查）；`APP_BASE_URL` 的 origin 一律允許，通常不需設定 |
 | `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑。使用 Litestream 時必須是 `/data/bento.db` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth（§3） |
+| `GOOGLE_OAUTH_ENABLED` | 空（自動） | 空＝有 Google 憑證才啟用；`false`＝停用；`true`＝必須有憑證，否則拒絕啟動（§3.1） |
+| `PASSWORD_LOGIN_ENABLED` | `true` | 本機帳號 email + 密碼登入；`false` 時 `/auth/password-login` 回 404 |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | 成對設定；啟動時若無該 email 的帳號就建立本機管理員，不覆寫既有帳號（§3.1，優先用 CLI） |
 | `DEV_LOGIN` | `false` | 開發用登入捷徑。**正式環境不可開**（production 下設為 true 會拒絕啟動） |
 | `ANTHROPIC_API_KEY` | 空 | 設定後啟用 AI 匯入；未設定則隱藏 AI 匯入按鈕 |
 | `ANTHROPIC_BASE_URL` | 空 | 覆寫 API 位址（gateway／測試） |
@@ -140,6 +170,7 @@ docker run ...                           # 同樣的 volume 與參數
 - [ ] `DEV_LOGIN` 未開、`AI_DEMO` 未開（production 下開啟會拒絕啟動）。
 - [ ] 對外只經 HTTPS；`APP_BASE_URL` 以 `https://` 開頭，session cookie 才會帶 `Secure`。容器埠只綁 `127.0.0.1`，由反向代理對外。
 - [ ] `TRUSTED_PROXIES` 只包含自己的反向代理；不要填 `0.0.0.0/0`。
+- [ ] 本機管理員密碼夠長且不重複使用；用 CLI 建立，或首次啟動後移除 `ADMIN_PASSWORD`。不需要密碼登入時設 `PASSWORD_LOGIN_ENABLED=false`。
 - [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
 - [ ] `ANTHROPIC_API_KEY`、Litestream 憑證以 env／secret 管理；Litestream bucket 設為私有並使用最小權限金鑰。
 - [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。

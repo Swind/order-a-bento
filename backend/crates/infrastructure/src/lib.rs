@@ -7,6 +7,7 @@ pub mod google;
 pub mod identity_repo;
 pub mod maintenance_repo;
 pub mod ordering_repo;
+pub mod password;
 pub mod sqlite;
 pub mod timefmt;
 pub mod tokens;

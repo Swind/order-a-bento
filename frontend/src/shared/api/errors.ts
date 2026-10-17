@@ -35,6 +35,7 @@ const MESSAGES: Record<string, string> = {
   group_closed: "這個團已經關閉，無法再送出",
   deadline_passed: "已超過截止時間，無法再送出",
   sold_out: "有品項已售完，請重新選擇",
+  invalid_credentials: "Email 或密碼不正確",
   google_not_configured: "尚未設定 Google 登入",
   provider_error: "無法連線到 Google，請稍後再試",
   ai_not_configured: "尚未設定 AI 匯入功能",
@@ -91,6 +92,7 @@ const LOGIN_ERRORS: Record<string, string> = {
   email_not_verified: "您的 Google 帳號 Email 尚未驗證，無法登入",
   access_denied: "您取消了 Google 授權，未完成登入",
   provider_error: "無法連線到 Google，請稍後再試",
+  invalid_credentials: "Email 或密碼不正確",
   google_not_configured: "伺服器尚未設定 Google 登入",
   login_failed: "登入失敗，請再試一次",
 };

@@ -2585,6 +2585,50 @@
         }
       }
     },
+    "/auth/password-login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log in with a local account's email and password. Registered only when\n`PASSWORD_LOGIN_ENABLED` (default true). Subject to a stricter per-IP limit.",
+        "operationId": "password_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Logged in; session cookie set"
+          },
+          "401": {
+            "description": "Unknown email, wrong password or no password (code invalid_credentials)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts (code rate_limited)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -2840,6 +2884,7 @@
         "type": "object",
         "required": [
           "googleEnabled",
+          "passwordLoginEnabled",
           "devLoginEnabled",
           "aiImportEnabled",
           "aiDemo"
@@ -2859,7 +2904,11 @@
           },
           "googleEnabled": {
             "type": "boolean",
-            "description": "Whether Google login is configured."
+            "description": "Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured."
+          },
+          "passwordLoginEnabled": {
+            "type": "boolean",
+            "description": "Whether email + password login for local accounts is available."
           }
         }
       },
@@ -4038,6 +4087,21 @@
           "suspiciousDevice": {
             "type": "boolean",
             "description": "A device id used by this participant was also used for another participant in this group."
+          }
+        }
+      },
+      "PasswordLoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
           }
         }
       },

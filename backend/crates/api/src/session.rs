@@ -68,6 +68,11 @@ pub fn auth_error(e: AuthError) -> AppError {
             detail: "Google login is not configured on this server.".into(),
         },
         AuthError::Unauthenticated => AppError::Unauthorized("login required".into()),
+        AuthError::InvalidCredentials => AppError::Coded {
+            status: StatusCode::UNAUTHORIZED,
+            code: "invalid_credentials",
+            detail: "Invalid email or password.".into(),
+        },
         AuthError::Invalid(d) => AppError::Validation(d.to_string()),
         AuthError::Provider(d) => {
             tracing::warn!(detail = %d, "identity provider failure");
@@ -181,6 +186,7 @@ mod tests {
             cookie_secure: secure,
             allowed_origins: vec![],
             dev_login: false,
+            password_login: false,
             trusted_proxies: vec![],
             display_offset: time::UtcOffset::UTC,
         }

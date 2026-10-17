@@ -1,14 +1,17 @@
-//! Authentication use cases: Google login, dev login, session resolution, logout.
+//! Authentication use cases: Google login, password login, dev login, session
+//! resolution, logout, and local account management.
+
+pub mod accounts;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use domain::identity::Organizer;
+use domain::identity::{Organizer, PASSWORD_MAX_LEN, normalize_email};
 use domain::shared::DomainError;
 
 use crate::ports::{
-    Clock, IdentityProvider, OAuthState, OAuthStateRepo, OrganizerRepo, PortError, SessionRepo,
-    TokenGenerator,
+    Clock, IdentityProvider, OAuthState, OAuthStateRepo, OrganizerRepo, PasswordHasher, PortError,
+    SessionRepo, TokenGenerator,
 };
 use crate::token::{TokenHash, pkce_challenge};
 
@@ -39,6 +42,9 @@ pub enum AuthError {
     EmailNotVerified,
     #[error("identity provider failed: {0}")]
     Provider(String),
+    /// Unknown email, wrong password or no password: deliberately indistinguishable.
+    #[error("invalid email or password")]
+    InvalidCredentials,
     #[error("not authenticated")]
     Unauthenticated,
     #[error(transparent)]
@@ -61,7 +67,10 @@ impl AuthError {
             Self::InvalidState => "invalid_state",
             Self::EmailNotVerified => "email_not_verified",
             Self::Provider(_) => "provider_error",
-            Self::Unauthenticated | Self::Invalid(_) | Self::Internal(_) => "login_failed",
+            Self::InvalidCredentials
+            | Self::Unauthenticated
+            | Self::Invalid(_)
+            | Self::Internal(_) => "login_failed",
         }
     }
 }
@@ -112,6 +121,7 @@ pub struct AuthService {
     pub oauth_states: Arc<dyn OAuthStateRepo>,
     /// Absent when Google credentials are not configured.
     pub identity: Option<Arc<dyn IdentityProvider>>,
+    pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenGenerator>,
     pub clock: Arc<dyn Clock>,
     pub config: AuthConfig,
@@ -204,6 +214,45 @@ impl AuthService {
             .unwrap_or_else(|| email.split('@').next().unwrap_or(email));
         let candidate = Organizer::new(&format!("dev:{email}"), email, name, None)?;
         let organizer = self.organizers.upsert_from_identity(candidate, now).await?;
+        self.create_session(&organizer, user_agent, now).await
+    }
+
+    /// Log in a local account with email and password. Unknown email, wrong
+    /// password and an account without a password all yield
+    /// [`AuthError::InvalidCredentials`]; a missing account still costs one
+    /// hash verification so the response time does not reveal it. The caller
+    /// (composition root) must only expose this when `PASSWORD_LOGIN_ENABLED`.
+    pub async fn password_login(
+        &self,
+        email: &str,
+        password: &str,
+        user_agent: Option<&str>,
+    ) -> Result<NewSession, AuthError> {
+        // Cheap guard against oversized inputs; no real password is this long.
+        if password.chars().count() > PASSWORD_MAX_LEN {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let account = self
+            .organizers
+            .find_local_by_email(&normalize_email(email))
+            .await?;
+        let organizer = match account {
+            Some(a) => match &a.password_hash {
+                Some(hash) if self.hasher.verify(password, hash).await? => Some(a.organizer),
+                Some(_) => None,
+                None => {
+                    self.hasher.verify_dummy(password).await;
+                    None
+                }
+            },
+            None => {
+                self.hasher.verify_dummy(password).await;
+                None
+            }
+        };
+        let organizer = organizer.ok_or(AuthError::InvalidCredentials)?;
+        let now = self.clock.now();
+        self.organizers.touch_last_login(organizer.id, now).await?;
         self.create_session(&organizer, user_agent, now).await
     }
 

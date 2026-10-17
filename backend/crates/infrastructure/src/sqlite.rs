@@ -168,4 +168,128 @@ mod tests {
         assert_eq!(mode, "wal");
         assert_eq!(db.write.options().get_max_connections(), 1);
     }
+
+    /// Migration 0002 rebuilds `organizers`; data and the foreign keys pointing at it must survive.
+    #[tokio::test]
+    async fn local_accounts_migration_preserves_data_and_cascades() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("old.db")).await.unwrap();
+        MIGRATOR.run_to(1, &db.write).await.unwrap();
+        for sql in [
+            "INSERT INTO organizers VALUES ('o1','g-1','a@b.c','Ann','http://p/a.png','2024-01-01T00:00:00Z','2024-02-01T00:00:00Z')",
+            "INSERT INTO organizers VALUES ('o2','dev:x','x@b.c','Xi',NULL,'2024-01-02T00:00:00Z','2024-02-02T00:00:00Z')",
+            "INSERT INTO sessions VALUES (x'0102','o1','2024-01-01T00:00:00Z','2099-01-01T00:00:00Z','UA')",
+            "INSERT INTO rosters VALUES ('r1','o1','Team','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')",
+            "INSERT INTO vendors (id, organizer_id, name, name_key, created_at, updated_at) VALUES ('v1','o2','V','v','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')",
+        ] {
+            sqlx::query(sql).execute(&db.write).await.unwrap();
+        }
+
+        db.migrate().await.unwrap();
+
+        type Row = (
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+        );
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT id, google_sub, email, avatar_url, password_hash, last_login_at \
+                 FROM organizers ORDER BY id",
+        )
+        .fetch_all(&db.read)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "o1".into(),
+                    Some("g-1".into()),
+                    "a@b.c".into(),
+                    Some("http://p/a.png".into()),
+                    None,
+                    "2024-02-01T00:00:00Z".into()
+                ),
+                (
+                    "o2".into(),
+                    Some("dev:x".into()),
+                    "x@b.c".into(),
+                    None,
+                    None,
+                    "2024-02-02T00:00:00Z".into()
+                ),
+            ]
+        );
+        // Child rows survived the rebuild, the schema is consistent and enforcement is back on.
+        for (table, n) in [("sessions", 1), ("rosters", 1), ("vendors", 1)] {
+            let (c,): (i64,) =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&db.read)
+                    .await
+                    .unwrap();
+            assert_eq!(c, n, "{table}");
+        }
+        let violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&db.write)
+            .await
+            .unwrap();
+        assert!(violations.is_empty());
+        let (fk,): (i64,) = sqlx::query_as("PRAGMA foreign_keys")
+            .fetch_one(&db.write)
+            .await
+            .unwrap();
+        assert_eq!(fk, 1);
+        // FKs still reference `organizers` (not a renamed leftover) and reject orphans.
+        let orphan = sqlx::query(
+            "INSERT INTO rosters VALUES ('r2','nobody','T','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')",
+        )
+        .execute(&db.write)
+        .await;
+        assert!(orphan.is_err());
+        let (refs,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE sql LIKE '%organizers_new%' OR sql LIKE '%organizers_old%'",
+        )
+        .fetch_one(&db.read)
+        .await
+        .unwrap();
+        assert_eq!(refs, 0);
+
+        // ON DELETE CASCADE still works from the rebuilt table.
+        sqlx::query("DELETE FROM organizers WHERE id = 'o1'")
+            .execute(&db.write)
+            .await
+            .unwrap();
+        for table in ["sessions", "rosters"] {
+            let (c,): (i64,) =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&db.read)
+                    .await
+                    .unwrap();
+            assert_eq!(c, 0, "{table} should cascade");
+        }
+        let (c,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vendors")
+            .fetch_one(&db.read)
+            .await
+            .unwrap();
+        assert_eq!(c, 1);
+
+        // New shape: NULL google_sub with a password is accepted; indexes exist.
+        sqlx::query(
+            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at, password_hash) \
+             VALUES ('o3', NULL, 'l@b.c', 'L', 't', 't', '$h')",
+        )
+        .execute(&db.write)
+        .await
+        .unwrap();
+        let dup = sqlx::query(
+            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at, password_hash) \
+             VALUES ('o4', NULL, 'l@b.c', 'L', 't', 't', '$h')",
+        )
+        .execute(&db.write)
+        .await;
+        assert!(dup.is_err());
+    }
 }

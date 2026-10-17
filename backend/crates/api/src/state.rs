@@ -18,6 +18,8 @@ pub struct WebSettings {
     pub allowed_origins: Vec<String>,
     /// Whether `POST /auth/dev-login` is registered.
     pub dev_login: bool,
+    /// Whether `POST /auth/password-login` is registered (`PASSWORD_LOGIN_ENABLED`).
+    pub password_login: bool,
     /// Reverse proxies whose `X-Forwarded-For` is trusted (empty = trust none).
     pub trusted_proxies: Vec<IpNet>,
     /// Timezone used when rendering deadlines in link previews (`DISPLAY_UTC_OFFSET`).
@@ -38,9 +40,15 @@ impl WebSettings {
             cookie_secure: app_base_url.trim().starts_with("https://"),
             allowed_origins,
             dev_login,
+            password_login: false,
             trusted_proxies: Vec::new(),
             display_offset: UtcOffset::from_hms(8, 0, 0).expect("valid offset"),
         }
+    }
+
+    pub fn with_password_login(mut self, enabled: bool) -> Self {
+        self.password_login = enabled;
+        self
     }
 
     pub fn with_display_offset(mut self, offset: UtcOffset) -> Self {
@@ -78,6 +86,8 @@ pub struct AppState {
     pub ua_parser: Arc<dyn UaParser>,
     /// Per-client-IP limiter for the public endpoints.
     pub limiter: Arc<RateLimiter>,
+    /// Per-client-IP limiter for password login attempts (stricter than `limiter`).
+    pub login_limiter: Arc<RateLimiter>,
     /// AI import use cases; `None` = AI is not configured (routes answer 503).
     pub ai_import: Option<Arc<AiImportService>>,
     /// Whether the AI agent is the scripted demo (the UI shows a badge).
@@ -90,6 +100,12 @@ pub struct AppState {
 pub const AI_IMPORT_RATE: RateLimitConfig = RateLimitConfig {
     burst: 3,
     per_sec: 3.0 / 60.0,
+};
+
+/// Password login attempts per client IP: burst 10, then one every 5 seconds.
+pub const PASSWORD_LOGIN_RATE: RateLimitConfig = RateLimitConfig {
+    burst: 10,
+    per_sec: 0.2,
 };
 
 impl AppState {
@@ -110,6 +126,7 @@ impl AppState {
             web: Arc::new(web),
             ua_parser: Arc::new(WootheeUaParser),
             limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            login_limiter: Arc::new(RateLimiter::new(PASSWORD_LOGIN_RATE)),
             ai_import: None,
             ai_demo: false,
             ai_limiter: Arc::new(KeyedLimiter::new(AI_IMPORT_RATE)),
@@ -126,6 +143,12 @@ impl AppState {
     /// Replace the per-organizer AI import rate limit (default 3 per minute).
     pub fn with_ai_rate_limit(mut self, cfg: RateLimitConfig) -> Self {
         self.ai_limiter = Arc::new(KeyedLimiter::new(cfg));
+        self
+    }
+
+    /// Replace the password-login rate limit (default: burst 10, one per 5 s).
+    pub fn with_login_rate_limit(mut self, cfg: RateLimitConfig) -> Self {
+        self.login_limiter = Arc::new(RateLimiter::new(cfg));
         self
     }
 

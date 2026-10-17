@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/sha
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { useAuthConfig, useDevLogin, useMe } from "./hooks";
+import { useAuthConfig, useDevLogin, useMe, usePasswordLogin } from "./hooks";
 
 function DevLoginForm({ returnTo }: { returnTo: string }) {
   const navigate = useNavigate();
@@ -36,7 +36,7 @@ function DevLoginForm({ returnTo }: { returnTo: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-3 border-t pt-4" aria-label="開發用登入">
+    <form onSubmit={submit} className="space-y-3" aria-label="開發用登入">
       <h2 className="text-sm font-medium text-muted-foreground">開發用登入</h2>
       <div className="space-y-1.5">
         <Label htmlFor="dev-email">Email</Label>
@@ -58,6 +58,114 @@ function DevLoginForm({ returnTo }: { returnTo: string }) {
         開發用登入
       </Button>
     </form>
+  );
+}
+
+function PasswordLoginForm({ returnTo }: { returnTo: string }) {
+  const navigate = useNavigate();
+  const login = usePasswordLogin();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    login.mutate(
+      { email: email.trim(), password },
+      {
+        onSuccess: () => navigate(returnTo, { replace: true }),
+        // invalid_credentials and rate_limited both map to a friendly zh-TW message.
+        onError: (err) => setError(errorMessage(err)),
+      },
+    );
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3" aria-label="本機帳號登入">
+      <div className="space-y-1.5">
+        <Label htmlFor="login-email">Email</Label>
+        <Input
+          id="login-email"
+          type="email"
+          autoComplete="username"
+          inputMode="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          aria-invalid={!!error}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="login-password">密碼</Label>
+        <Input
+          id="login-password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          aria-invalid={!!error}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <Button type="submit" className="w-full" disabled={login.isPending}>
+        登入
+      </Button>
+    </form>
+  );
+}
+
+function GoogleLoginButton({ returnTo }: { returnTo: string }) {
+  return (
+    <Button
+      variant="outline"
+      className="w-full"
+      onClick={() => {
+        window.location.assign(`/auth/google/login?returnTo=${encodeURIComponent(returnTo)}`);
+      }}
+    >
+      使用 Google 登入
+    </Button>
+  );
+}
+
+/** Only the enabled methods, separated by dividers; an explanation when none is. */
+function LoginMethods({
+  returnTo,
+  password,
+  google,
+  dev,
+}: {
+  returnTo: string;
+  password: boolean;
+  google: boolean;
+  dev: boolean;
+}) {
+  const sections = [
+    password && <PasswordLoginForm key="password" returnTo={returnTo} />,
+    google && <GoogleLoginButton key="google" returnTo={returnTo} />,
+    dev && <DevLoginForm key="dev" returnTo={returnTo} />,
+  ].filter(Boolean);
+  if (sections.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        目前沒有可用的登入方式，請聯絡系統管理員。
+      </p>
+    );
+  }
+  return (
+    <>
+      {sections.map((section, i) => (
+        <div key={i} className={i > 0 ? "border-t pt-4" : undefined}>
+          {section}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -94,27 +202,12 @@ export function LoginPage() {
           </div>
         )}
         {config.data && (
-          <>
-            <div className="space-y-2">
-              <Button
-                className="w-full"
-                disabled={!config.data.googleEnabled}
-                onClick={() => {
-                  window.location.assign(
-                    `/auth/google/login?returnTo=${encodeURIComponent(returnTo)}`,
-                  );
-                }}
-              >
-                使用 Google 登入
-              </Button>
-              {!config.data.googleEnabled && (
-                <p className="text-sm text-muted-foreground">
-                  伺服器尚未設定 Google 登入，請聯絡管理員。
-                </p>
-              )}
-            </div>
-            {config.data.devLoginEnabled && <DevLoginForm returnTo={returnTo} />}
-          </>
+          <LoginMethods
+            returnTo={returnTo}
+            password={config.data.passwordLoginEnabled}
+            google={config.data.googleEnabled}
+            dev={config.data.devLoginEnabled}
+          />
         )}
       </CardContent>
     </Card>

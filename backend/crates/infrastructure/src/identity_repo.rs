@@ -3,7 +3,8 @@
 use std::time::SystemTime;
 
 use application::ports::{
-    OAuthState, OAuthStateRepo, OrganizerRepo, PortError, PortResult, SessionRepo,
+    AccountSummary, CreateLocalOutcome, LocalAccount, OAuthState, OAuthStateRepo, OrganizerRepo,
+    PortError, PortResult, SessionRepo,
 };
 use application::token::TokenHash;
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ fn err(e: impl std::fmt::Display) -> PortError {
 #[derive(sqlx::FromRow)]
 struct OrganizerRow {
     id: String,
-    google_sub: String,
+    google_sub: Option<String>,
     email: String,
     display_name: String,
     avatar_url: Option<String>,
@@ -105,6 +106,115 @@ impl OrganizerRepo for SqliteOrganizerRepo {
             .await
             .map_err(err)?;
         Ok(())
+    }
+
+    async fn find_local_by_email(&self, email: &str) -> PortResult<Option<LocalAccount>> {
+        let row: Option<(
+            String,
+            Option<String>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, google_sub, email, display_name, avatar_url, password_hash \
+                 FROM organizers WHERE google_sub IS NULL AND email = ?",
+        )
+        .bind(email)
+        .fetch_optional(&self.db.read)
+        .await
+        .map_err(err)?;
+        row.map(
+            |(id, google_sub, email, display_name, avatar_url, password_hash)| {
+                Ok(LocalAccount {
+                    organizer: OrganizerRow {
+                        id,
+                        google_sub,
+                        email,
+                        display_name,
+                        avatar_url,
+                    }
+                    .into_domain()?,
+                    password_hash,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    async fn exists_by_email(&self, email: &str) -> PortResult<bool> {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM organizers WHERE lower(email) = lower(?)")
+                .bind(email)
+                .fetch_one(&self.db.read)
+                .await
+                .map_err(err)?;
+        Ok(n > 0)
+    }
+
+    async fn create_local(
+        &self,
+        o: Organizer,
+        password_hash: String,
+        now: SystemTime,
+    ) -> PortResult<CreateLocalOutcome> {
+        let now = to_text(now);
+        // The partial unique index decides races; DO NOTHING reports them as 0 rows.
+        let res = sqlx::query(
+            "INSERT INTO organizers \
+               (id, google_sub, email, display_name, avatar_url, created_at, last_login_at, password_hash) \
+             VALUES (?, NULL, ?, ?, NULL, ?, ?, ?) \
+             ON CONFLICT(email) WHERE google_sub IS NULL DO NOTHING",
+        )
+        .bind(o.id.to_string())
+        .bind(&o.email)
+        .bind(&o.display_name)
+        .bind(&now)
+        .bind(&now)
+        .bind(password_hash)
+        .execute(&self.db.write)
+        .await
+        .map_err(err)?;
+        Ok(if res.rows_affected() == 1 {
+            CreateLocalOutcome::Created
+        } else {
+            CreateLocalOutcome::EmailTaken
+        })
+    }
+
+    async fn set_password_hash(&self, id: OrganizerId, password_hash: String) -> PortResult<bool> {
+        let res = sqlx::query(
+            "UPDATE organizers SET password_hash = ? WHERE id = ? AND google_sub IS NULL",
+        )
+        .bind(password_hash)
+        .bind(id.to_string())
+        .execute(&self.db.write)
+        .await
+        .map_err(err)?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    async fn list_accounts(&self) -> PortResult<Vec<AccountSummary>> {
+        let rows: Vec<(String, String, bool, bool, String)> = sqlx::query_as(
+            "SELECT email, display_name, google_sub IS NOT NULL, password_hash IS NOT NULL, created_at \
+             FROM organizers ORDER BY created_at, id",
+        )
+        .fetch_all(&self.db.read)
+        .await
+        .map_err(err)?;
+        rows.into_iter()
+            .map(
+                |(email, display_name, has_google, has_password, created_at)| {
+                    Ok(AccountSummary {
+                        email,
+                        display_name,
+                        has_google,
+                        has_password,
+                        created_at: from_text(&created_at).map_err(err)?,
+                    })
+                },
+            )
+            .collect()
     }
 }
 
@@ -301,6 +411,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ll, to_text(t(20)));
+    }
+
+    #[tokio::test]
+    async fn local_accounts_unique_among_locals_only() {
+        let (db, _d, google) = setup().await;
+        let repo = SqliteOrganizerRepo::new(db);
+        let local = Organizer::new_local("A@b.c", "Admin").unwrap();
+        assert_eq!(
+            repo.create_local(local.clone(), "$hash1".into(), t(1))
+                .await
+                .unwrap(),
+            CreateLocalOutcome::Created
+        );
+        // Same normalised email among locals is refused, even from another candidate.
+        let dup = Organizer::new_local("a@B.c", "Other").unwrap();
+        assert_eq!(
+            repo.create_local(dup, "$hash2".into(), t(2)).await.unwrap(),
+            CreateLocalOutcome::EmailTaken
+        );
+        // The Google account with the same address is a separate organizer.
+        assert_ne!(google.id, local.id);
+        assert_eq!(google.email, "a@b.c");
+
+        let found = repo.find_local_by_email("a@b.c").await.unwrap().unwrap();
+        assert_eq!(found.organizer, local);
+        assert_eq!(found.password_hash.as_deref(), Some("$hash1"));
+        assert!(repo.find_local_by_email("zz@b.c").await.unwrap().is_none());
+        assert!(repo.exists_by_email("A@B.C").await.unwrap());
+        assert!(!repo.exists_by_email("zz@b.c").await.unwrap());
+
+        assert!(
+            repo.set_password_hash(local.id, "$new".into())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            repo.find_local_by_email("a@b.c")
+                .await
+                .unwrap()
+                .unwrap()
+                .password_hash
+                .as_deref(),
+            Some("$new")
+        );
+        // Google accounts never receive a password through this port.
+        assert!(
+            !repo
+                .set_password_hash(google.id, "$x".into())
+                .await
+                .unwrap()
+        );
+
+        let list = repo.list_accounts().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list[0].has_google && !list[0].has_password);
+        assert!(!list[1].has_google && list[1].has_password);
+        assert_eq!(list[1].created_at, t(1));
+    }
+
+    #[tokio::test]
+    async fn account_needs_some_login_method() {
+        let (db, _d, _o) = setup().await;
+        let r = sqlx::query(
+            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at) \
+             VALUES ('x', NULL, 'n@b.c', 'N', 't', 't')",
+        )
+        .execute(&db.write)
+        .await;
+        assert!(r.is_err());
     }
 
     #[tokio::test]
