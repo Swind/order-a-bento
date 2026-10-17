@@ -1,0 +1,75 @@
+import { Link, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
+import { ApiError } from "@/shared/api/client";
+import { errorMessage } from "@/shared/api/errors";
+import { ConfirmDeleteButton } from "@/shared/components/ConfirmDeleteButton";
+import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
+import { useDeleteVendor, useVendor } from "./hooks";
+import { MenuSection } from "./MenuSection";
+import { VendorInfoForm } from "./VendorInfoForm";
+
+export function VendorDetailPage() {
+  const { id = "" } = useParams();
+  const vendor = useVendor(id);
+  const del = useDeleteVendor(id);
+  const navigate = useNavigate();
+
+  if (vendor.isPending) {
+    return (
+      <div className="space-y-3" aria-busy="true">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+  if (vendor.isError) {
+    const notFound = vendor.error instanceof ApiError && vendor.error.status === 404;
+    return (
+      <div className="space-y-2">
+        <p role="alert" className="text-destructive">
+          {errorMessage(vendor.error)}
+        </p>
+        {notFound ? (
+          <Link to="/vendors" className="text-primary underline">
+            回到店家列表
+          </Link>
+        ) : (
+          <Button variant="outline" onClick={() => vendor.refetch()}>
+            重試
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  const v = vendor.data;
+  return (
+    <div className="space-y-6">
+      <Link to="/vendors" className="text-sm text-muted-foreground hover:underline">
+        ← 店家
+      </Link>
+      <div className="flex flex-wrap items-center gap-2">
+        <h1 className="min-w-0 break-words text-2xl font-bold">{v.name}</h1>
+        <div className="ml-auto">
+          <ConfirmDeleteButton
+            label="刪除店家"
+            showLabel
+            pending={del.isPending}
+            onConfirm={() =>
+              del.mutate(undefined, {
+                onSuccess: () => {
+                  toast.success("已刪除店家");
+                  navigate("/vendors", { replace: true });
+                },
+                onError: (err) => toast.error(errorMessage(err)),
+              })
+            }
+          />
+        </div>
+      </div>
+      <VendorInfoForm key={`${v.updatedAt}`} vendor={v} />
+      <MenuSection vendorId={id} items={v.menuItems} />
+    </div>
+  );
+}
