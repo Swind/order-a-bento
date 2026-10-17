@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import { row } from "./fixtures";
+import {
+  balanceTag,
+  buildOrderText,
+  deviceColor,
+  filterChecklist,
+  parseTab,
+  splitParticipants,
+  toggleStatus,
+} from "./lib";
+
+describe("buildOrderText", () => {
+  it("lists ordered items and totals, skipping zero quantities", () => {
+    expect(
+      buildOrderText({
+        title: "週五午餐",
+        vendorName: "好吃便當",
+        items: [
+          { name: "排骨飯", quantity: 7 },
+          { name: "素食", quantity: 0 },
+          { name: "雞腿飯", quantity: 4 },
+        ],
+        totalQuantity: 11,
+        totalAmount: 1140,
+      }),
+    ).toBe("週五午餐（好吃便當）\n排骨飯 ×7\n雞腿飯 ×4\n共 11 個，$1,140");
+  });
+});
+
+describe("balanceTag", () => {
+  it("formats owe / refund and hides null or zero", () => {
+    expect(balanceTag(30)).toEqual({ tone: "owe", text: "尚差 $30" });
+    expect(balanceTag(-1200)).toEqual({ tone: "refund", text: "應退 $1,200" });
+    expect(balanceTag(0)).toBeNull();
+    expect(balanceTag(null)).toBeNull();
+  });
+});
+
+describe("checklist filters", () => {
+  const rows = [
+    row({ id: "a", pickedUp: true, paid: true }),
+    row({ id: "b", submissionCount: 3 }),
+    row({ id: "c", items: [], amountDue: 0 }),
+  ];
+  it("splits ordered from not-ordered", () => {
+    const { ordered, notOrdered } = splitParticipants(rows);
+    expect(ordered.map((r) => r.id)).toEqual(["a", "b"]);
+    expect(notOrdered.map((r) => r.id)).toEqual(["c"]);
+  });
+  it("filters by pickup, payment and changed orders", () => {
+    const { ordered } = splitParticipants(rows);
+    const ids = (f: Parameters<typeof filterChecklist>[1]) =>
+      filterChecklist(ordered, f).map((r) => r.id);
+    expect(ids("all")).toEqual(["a", "b"]);
+    expect(ids("unpicked")).toEqual(["b"]);
+    expect(ids("unpaid")).toEqual(["b"]);
+    expect(ids("changed")).toEqual(["b"]);
+  });
+});
+
+describe("deviceColor", () => {
+  it("is stable per device and differs between devices", () => {
+    expect(deviceColor("7c2")).toBe(deviceColor("7c2"));
+    expect(deviceColor("7c2")).toMatch(/^hsl\(\d+ /);
+    expect(deviceColor("7c2")).not.toBe(deviceColor("a3f"));
+  });
+});
+
+describe("status chips / tabs", () => {
+  it("toggles statuses but never empties the selection", () => {
+    expect(toggleStatus(["open", "closed"], "archived")).toEqual(["open", "closed", "archived"]);
+    expect(toggleStatus(["open", "closed"], "closed")).toEqual(["open"]);
+    expect(toggleStatus(["open"], "open")).toEqual(["open"]);
+  });
+  it("falls back to the stats tab", () => {
+    expect(parseTab("checklist")).toBe("checklist");
+    expect(parseTab("nope")).toBe("stats");
+    expect(parseTab(null)).toBe("stats");
+  });
+});

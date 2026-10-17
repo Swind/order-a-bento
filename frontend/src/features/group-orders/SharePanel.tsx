@@ -1,0 +1,60 @@
+import { useRef } from "react";
+import { toast } from "sonner";
+import { Button, buttonVariants } from "@/shared/ui/button";
+import { Card, CardContent } from "@/shared/ui/card";
+import { Input } from "@/shared/ui/input";
+import { Label } from "@/shared/ui/label";
+import { lineShareUrl } from "./share";
+
+export function SharePanel({ title, shareUrl }: { title: string; shareUrl: string }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function copy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("已複製連結");
+    } catch {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+      toast.message("無法自動複製，已選取連結，請手動複製");
+    }
+  }
+
+  return (
+    <Card>
+      <CardContent className="space-y-3">
+        <Label htmlFor="share-url">分享連結</Label>
+        <Input
+          id="share-url"
+          ref={inputRef}
+          readOnly
+          className="h-11"
+          value={shareUrl}
+          onFocus={(e) => e.currentTarget.select()}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" className="h-11" onClick={copy}>
+            複製連結
+          </Button>
+          <a
+            href={lineShareUrl(title, shareUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonVariants({ variant: "outline", className: "h-11" })}
+          >
+            分享到 LINE
+          </a>
+          <a
+            href={shareUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={buttonVariants({ variant: "outline", className: "h-11" })}
+          >
+            開啟訂購頁
+          </a>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
