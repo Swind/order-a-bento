@@ -1,0 +1,30 @@
+[package]
+name = "infrastructure"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+openidconnect.workspace = true
+rand.workspace = true
+time.workspace = true
+uuid.workspace = true
+woothee.workspace = true
+application.workspace = true
+domain.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+schemars.workspace = true
+rig = { git = "https://github.com/Swind/rig", rev = "36f287befa9e6013579d7ba8a957a27f604d7d50" }
+reqwest = { version = "0.13", features = ["rustls"] }
+
+[dev-dependencies]
+axum.workspace = true
+url = "2"
+tokio.workspace = true
