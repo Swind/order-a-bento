@@ -279,7 +279,7 @@ function BatchAdd({ id, onAffected }: { id: string; onAffected: (ids: string[]) 
         <Button type="submit" disabled={parsed.length === 0 || upsert.isPending}>
           新增 {parsed.length} 位
         </Button>
-        <ImportButton label="📷 從照片匯入" modeHint="roster" targetRosterId={id} />
+        <ImportButton label="📷 從照片匯入" mode="roster" targetRosterId={id} />
       </div>
       {summary && <ReportSummary text={summary} />}
     </form>

@@ -111,9 +111,11 @@ pub struct Expected {
     pub tier: Tier,
     #[serde(default)]
     pub description: String,
-    /// `roster` | `vendor`: what the request tells the agent (default: nothing).
+    /// `roster` | `vendor`: which upload the case simulates. Derived from `kind`
+    /// for roster and vendor cases; required for `kind: none`, where it says
+    /// which upload must come back with no proposal.
     #[serde(default)]
-    pub mode_hint: Option<String>,
+    pub mode: Option<String>,
     #[serde(default)]
     pub instruction: Option<String>,
     #[serde(default)]
@@ -131,6 +133,18 @@ pub struct Expected {
     /// address, decorative text, injected text ...).
     #[serde(default)]
     pub forbidden: Vec<String>,
+}
+
+impl Expected {
+    /// The upload mode the case runs with.
+    pub fn import_mode(&self) -> Result<ImportMode, String> {
+        match (self.mode.as_deref(), self.kind) {
+            (Some("roster"), _) | (None, Kind::Roster) => Ok(ImportMode::Roster),
+            (Some("vendor"), _) | (None, Kind::Vendor) => Ok(ImportMode::Vendor),
+            (None, Kind::None) => Err("kind none needs an explicit \"mode\"".into()),
+            (Some(m), _) => Err(format!("unknown mode {m:?} (roster or vendor)")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -493,11 +507,7 @@ pub async fn run_case(
     let mut input = AgentInput {
         image: case.image.clone(),
         instruction: case.expected.instruction.clone(),
-        mode_hint: match case.expected.mode_hint.as_deref() {
-            Some("roster") => Some(ImportMode::Roster),
-            Some("vendor") => Some(ImportMode::Vendor),
-            _ => None,
-        },
+        mode: case.expected.import_mode()?,
         target_roster_id: None,
         target_vendor_id: None,
     };
@@ -600,6 +610,17 @@ fn pct(v: Option<f64>) -> String {
     v.map_or("-".to_owned(), |v| format!("{:.0}%", v * 100.0))
 }
 
+/// Language flag of a run's closing summary, which must be Traditional
+/// Chinese: `zh` when it has CJK characters, `NOT-ZH` when it has none, `-`
+/// when there is no summary. Informational only: it never affects PASS/FAIL.
+pub fn summary_lang(summary: Option<&str>) -> &'static str {
+    match summary.map(str::trim) {
+        None | Some("") => "-",
+        Some(s) if s.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)) => "zh",
+        Some(_) => "NOT-ZH",
+    }
+}
+
 /// Fixed-width table, one row per run, plus a totals line.
 pub fn table(runs: &[CaseRun]) -> String {
     use std::fmt::Write;
@@ -611,7 +632,7 @@ pub fn table(runs: &[CaseRun]) -> String {
     let pad = |s: &str, w: usize| format!("{s}{}", " ".repeat(w.saturating_sub(width(s))));
     let cols = [
         "case", "kind", "result", "P", "R", "price", "cat", "note", "info", "bad", "turns",
-        "tools", "sec", "in", "out", "verdict",
+        "tools", "sec", "in", "out", "lang", "verdict",
     ];
     let rows: Vec<Vec<String>> = runs
         .iter()
@@ -638,6 +659,7 @@ pub fn table(runs: &[CaseRun]) -> String {
                 format!("{:.1}", r.latency_ms as f64 / 1000.0),
                 r.input_tokens.to_string(),
                 r.output_tokens.to_string(),
+                summary_lang(r.summary.as_deref()).to_owned(),
                 if r.pass { "PASS" } else { "FAIL" }.to_owned(),
             ]
         })
@@ -685,6 +707,17 @@ pub fn table(runs: &[CaseRun]) -> String {
         runs.iter().map(|r| r.output_tokens).sum::<u64>(),
     );
     out.push_str("P/R = name precision/recall; price/cat/note/info = exact-match rates; bad = forbidden names + zero prices\n");
+    for r in runs {
+        if summary_lang(r.summary.as_deref()) == "NOT-ZH" {
+            let _ = writeln!(
+                out,
+                "  [{}#{}] summary is not Traditional Chinese: {}",
+                r.case,
+                r.run,
+                r.summary.as_deref().unwrap_or_default().trim()
+            );
+        }
+    }
     for r in runs {
         let m = &r.metrics;
         let mut notes = Vec::new();
@@ -904,6 +937,27 @@ mod tests {
     #[test]
     fn unknown_expected_fields_are_rejected() {
         assert!(serde_json::from_str::<Expected>(r#"{"kind":"roster","menus":[]}"#).is_err());
+    }
+
+    #[test]
+    fn mode_comes_from_kind_or_the_explicit_field() {
+        let m = |j| expected(j).import_mode();
+        assert_eq!(m(r#"{"kind":"roster"}"#), Ok(ImportMode::Roster));
+        assert_eq!(m(r#"{"kind":"vendor"}"#), Ok(ImportMode::Vendor));
+        assert_eq!(
+            m(r#"{"kind":"none","mode":"vendor"}"#),
+            Ok(ImportMode::Vendor)
+        );
+        assert!(m(r#"{"kind":"none"}"#).is_err());
+        assert!(m(r#"{"kind":"none","mode":"menu"}"#).is_err());
+    }
+
+    #[test]
+    fn summary_language_flag() {
+        assert_eq!(summary_lang(Some("已提出 4 位成員")), "zh");
+        assert_eq!(summary_lang(Some("I proposed 4 members")), "NOT-ZH");
+        assert_eq!(summary_lang(Some("  ")), "-");
+        assert_eq!(summary_lang(None), "-");
     }
 
     #[test]

@@ -104,12 +104,22 @@ async fn upload_raw(c: &Client, body: Vec<u8>) -> (StatusCode, Value) {
     (s, v)
 }
 
-async fn upload(c: &Client, image: &[u8], fields: &[(&str, &str)]) -> (StatusCode, Value) {
+/// Upload with exactly the given fields (no default `mode`).
+async fn upload_exact(c: &Client, image: &[u8], fields: &[(&str, &str)]) -> (StatusCode, Value) {
     let mut parts: Vec<(&str, Option<&str>, &[u8])> = vec![("image", Some("flyer.jpg"), image)];
     for (k, v) in fields {
         parts.push((k, None, v.as_bytes()));
     }
     upload_raw(c, multipart(&parts)).await
+}
+
+/// Upload as a vendor flyer unless `fields` carries a `mode`.
+async fn upload(c: &Client, image: &[u8], fields: &[(&str, &str)]) -> (StatusCode, Value) {
+    let mut fields = fields.to_vec();
+    if !fields.iter().any(|(k, _)| *k == "mode") {
+        fields.push(("mode", "vendor"));
+    }
+    upload_exact(c, image, &fields).await
 }
 
 async fn client_with(t: TestApp) -> Client {
@@ -141,15 +151,10 @@ fn accepted_vendor() -> Value {
 #[tokio::test]
 async fn upload_returns_proposal() {
     let c = client().await;
-    let (s, v) = upload(
-        &c,
-        JPEG,
-        &[("modeHint", "vendor"), ("instruction", "午餐店")],
-    )
-    .await;
+    let (s, v) = upload(&c, JPEG, &[("mode", "vendor"), ("instruction", "午餐店")]).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(v["status"], "proposed");
-    assert_eq!(v["modeHint"], "vendor");
+    assert_eq!(v["mode"], "vendor");
     assert_eq!(v["instruction"], "午餐店");
     assert_eq!(v["summary"], "已提出阿財便當");
     assert_eq!(v["usage"]["inputTokens"], 1000);
@@ -216,11 +221,22 @@ async fn image_validation() {
     );
     let (s, v) = upload(&c, JPEG, &[("instruction", &"字".repeat(200))]).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
-    let (s, v) = upload(&c, JPEG, &[("modeHint", "menu")]).await;
-    assert_eq!(
-        (s, v["code"].as_str()),
-        (StatusCode::UNPROCESSABLE_ENTITY, Some("invalid_mode_hint"))
-    );
+    // the mode is required and must be roster or vendor
+    for fields in [&[][..], &[("mode", "menu")], &[("mode", "")]] {
+        let (s, v) = upload_exact(&c, JPEG, fields).await;
+        assert_eq!(
+            (s, v["code"].as_str(), v["field"].as_str()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Some("invalid_mode"),
+                Some("mode")
+            ),
+            "{fields:?}: {v}"
+        );
+    }
+    // the fake agent here scripts vendor tools, which a roster upload does not have
+    let (s, v) = upload(&c, JPEG, &[("mode", "roster")]).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "{v}");
     // unknown / foreign targets are 404
     let (s, _) = upload(
         &c,
@@ -366,7 +382,7 @@ async fn unavailable_and_timeout_are_502() {
 #[tokio::test]
 async fn apply_writes_vendor_and_second_apply_conflicts() {
     let c = client().await;
-    let (_, run) = upload(&c, JPEG, &[("modeHint", "vendor")]).await;
+    let (_, run) = upload(&c, JPEG, &[("mode", "vendor")]).await;
     let id = run["id"].as_str().unwrap();
 
     let (s, v) = c
@@ -483,7 +499,7 @@ fn demo_delay0() -> Arc<dyn ImportAgent> {
 #[tokio::test]
 async fn demo_agent_roster_and_vendor() {
     let c = client_with(test_app_ai(demo_delay0(), 30, None, true).await).await;
-    let (s, v) = upload(&c, JPEG, &[("modeHint", "roster")]).await;
+    let (s, v) = upload(&c, JPEG, &[("mode", "roster")]).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let t = &v["proposal"]["targets"][0];
     assert_eq!(t["type"], "roster");
@@ -513,7 +529,7 @@ async fn demo_agent_roster_and_vendor() {
         json!({ "items": [{ "name": "排骨飯", "price": 80 }] }),
     )
     .await;
-    let (s, v) = upload(&c, JPEG, &[("modeHint", "vendor"), ("targetVendorId", vid)]).await;
+    let (s, v) = upload(&c, JPEG, &[("mode", "vendor"), ("targetVendorId", vid)]).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let t = &v["proposal"]["targets"][0];
     assert_eq!(t["vendor"]["existingId"], vid);
@@ -523,7 +539,7 @@ async fn demo_agent_roster_and_vendor() {
     assert_eq!(menu[0]["price"], 85);
     assert!(menu.iter().any(|m| m["issues"][0] == "price_missing"));
 
-    let (s, v) = upload(&c, JPEG, &[("modeHint", "vendor")]).await;
+    let (s, v) = upload(&c, JPEG, &[("mode", "vendor")]).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
         v["proposal"]["targets"][0]["info"]["after"]["name"],

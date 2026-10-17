@@ -55,7 +55,7 @@ impl AiImportConfig {
 pub struct StartImportCmd {
     pub image: ImageInput,
     pub instruction: Option<String>,
-    pub mode_hint: Option<ImportMode>,
+    pub mode: ImportMode,
     pub target_roster_id: Option<RosterId>,
     pub target_vendor_id: Option<VendorId>,
 }
@@ -249,7 +249,7 @@ impl AiImportService {
 
         let mut run = ImportRun::start(
             org,
-            cmd.mode_hint,
+            cmd.mode,
             cmd.target_roster_id,
             cmd.target_vendor_id,
             instruction.clone(),
@@ -268,7 +268,7 @@ impl AiImportService {
         let input = AgentInput {
             image: cmd.image,
             instruction,
-            mode_hint: cmd.mode_hint,
+            mode: cmd.mode,
             target_roster_id: cmd.target_roster_id,
             target_vendor_id: cmd.target_vendor_id,
         };

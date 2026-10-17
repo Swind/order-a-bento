@@ -3490,10 +3490,11 @@
               "null"
             ]
           },
-          "modeHint": {
+          "mode": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/ImportModeDto"
+                "$ref": "#/components/schemas/ImportModeDto",
+                "description": "What the user chose to upload. `null` only for runs created before the\nmode became required."
               },
               {
                 "type": "null"
@@ -4737,9 +4738,10 @@
       },
       "StartImportForm": {
         "type": "object",
-        "description": "Multipart body of `POST /ai/import-runs` (documentation only).",
+        "description": "Multipart body of `POST /ai/import-runs` (documentation only). `mode` is\nrequired: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.",
         "required": [
-          "image"
+          "image",
+          "mode"
         ],
         "properties": {
           "image": {
@@ -4754,20 +4756,12 @@
             ],
             "description": "Free-text hint, at most 200 characters."
           },
-          "modeHint": {
-            "oneOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "roster",
-                  "vendor"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "What the photo contains."
+          "mode": {
+            "type": "string",
+            "enum": [
+              "roster",
+              "vendor"
+            ]
           },
           "targetRosterId": {
             "type": [

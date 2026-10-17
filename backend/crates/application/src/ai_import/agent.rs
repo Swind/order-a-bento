@@ -118,7 +118,7 @@ impl std::fmt::Debug for ImageInput {
 pub struct AgentInput {
     pub image: ImageInput,
     pub instruction: Option<String>,
-    pub mode_hint: Option<ImportMode>,
+    pub mode: ImportMode,
     pub target_roster_id: Option<RosterId>,
     pub target_vendor_id: Option<VendorId>,
 }

@@ -1,5 +1,6 @@
 {
   "kind": "none",
+  "mode": "vendor",
   "description": "A bar chart of quarterly revenue: neither a roster nor a menu, so nothing may be proposed.",
   "forbidden": [
     "Q1",

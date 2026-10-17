@@ -42,7 +42,7 @@ import {
 function originPath(run: ImportRun): string {
   if (run.targetRosterId) return `/rosters/${run.targetRosterId}`;
   if (run.targetVendorId) return `/vendors/${run.targetVendorId}`;
-  return run.modeHint === "vendor" ? "/vendors" : "/rosters";
+  return run.mode === "vendor" ? "/vendors" : "/rosters";
 }
 
 function DemoBadge() {

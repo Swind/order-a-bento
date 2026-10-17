@@ -138,3 +138,4 @@
 | T4.5 | ✅ 驗收通過 | 使用者提供 3 張真實照片（劃掉品項的相簿截圖、手拿傳單、用過的送貨單，訂購人電話已塗掉）加入 eval；AI 逾時可設定（`AI_REQUEST_TIMEOUT_SECS`／`AI_RUN_TIMEOUT_SECS`，相容閘道預設 180／300 秒）；system prompt 與送給模型的文字改英文，給使用者看的仍為繁中；Strata 全套 10/10 PASS，送貨單剩鯖→鱈誤讀等模型本身的 OCR 錯誤；254 個後端測試 |
 | T6.3 | ✅ 驗收通過 | `AI_PROVIDER=openai-compatible`（rig Chat Completions）、`AI_API_KEY`/`AI_BASE_URL`、`AI_EXTRA_HEADERS`、每次匯入一組 `AI_SESSION_HEADER`；opencode Go `deepseek-v4.1-flash` 兩輪 17/20 PASS、平均 13 秒（Qwen 24.5 秒），送貨單全對，偶有讀錯字與收進劃掉品項；265 個後端測試 |
 | T6.4 | ✅ 驗收通過 | `AI_PROVIDER=openai-responses`（rig Responses client、`store:false` 回傳 reasoning）；opencode Go 7 張 core eval 各跑一次：Haiku 5.5 6/7 11.8 秒、DeepSeek v4.1 flash 7/7（收進劃掉名字）18.4 秒、GLM-5.3-flash 6/7 46.8 秒、GPT 6 Luna 6/7 16.6 秒；建議 Haiku；275 個後端測試 |
+| T6.5 | ✅ 驗收通過 | 匯入必選 `mode`（roster／vendor，缺少回 422）；prompt 拆成名單版與菜單版（共用片段組裝，design §9.4 有一致性測試），每次只給該模式的 3 個 tool；劃掉規則限定「線劃過品名本身」、摘要強制繁中、eval 加 lang 欄；Haiku 7 張 6/7、全部繁中；281 個後端測試、E2E 8 個 |

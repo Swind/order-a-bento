@@ -60,15 +60,7 @@ impl ImportAgent for DemoImportAgent {
         input: AgentInput,
     ) -> Result<AgentOutcome, AiError> {
         tokio::time::sleep(self.delay).await;
-        let roster = match (
-            input.mode_hint,
-            input.target_roster_id,
-            input.target_vendor_id,
-        ) {
-            (Some(ImportMode::Roster), _, _) | (None, Some(_), _) => true,
-            (Some(ImportMode::Vendor), _, _) | (None, None, Some(_)) => false,
-            (None, None, None) => false,
-        };
+        let roster = input.mode == ImportMode::Roster;
         let summary = if roster {
             let target = match input.target_roster_id {
                 Some(id) => RosterTargetArg::Existing(ExistingRosterRef {

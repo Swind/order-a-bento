@@ -110,7 +110,7 @@ export function RostersPage() {
         <h1 className="text-2xl font-bold">名單</h1>
         <CreateRosterDialog />
       </div>
-      <ImportButton label="📷 從照片建立名單" modeHint="roster" />
+      <ImportButton label="📷 從照片建立名單" mode="roster" />
       {rosters.isPending && (
         <div className="space-y-3" aria-busy="true">
           <Skeleton className="h-16 w-full" />

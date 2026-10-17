@@ -52,7 +52,7 @@ fn make_strict(v: &mut Value) {
     }
 }
 
-/// `(name, parameters)` of the six tools, for tests and diagnostics.
+/// `(name, parameters)` of all six tools (both modes together), for tests and diagnostics.
 pub fn import_tools_parameters() -> Vec<(&'static str, Value)> {
     vec![
         (ListRosters::NAME, strict_schema::<NoArgs>()),
@@ -159,16 +159,25 @@ tool!(
     |ctx, a| tools::propose_vendor(ctx, a)
 );
 
-/// Register all six tools on an agent builder.
-macro_rules! add_import_tools {
+/// Register the tools of a roster upload: no vendor tool exists in that run, so
+/// a vendor proposal cannot be made.
+macro_rules! add_roster_tools {
     ($builder:expr, $ctx:expr) => {
         $builder
             .tool($crate::ai::tools::ListRosters { ctx: $ctx.clone() })
             .tool($crate::ai::tools::GetRoster { ctx: $ctx.clone() })
+            .tool($crate::ai::tools::ProposeRosterMembers { ctx: $ctx.clone() })
+    };
+}
+pub(crate) use add_roster_tools;
+
+/// Register the tools of a vendor flyer / menu upload.
+macro_rules! add_vendor_tools {
+    ($builder:expr, $ctx:expr) => {
+        $builder
             .tool($crate::ai::tools::ListVendors { ctx: $ctx.clone() })
             .tool($crate::ai::tools::GetVendor { ctx: $ctx.clone() })
-            .tool($crate::ai::tools::ProposeRosterMembers { ctx: $ctx.clone() })
             .tool($crate::ai::tools::ProposeVendor { ctx: $ctx.clone() })
     };
 }
-pub(crate) use add_import_tools;
+pub(crate) use add_vendor_tools;

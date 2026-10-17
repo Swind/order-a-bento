@@ -21,7 +21,7 @@ import { useAuthConfig } from "@/features/auth/hooks";
 import { startImport } from "./hooks";
 
 export interface ImportTarget {
-  modeHint: ImportMode;
+  mode: ImportMode;
   targetRosterId?: string;
   targetVendorId?: string;
 }
@@ -113,7 +113,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
   }
 
   const tooLong = [...instruction].length > MAX_INSTRUCTION;
-  const placeholder = target.modeHint === "vendor" ? "例如：更新這間店的菜單" : "例如：加到業務部名單";
+  const placeholder = target.mode === "vendor" ? "例如：更新這間店的菜單" : "例如：加到業務部名單";
 
   return (
     <Dialog open={open} onOpenChange={change}>
@@ -140,7 +140,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
           <form onSubmit={submit} className="grid gap-4">
             <DialogHeader>
               <DialogTitle>
-                {target.modeHint === "vendor" ? "從傳單匯入菜單" : "從照片匯入名單"}
+                {target.mode === "vendor" ? "從傳單匯入菜單" : "從照片匯入名單"}
               </DialogTitle>
               <DialogDescription>
                 選一張照片，AI 會整理成待確認的變更，確認後才會寫入。

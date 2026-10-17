@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use domain::ai_import::Usage;
+use domain::ai_import::{ImportMode, Usage};
 
 use super::tools::{
     self, GetRosterArgs, GetVendorArgs, ProposeRosterMembersArgs, ProposeVendorArgs,
@@ -21,8 +21,22 @@ pub enum FakeToolCall {
     ProposeVendor(ProposeVendorArgs),
 }
 
+impl FakeToolCall {
+    /// The upload mode whose agent has this tool (the real agent only gets the
+    /// tools of the chosen mode).
+    fn mode(&self) -> ImportMode {
+        match self {
+            Self::ListRosters | Self::GetRoster(_) | Self::ProposeRosterMembers(_) => {
+                ImportMode::Roster
+            }
+            Self::ListVendors | Self::GetVendor(_) | Self::ProposeVendor(_) => ImportMode::Vendor,
+        }
+    }
+}
+
 /// Calls the real tool functions in order and returns a fixed summary. It
-/// ignores the image and instruction.
+/// ignores the image and instruction. A call whose tool does not exist in the
+/// run's mode fails like an unknown tool would.
 #[derive(Debug, Clone)]
 pub struct FakeImportAgent {
     pub script: Vec<FakeToolCall>,
@@ -56,9 +70,15 @@ impl ImportAgent for FakeImportAgent {
     async fn run(
         &self,
         ctx: Arc<ImportToolContext>,
-        _input: AgentInput,
+        input: AgentInput,
     ) -> Result<AgentOutcome, AiError> {
         for call in self.script.iter().cloned() {
+            if call.mode() != input.mode {
+                return Err(AiError::Unavailable {
+                    retryable: false,
+                    detail: format!("tool {call:?} is not available in {:?} mode", input.mode),
+                });
+            }
             let r = match call {
                 FakeToolCall::ListRosters => tools::list_rosters(&ctx).await.map(drop),
                 FakeToolCall::GetRoster(a) => tools::get_roster(&ctx, a).await.map(drop),

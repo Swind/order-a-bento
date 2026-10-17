@@ -16,7 +16,9 @@ use application::ai_import::{
 };
 use application::ports::{OrganizerRepo, RosterRepo, VendorRepo};
 use async_trait::async_trait;
-use domain::ai_import::{ChangeAction, ImportRunStatus, Issue, ProposalTarget, TargetRef, Usage};
+use domain::ai_import::{
+    ChangeAction, ImportMode, ImportRunStatus, Issue, ProposalTarget, TargetRef, Usage,
+};
 use domain::directory::{MemberInput, MenuItemInput, Roster, RosterId, Vendor, VendorId};
 use domain::identity::{Organizer, OrganizerId};
 use domain::shared::SystemClock;
@@ -166,7 +168,7 @@ fn cmd() -> StartImportCmd {
             media_type: "image/jpeg".into(),
         },
         instruction: None,
-        mode_hint: None,
+        mode: ImportMode::Roster,
         target_roster_id: None,
         target_vendor_id: None,
     }

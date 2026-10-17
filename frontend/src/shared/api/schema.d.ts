@@ -789,7 +789,7 @@ export interface components {
             finishedAt?: string | null;
             id: string;
             instruction?: string | null;
-            modeHint?: components["schemas"]["ImportModeDto"] | null;
+            mode?: components["schemas"]["ImportModeDto"] | null;
             model: string;
             proposal: components["schemas"]["ProposalDto"];
             status: components["schemas"]["ImportRunStatusDto"];
@@ -1145,7 +1145,10 @@ export interface components {
             paid: boolean;
             pickedUp: boolean;
         };
-        /** @description Multipart body of `POST /ai/import-runs` (documentation only). */
+        /**
+         * @description Multipart body of `POST /ai/import-runs` (documentation only). `mode` is
+         *     required: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.
+         */
         StartImportForm: {
             /**
              * Format: binary
@@ -1154,8 +1157,8 @@ export interface components {
             image: string;
             /** @description Free-text hint, at most 200 characters. */
             instruction?: string | null;
-            /** @description What the photo contains. */
-            modeHint?: ("roster" | "vendor") | null;
+            /** @enum {string} */
+            mode: "roster" | "vendor";
             /** @description Existing roster to add the members to. */
             targetRosterId?: string | null;
             /** @description Existing vendor to update. */

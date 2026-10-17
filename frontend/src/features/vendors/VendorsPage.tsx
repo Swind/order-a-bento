@@ -147,7 +147,7 @@ export function VendorsPage() {
         <h1 className="text-2xl font-bold">店家</h1>
         <CreateVendorDialog />
       </div>
-      <ImportButton label="📷 從傳單建立店家" modeHint="vendor" />
+      <ImportButton label="📷 從傳單建立店家" mode="vendor" />
       {vendors.isPending && (
         <div className="space-y-3" aria-busy="true">
           <Skeleton className="h-16 w-full" />

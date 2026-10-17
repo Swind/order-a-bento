@@ -35,7 +35,7 @@ describe("ImportDialog", () => {
     expect(screen.getByRole("button", { name: "📷 從照片匯入" })).toBeDisabled();
   });
 
-  it("posts FormData with modeHint and target id, then opens the confirm screen", async () => {
+  it("posts FormData with mode and target id, then opens the confirm screen", async () => {
     setup();
     let form: FormData | undefined;
     server.use(
@@ -51,7 +51,7 @@ describe("ImportDialog", () => {
     await userEvent.type(screen.getByLabelText("指示（選填）"), "加到業務部名單");
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/ai-import/run1"));
-    expect(form!.get("modeHint")).toBe("roster");
+    expect(form!.get("mode")).toBe("roster");
     expect(form!.get("targetRosterId")).toBe("r1");
     expect(form!.get("instruction")).toBe("加到業務部名單");
     expect(form!.get("targetVendorId")).toBeNull();
@@ -97,7 +97,7 @@ describe("ImportDialog", () => {
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("圖片太大");
-    expect(form!.get("modeHint")).toBe("roster");
+    expect(form!.get("mode")).toBe("roster");
     expect(form!.get("targetRosterId")).toBeNull();
   });
 });

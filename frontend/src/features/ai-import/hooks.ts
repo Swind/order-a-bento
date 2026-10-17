@@ -15,7 +15,7 @@ export function useImportRun(runId: string) {
 export interface StartImportInput {
   image: Blob;
   instruction?: string;
-  modeHint?: ImportMode;
+  mode: ImportMode;
   targetRosterId?: string;
   targetVendorId?: string;
   signal?: AbortSignal;
@@ -26,7 +26,7 @@ export async function startImport(input: StartImportInput): Promise<ImportRun> {
   const fd = new FormData();
   fd.append("image", input.image, "photo.jpg");
   if (input.instruction) fd.append("instruction", input.instruction);
-  if (input.modeHint) fd.append("modeHint", input.modeHint);
+  fd.append("mode", input.mode);
   if (input.targetRosterId) fd.append("targetRosterId", input.targetRosterId);
   if (input.targetVendorId) fd.append("targetVendorId", input.targetVendorId);
   const base = typeof location !== "undefined" ? location.origin : "";

@@ -57,7 +57,7 @@ fn input() -> AgentInput {
             media_type: "image/jpeg".into(),
         },
         instruction: Some("這是午餐店的菜單".into()),
-        mode_hint: Some(ImportMode::Vendor),
+        mode: ImportMode::Vendor,
         target_roster_id: None,
         target_vendor_id: None,
     }
@@ -134,6 +134,30 @@ async fn happy_path_records_proposal_usage_and_tool_calls() {
 }
 
 #[tokio::test]
+async fn roster_upload_gets_only_roster_tools_and_the_roster_prompt() {
+    let e = env().await;
+    let (url, mock) = start(happy_script()).await;
+    let mut inp = input();
+    inp.mode = ImportMode::Roster;
+    // the scripted model answers with vendor tool calls, which do not exist here
+    let _ = agent(&url, true).run(e.ctx.clone(), inp).await;
+    let body = first_body(&mock);
+    let names: Vec<_> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["list_rosters", "get_roster", "propose_roster_members"]
+    );
+    let system = body["system"][0]["text"].as_str().unwrap();
+    assert!(system.contains("## Roster rules") && !system.contains("## Vendor rules"));
+    assert!(e.ctx.snapshot().await.targets.is_empty());
+}
+
+#[tokio::test]
 async fn first_request_shape_with_fallbacks() {
     let e = env().await;
     let (url, mock) = start(happy_script()).await;
@@ -145,21 +169,18 @@ async fn first_request_shape_with_fallbacks() {
     assert_eq!(body["output_config"]["effort"], "low");
     assert_eq!(body["fallbacks"], "default");
     let tools = body["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6);
+    // input() is a vendor upload: only the vendor tools exist
+    assert_eq!(tools.len(), 3);
     for t in tools {
         assert_eq!(t["strict"], true, "tool {} not strict", t["name"]);
         assert_eq!(t["input_schema"]["additionalProperties"], false);
     }
     let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for n in [
-        "list_rosters",
-        "get_roster",
-        "list_vendors",
-        "get_vendor",
-        "propose_roster_members",
-        "propose_vendor",
-    ] {
+    for n in ["list_vendors", "get_vendor", "propose_vendor"] {
         assert!(names.contains(&n), "missing {n}");
+    }
+    for n in ["list_rosters", "get_roster", "propose_roster_members"] {
+        assert!(!names.contains(&n), "unexpected {n}");
     }
     // system prompt + text and image in the user message
     assert!(
@@ -170,7 +191,7 @@ async fn first_request_shape_with_fallbacks() {
     );
     let content = body["messages"][0]["content"].as_array().unwrap();
     let text = content[0]["text"].as_str().unwrap();
-    assert!(text.contains("Mode hint: vendor"));
+    assert!(!text.contains("Mode hint"));
     assert!(text.contains("Organizer instruction: 這是午餐店的菜單"));
     let img = content
         .iter()
@@ -242,7 +263,7 @@ async fn compatible_provider_sends_the_plain_subset() {
     assert!(body.get("thinking").is_none(), "{body}");
     assert_eq!(beta_header(&mock), "");
     let tools = body["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 3);
     for t in tools {
         assert!(t.get("strict").is_none(), "tool {} strict", t["name"]);
         // our own schema is closed anyway
@@ -508,7 +529,7 @@ async fn openai_happy_path_request_shape_and_usage() {
         assert!(body.get(k).is_none(), "{k} in {body}");
     }
     let tools = body["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 3);
     for t in tools {
         assert_eq!(t["type"], "function");
         assert!(t["function"].get("strict").is_none(), "{t}");
@@ -520,12 +541,7 @@ async fn openai_happy_path_request_shape_and_usage() {
     assert!(messages[0].to_string().contains("data-entry assistant"));
     let user = messages.iter().find(|m| m["role"] == "user").unwrap();
     let parts = user["content"].as_array().unwrap();
-    assert!(
-        parts[0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Mode hint: vendor")
-    );
+    assert!(!parts[0]["text"].as_str().unwrap().contains("Mode hint"));
     let img = parts
         .iter()
         .find(|p| p["type"] == "image_url")
@@ -811,7 +827,7 @@ async fn responses_happy_path_request_shape_loop_and_usage() {
             .contains("data-entry assistant")
     );
     let tools = body["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 3);
     for t in tools {
         assert_eq!(t["type"], "function");
         assert!(t.get("strict").is_none_or(|s| s == false), "{t}");
@@ -824,10 +840,13 @@ async fn responses_happy_path_request_shape_loop_and_usage() {
         .iter()
         .flat_map(|m| m["content"].as_array().unwrap())
         .collect();
-    assert!(
-        parts.iter().any(|p| p["type"] == "input_text"
-            && p["text"].as_str().unwrap().contains("Mode hint: vendor"))
-    );
+    assert!(parts.iter().any(|p| {
+        p["type"] == "input_text"
+            && p["text"]
+                .as_str()
+                .unwrap()
+                .contains("Organizer instruction")
+    }));
     let img = parts
         .iter()
         .find(|p| p["type"] == "input_image")

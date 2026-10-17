@@ -247,7 +247,9 @@ pub struct UsageDto {
 pub struct ImportRunDto {
     pub id: String,
     pub status: ImportRunStatusDto,
-    pub mode_hint: Option<ImportModeDto>,
+    /// What the user chose to upload. `null` only for runs created before the
+    /// mode became required.
+    pub mode: Option<ImportModeDto>,
     pub target_roster_id: Option<String>,
     pub target_vendor_id: Option<String>,
     pub instruction: Option<String>,
@@ -275,7 +277,7 @@ impl From<&ImportRunView> for ImportRunDto {
                 ImportRunStatus::Discarded => ImportRunStatusDto::Discarded,
                 ImportRunStatus::Failed => ImportRunStatusDto::Failed,
             },
-            mode_hint: r.mode_hint.map(|m| match m {
+            mode: r.mode.map(|m| match m {
                 ImportMode::Roster => ImportModeDto::Roster,
                 ImportMode::Vendor => ImportModeDto::Vendor,
             }),
@@ -297,7 +299,8 @@ impl From<&ImportRunView> for ImportRunDto {
     }
 }
 
-/// Multipart body of `POST /ai/import-runs` (documentation only).
+/// Multipart body of `POST /ai/import-runs` (documentation only). `mode` is
+/// required: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.
 #[derive(Debug, ToSchema)]
 #[allow(dead_code)]
 #[schema(rename_all = "camelCase")]
@@ -307,9 +310,8 @@ pub struct StartImportForm {
     image: Vec<u8>,
     /// Free-text hint, at most 200 characters.
     instruction: Option<String>,
-    /// What the photo contains.
     #[schema(inline)]
-    mode_hint: Option<ImportModeDto>,
+    mode: ImportModeDto,
     /// Existing roster to add the members to.
     target_roster_id: Option<String>,
     /// Existing vendor to update.
@@ -511,7 +513,7 @@ pub async fn start_import(
 
     let mut image: Option<Vec<u8>> = None;
     let mut instruction = None;
-    let mut mode_hint = None;
+    let mut mode = None;
     let mut target_roster = None;
     let mut target_vendor = None;
     while let Some(field) = mp.next_field().await.map_err(multipart_error)? {
@@ -524,11 +526,11 @@ pub async fn start_import(
                 }
                 image = Some(bytes.to_vec());
             }
-            "instruction" | "modeHint" | "targetRosterId" | "targetVendorId" => {
+            "instruction" | "mode" | "targetRosterId" | "targetVendorId" => {
                 let text = blank_to_none(field.text().await.map_err(multipart_error)?);
                 match name.as_str() {
                     "instruction" => instruction = text,
-                    "modeHint" => mode_hint = text,
+                    "mode" => mode = text,
                     "targetRosterId" => target_roster = text,
                     _ => target_vendor = text,
                 }
@@ -556,17 +558,15 @@ pub async fn start_import(
             format!("The instruction must be at most {MAX_INSTRUCTION_CHARS} characters."),
         ));
     }
-    let mode_hint = mode_hint
-        .map(|m| {
-            ImportMode::parse(&m).map_err(|_| {
-                invalid_field(
-                    "modeHint",
-                    "invalid_mode_hint",
-                    "modeHint must be roster or vendor.",
-                )
-            })
-        })
-        .transpose()?;
+    let mode = mode.ok_or_else(|| {
+        invalid_field(
+            "mode",
+            "invalid_mode",
+            "mode is required (roster or vendor).",
+        )
+    })?;
+    let mode = ImportMode::parse(&mode)
+        .map_err(|_| invalid_field("mode", "invalid_mode", "mode must be roster or vendor."))?;
     let target_roster_id = target_roster.map(|s| parse_id(&s)).transpose()?;
     let target_vendor_id = target_vendor.map(|s| parse_id(&s)).transpose()?;
 
@@ -579,7 +579,7 @@ pub async fn start_import(
                     media_type: media_type.into(),
                 },
                 instruction,
-                mode_hint,
+                mode,
                 target_roster_id,
                 target_vendor_id,
             },

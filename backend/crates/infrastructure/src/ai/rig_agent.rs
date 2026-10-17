@@ -24,7 +24,7 @@ use rig::providers::openai::wire::OPENAI;
 use rig::providers::openai::{OpenAIConfig, Route};
 use rig::{AgentBuilder, DynModel};
 
-use super::tools::add_import_tools;
+use super::tools::{add_roster_tools, add_vendor_tools};
 
 /// Cap on a single model turn (summary plus a few dozen tool-call items).
 const MAX_TOKENS: u64 = 4096;
@@ -256,16 +256,10 @@ fn origin_of(url: &str) -> &str {
 }
 
 fn user_message(input: &AgentInput) -> String {
-    let mut lines = vec!["Please process this photo.".to_string()];
-    if let Some(mode) = input.mode_hint {
-        lines.push(format!(
-            "Mode hint: {}",
-            match mode {
-                ImportMode::Roster => "roster",
-                ImportMode::Vendor => "vendor",
-            }
-        ));
-    }
+    let mut lines = vec![
+        "Please process this photo.".to_string(),
+        "Reply to the organizer in Traditional Chinese (zh-TW).".to_string(),
+    ];
     if let Some(id) = input.target_roster_id {
         lines.push(format!("Target roster id: {id}"));
     }
@@ -448,7 +442,7 @@ impl ImportAgent for RigImportAgent {
             seen: seen.clone(),
         };
         let mut builder = AgentBuilder::new(model)
-            .preamble(import_agent_system_prompt())
+            .preamble(import_agent_system_prompt(input.mode))
             .max_tokens(MAX_TOKENS)
             .default_max_turns(cfg.max_turns)
             .add_hook(hook);
@@ -464,14 +458,22 @@ impl ImportAgent for RigImportAgent {
             builder =
                 builder.provider_option(AnthropicOptions::default().fallbacks(Fallbacks::Default));
         }
-        let agent = add_import_tools!(builder, ctx).build();
-
         let image = UserContent::image_raw(input.image.bytes.clone(), Some(media_type), None);
-        let run = agent
-            .prompt(user_message(&input))
-            .attach_files([image])
-            .map_err(|e| AiError::InvalidImage(e.to_string()))?
-            .await;
+        // Only the chosen mode's tools exist, so a proposal of the other kind
+        // cannot be made.
+        macro_rules! prompt {
+            ($agent:expr) => {
+                $agent
+                    .prompt(user_message(&input))
+                    .attach_files([image])
+                    .map_err(|e| AiError::InvalidImage(e.to_string()))?
+                    .await
+            };
+        }
+        let run = match input.mode {
+            ImportMode::Roster => prompt!(add_roster_tools!(builder, ctx).build()),
+            ImportMode::Vendor => prompt!(add_vendor_tools!(builder, ctx).build()),
+        };
 
         let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
         match run {

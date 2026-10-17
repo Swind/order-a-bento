@@ -40,7 +40,8 @@ impl ImportRunStatus {
     }
 }
 
-/// The user's hint of what the photo contains (`ai_import_runs.mode_hint`).
+/// What the user chose to upload (`ai_import_runs.mode_hint`; NULL only in rows
+/// from before the mode was required).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportMode {
     Roster,
@@ -58,7 +59,7 @@ impl ImportMode {
         match s {
             "roster" => Ok(Self::Roster),
             "vendor" => Ok(Self::Vendor),
-            _ => Err(DomainError::invalid("modeHint", "必須是 roster 或 vendor")),
+            _ => Err(DomainError::invalid("mode", "必須是 roster 或 vendor")),
         }
     }
 }
@@ -76,7 +77,8 @@ pub struct Usage {
 pub struct ImportRun {
     pub id: ImportRunId,
     pub organizer_id: OrganizerId,
-    pub mode_hint: Option<ImportMode>,
+    /// `None` only for legacy rows.
+    pub mode: Option<ImportMode>,
     pub target_roster_id: Option<RosterId>,
     pub target_vendor_id: Option<VendorId>,
     pub instruction: Option<String>,
@@ -97,7 +99,7 @@ impl ImportRun {
     /// A new run in `Running` state.
     pub fn start(
         organizer_id: OrganizerId,
-        mode_hint: Option<ImportMode>,
+        mode: ImportMode,
         target_roster_id: Option<RosterId>,
         target_vendor_id: Option<VendorId>,
         instruction: Option<String>,
@@ -107,7 +109,7 @@ impl ImportRun {
         Self {
             id: ImportRunId::new(),
             organizer_id,
-            mode_hint,
+            mode: Some(mode),
             target_roster_id,
             target_vendor_id,
             instruction,
@@ -192,7 +194,7 @@ mod tests {
     fn run() -> ImportRun {
         ImportRun::start(
             OrganizerId::new(),
-            Some(ImportMode::Vendor),
+            ImportMode::Vendor,
             None,
             None,
             None,

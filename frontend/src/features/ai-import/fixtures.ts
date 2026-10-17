@@ -10,7 +10,7 @@ export const AUTH_CONFIG = {
 const base = {
   id: "run1",
   status: "proposed" as const,
-  modeHint: "vendor" as const,
+  mode: "vendor" as const,
   targetRosterId: null,
   targetVendorId: "v1",
   instruction: null,
@@ -75,7 +75,7 @@ export const VENDOR_RUN: ImportRun = {
 
 export const ROSTER_RUN: ImportRun = {
   ...base,
-  modeHint: "roster",
+  mode: "roster",
   targetVendorId: null,
   proposal: {
     warnings: [],

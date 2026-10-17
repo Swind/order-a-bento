@@ -83,7 +83,7 @@ impl RunRow {
         Ok(ImportRun {
             id: self.id.parse().map_err(port)?,
             organizer_id: self.organizer_id.parse().map_err(port)?,
-            mode_hint: self
+            mode: self
                 .mode_hint
                 .as_deref()
                 .map(ImportMode::parse)
@@ -133,7 +133,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
         ))
         .bind(run.id.to_string())
         .bind(run.organizer_id.to_string())
-        .bind(run.mode_hint.map(ImportMode::as_str))
+        .bind(run.mode.map(ImportMode::as_str))
         .bind(run.target_roster_id.map(|i| i.to_string()))
         .bind(run.target_vendor_id.map(|i| i.to_string()))
         .bind(&run.instruction)
