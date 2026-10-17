@@ -1,0 +1,146 @@
+# 部署指南
+
+單一 Docker 映像（前端已內嵌於後端執行檔）+ 一個 SQLite 檔（`/data/bento.db`）。**只能跑單一實例**（SQLite 單寫入者）。
+
+## 1. 前置需求
+
+- Docker（或可執行 Linux 容器的環境）、一個對外的 HTTPS 網域（例：`https://bento.example.com`）。
+- Google OAuth 用戶端（見 §3）。
+- 選用：Anthropic API key（AI 匯入）、S3 相容 bucket（Litestream 備份）。
+
+## 2. 建置映像
+
+```sh
+make docker-build            # 等同 docker build -t order-a-bento:latest .
+```
+
+映像以非 root 使用者 `bento`（uid 10001）執行，資料目錄為 `/data`（`VOLUME`），監聽 `3000`。
+
+## 3. Google 登入設定
+
+1. 開啟 Google Cloud Console，建立（或選擇）專案。
+2. 「API 與服務 → OAuth 同意畫面」：User Type 選「外部」（或內部，若使用 Workspace），填應用程式名稱、支援信箱；範圍只需 `openid email profile`。測試階段需把使用者加入「測試使用者」，正式使用請發布應用程式。
+3. 「憑證 → 建立憑證 → OAuth 用戶端 ID」，類型選「網頁應用程式」。
+4. 「已授權的重新導向 URI」填入 `APP_BASE_URL/auth/google/callback`，例如 `https://bento.example.com/auth/google/callback`（必須與 `APP_BASE_URL` 完全一致，含 scheme）。
+5. 把 Client ID／Client secret 設為 `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET`。未設定時 `/auth/google/*` 回 503。
+
+## 4. 環境變數
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `APP_ENV` | `development`（映像內為 `production`） | `production` 會隱藏 `/api/docs`，並拒絕 `DEV_LOGIN`／`AI_DEMO` |
+| `PORT` | `3000` | 監聽埠 |
+| `APP_BASE_URL` | `http://localhost:3000` | **必設**。公開網址，用於 OAuth 回呼、分享連結；`https://` 開頭時 cookie 才帶 `Secure` |
+| `ALLOWED_ORIGINS` | production 為空 | 額外允許送出狀態變更請求的 Origin（逗號分隔，CSRF 檢查）；`APP_BASE_URL` 的 origin 一律允許，通常不需設定 |
+| `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑。使用 Litestream 時必須是 `/data/bento.db` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth（§3） |
+| `DEV_LOGIN` | `false` | 開發用登入捷徑。**正式環境不可開**（production 下設為 true 會拒絕啟動） |
+| `ANTHROPIC_API_KEY` | 空 | 設定後啟用 AI 匯入；未設定則隱藏 AI 匯入按鈕 |
+| `ANTHROPIC_BASE_URL` | 空 | 覆寫 API 位址（gateway／測試） |
+| `AI_MODEL` | `claude-opus-5-5` | 使用的模型 |
+| `AI_MAX_TURNS` | `8` | 每次匯入最多呼叫模型次數 |
+| `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者每日匯入次數上限 |
+| `AI_FALLBACKS` | `default` | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉 |
+| `AI_DEMO` | `false` | 腳本化假資料，僅限開發；production 拒絕啟動 |
+| `SESSION_TTL_DAYS` | `14` | 登入 session 有效天數（過半後滑動延長） |
+| `TRUSTED_PROXIES` | 空 | 可信反向代理 IP／CIDR（逗號分隔，如 `127.0.0.1,172.16.0.0/12`）。僅來自這些位址的連線才採信 `X-Forwarded-For`；**放在反向代理後面時必須設定**，否則所有人的 IP 都會是代理的 IP，且公開端點的 rate limit 會共用同一桶 |
+| `CLIENT_INFO_RETENTION_DAYS` | `90` | 團關閉超過此天數後，該團送出紀錄的 IP／UA／裝置資訊清為 NULL |
+| `MAINTENANCE_INTERVAL_HOURS` | `24` | 背景清理工作週期（啟動後 30 秒先跑一次）：刪除過期 session／oauth_states、清除過期 ClientInfo、把卡住超過 10 分鐘的 AI 匯入標為 `failed`（`interrupted`） |
+| `PUBLIC_RATE_LIMIT_BURST` / `PUBLIC_RATE_LIMIT_PER_SEC` | `30` / `2` | 公開端點每個 client IP 的 token bucket |
+| `DISPLAY_UTC_OFFSET` | `+08:00` | 連結預覽（OG）中截止時間顯示的時區 |
+| `RUST_LOG` | `info,tower_http=info` | 日誌等級 |
+| `LITESTREAM_BUCKET` | 空 | 設定後啟用 Litestream（§7） |
+| `LITESTREAM_PATH` | `bento` | bucket 內前綴 |
+| `LITESTREAM_ENDPOINT` | 空 | S3 相容服務 endpoint（AWS S3 留空） |
+| `LITESTREAM_REGION` | 空 | region（R2 用 `auto`） |
+| `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | 空 | bucket 憑證 |
+
+清除 ClientInfo 的依據是 `group_orders.closed_at`（關閉時寫入；封存只能從已關閉狀態進行且保留 `closed_at`；重新開啟會清空 `closed_at`）。因此「開放中」與「重新開啟」的團不會被清除，已關閉／已封存且關閉時間早於保存期限的團會被清除。訂單內容、備註與品項明細不受影響。
+
+## 5. 執行
+
+```sh
+docker run -d --name bento --restart unless-stopped \
+  -p 127.0.0.1:3000:3000 \
+  -v bento-data:/data \
+  -e APP_BASE_URL=https://bento.example.com \
+  -e GOOGLE_CLIENT_ID=... -e GOOGLE_CLIENT_SECRET=... \
+  -e ANTHROPIC_API_KEY=... \
+  -e TRUSTED_PROXIES=172.17.0.1 \
+  order-a-bento:latest
+```
+
+或使用 `--env-file .env`（參考 `.env.example`；不要提交 `.env`）。Volume 的擁有者須為 uid 10001（具名 volume 會自動處理；bind mount 請先 `chown 10001 <dir>`）。
+
+`TRUSTED_PROXIES` 填反向代理「連到容器時所用的來源位址」。代理在同一台主機、容器走預設 bridge 時是 bridge 閘道（常見 `172.17.0.1`，以 `docker network inspect bridge` 確認）；用 `--network host` 或同一 compose 網路時請填對應位址／網段。
+
+## 6. 反向代理（Caddy 範例）
+
+```caddyfile
+bento.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000 {
+        # Caddy 預設即會設定 X-Forwarded-For/-Proto/-Host；明確寫出以便確認
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+```
+
+Caddy 自動申請並續期 HTTPS 憑證。應用程式只信任 `TRUSTED_PROXIES` 內的連線所帶的 `X-Forwarded-For`，其他來源的該標頭會被忽略。
+
+## 7. 備份：Litestream
+
+設定 `LITESTREAM_BUCKET`（及 endpoint／憑證）即啟用，映像內為 Litestream v0.3.13（建置時驗證 sha256）。啟動流程（`deploy/entrypoint.sh`）：
+
+1. 若 `/data/bento.db` 不存在且 replica 有資料 → `litestream restore` 還原；
+2. `litestream replicate -exec server`：Litestream 啟動並監督伺服器，持續把 WAL 複寫到 bucket（每 10 秒同步，快照保留 7 天；設定見 `deploy/litestream.yml`）。
+
+未設定 `LITESTREAM_BUCKET` 時直接執行伺服器，不經過 Litestream。
+
+```sh
+docker run -d --name bento -v bento-data:/data \
+  -e LITESTREAM_BUCKET=my-bucket -e LITESTREAM_PATH=bento \
+  -e LITESTREAM_ENDPOINT=https://<account>.r2.cloudflarestorage.com -e LITESTREAM_REGION=auto \
+  -e LITESTREAM_ACCESS_KEY_ID=... -e LITESTREAM_SECRET_ACCESS_KEY=... \
+  ... order-a-bento:latest
+```
+
+**災難還原**：在全新主機（空 volume）用相同的 `LITESTREAM_*` 啟動容器即自動還原。手動還原：
+
+```sh
+docker run --rm -v bento-data:/data --env-file litestream.env --entrypoint litestream \
+  order-a-bento:latest restore -config /etc/litestream.yml -if-replica-exists /data/bento.db
+```
+
+注意事項：
+
+- SQLite 必須為 WAL 模式（本應用預設即是），**只能有一個應用程式實例，且不可有其他程式寫入該 DB 檔**；兩個實例共用同一個 replica 會互相破壞。
+- 不要直接複製 `bento.db` 單檔當備份（會漏掉 `-wal`）；要手動備份請用 `sqlite3 bento.db ".backup out.db"`。
+- Litestream 為非同步複寫，崩潰時最多損失數秒資料。
+- 定期（例如每季）實際演練一次還原。
+
+## 8. 健康檢查
+
+`GET /healthz`（會查詢資料庫）成功回 200 與 `{"status":"ok"...}`。映像已內建 `HEALTHCHECK`（每 30 秒）；`docker ps` 顯示 `healthy`。外部監控請對公開網址呼叫 `/healthz`。
+
+## 9. 升級
+
+```sh
+docker build -t order-a-bento:latest .   # 或拉取新映像
+docker stop bento && docker rm bento
+docker run ...                           # 同樣的 volume 與參數
+```
+
+資料庫 migration 於啟動時自動執行（向前相容，無降版 migration）；升級前建議先確認最近一次 Litestream 複寫正常，或手動 `.backup`。停機時間約為容器重啟時間。
+
+## 10. 安全檢查清單
+
+- [ ] `APP_ENV=production`（映像預設值）。
+- [ ] `DEV_LOGIN` 未開、`AI_DEMO` 未開（production 下開啟會拒絕啟動）。
+- [ ] 對外只經 HTTPS；`APP_BASE_URL` 以 `https://` 開頭，session cookie 才會帶 `Secure`。容器埠只綁 `127.0.0.1`，由反向代理對外。
+- [ ] `TRUSTED_PROXIES` 只包含自己的反向代理；不要填 `0.0.0.0/0`。
+- [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
+- [ ] `ANTHROPIC_API_KEY`、Litestream 憑證以 env／secret 管理；Litestream bucket 設為私有並使用最小權限金鑰。
+- [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。
+- [ ] 以單一實例執行，`/data` 為持久 volume。
