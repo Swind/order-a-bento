@@ -1,4 +1,5 @@
-//! Local mock of Anthropic's `POST /v1/messages` (unary), scripted per call.
+//! Local mocks of Anthropic's `POST /v1/messages` and OpenAI's
+//! `POST /v1/chat/completions` (unary), scripted per call.
 //! Records every request body and its headers.
 #![allow(dead_code)]
 
@@ -17,6 +18,8 @@ pub enum Reply {
     Message(Value),
     /// Error status with an Anthropic-style error body.
     Error(u16, &'static str),
+    /// Error status with exactly this JSON body.
+    Raw(u16, Value),
     /// Sleep this long, then answer 200 with an empty message (a slow gateway).
     Slow(std::time::Duration),
 }
@@ -42,6 +45,22 @@ pub async fn start(script: Vec<Reply>) -> (String, Arc<Mock>) {
     (url, mock)
 }
 
+/// Like [`start`], but serving OpenAI Chat Completions at `/v1/chat/completions`.
+pub async fn start_openai(script: Vec<Reply>) -> (String, Arc<Mock>) {
+    let mock = Arc::new(Mock {
+        script,
+        bodies: Mutex::new(vec![]),
+        headers: Mutex::new(vec![]),
+    });
+    let app = Router::new()
+        .route("/v1/chat/completions", post(chat_completions))
+        .with_state(mock.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (url, mock)
+}
+
 impl Mock {
     pub fn calls(&self) -> usize {
         self.bodies.lock().unwrap().len()
@@ -53,6 +72,18 @@ async fn messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    reply(mock, headers, body, false).await
+}
+
+async fn chat_completions(
+    State(mock): State<Arc<Mock>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    reply(mock, headers, body, true).await
+}
+
+async fn reply(mock: Arc<Mock>, headers: HeaderMap, body: Value, openai: bool) -> Response {
     let n = {
         let mut b = mock.bodies.lock().unwrap();
         b.push(body);
@@ -67,8 +98,21 @@ async fn messages(
         tokio::time::sleep(*d).await;
     }
     match mock.script.get(n) {
+        Some(Reply::Slow(_)) if openai => Json(chat_reply(
+            json!({ "role": "assistant", "content": "" }),
+            "stop",
+        ))
+        .into_response(),
         Some(Reply::Slow(_)) => Json(msg(json!([]), "end_turn", json!({}))).into_response(),
         Some(Reply::Message(m)) => Json(m.clone()).into_response(),
+        Some(Reply::Raw(status, body)) => {
+            (StatusCode::from_u16(*status).unwrap(), Json(body.clone())).into_response()
+        }
+        Some(Reply::Error(status, kind)) if openai => (
+            StatusCode::from_u16(*status).unwrap(),
+            Json(json!({ "error": { "type": kind, "message": "mock error" } })),
+        )
+            .into_response(),
         Some(Reply::Error(status, kind)) => (
             StatusCode::from_u16(*status).unwrap(),
             Json(json!({ "type": "error", "error": { "type": kind, "message": "mock error" } })),
@@ -106,4 +150,33 @@ pub fn end_turn(text: &str) -> Value {
         "end_turn",
         json!({}),
     )
+}
+
+/// An OpenAI chat completion with `message` and `finish_reason`.
+pub fn chat_reply(message: Value, finish_reason: &str) -> Value {
+    json!({
+        "id": "chatcmpl-mock", "object": "chat.completion", "created": 1, "model": "deepseek-v4.1-flash",
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": {
+            "prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050,
+            "completion_tokens_details": { "reasoning_tokens": 20 }
+        }
+    })
+}
+
+pub fn chat_tool_call(id: &str, name: &str, args: Value) -> Value {
+    json!({ "id": id, "type": "function", "function": { "name": name, "arguments": args.to_string() } })
+}
+
+/// An assistant turn that calls tools, with optional DeepSeek-style thinking.
+pub fn chat_tool_turn(reasoning: Option<&str>, calls: Vec<Value>) -> Value {
+    let mut m = json!({ "role": "assistant", "content": null, "tool_calls": calls });
+    if let Some(r) = reasoning {
+        m["reasoning_content"] = json!(r);
+    }
+    chat_reply(m, "tool_calls")
+}
+
+pub fn chat_end_turn(text: &str) -> Value {
+    chat_reply(json!({ "role": "assistant", "content": text }), "stop")
 }

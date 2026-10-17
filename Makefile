@@ -43,14 +43,29 @@ docker-build: ## Build the Docker image (order-a-bento:latest)
 	docker build -t order-a-bento:latest .
 
 # Manual only (calls a real model, costs tokens): never part of `make check` or CI.
-# Uses ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / AI_MODEL / AI_PROVIDER as the server does. When
-# ANTHROPIC_API_KEY is unset, STRATA_API_KEY / STRATA_ANTHROPIC_BASE_URL / STRATA_MODEL (from the
-# environment or .env) are mapped onto them with AI_PROVIDER=anthropic-compatible. Secrets are never printed.
-# Extra flags: make ai-eval ARGS="--filter 03 --repeat 3"
+# Uses AI_API_KEY / AI_BASE_URL / AI_MODEL / AI_PROVIDER as the server does (legacy ANTHROPIC_API_KEY /
+# ANTHROPIC_BASE_URL still work for the Anthropic providers). Two shortcuts map other sources onto them:
+#   - AI_PROVIDER_FILE=provider.json  ({"base_url": ..., "api_key": ...}, optional "model", "provider",
+#     "session_header") -> AI_BASE_URL / AI_API_KEY, AI_PROVIDER=openai-compatible by default. Set AI_MODEL
+#     (or "model" in the file): make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=deepseek-v4.1-flash
+#   - when no key is set, STRATA_API_KEY / STRATA_ANTHROPIC_BASE_URL / STRATA_MODEL (environment or .env)
+#     with AI_PROVIDER=anthropic-compatible.
+# Values given on the make command line win over .env. Secrets are never printed.
+# Extra flags: make ai-eval ARGS="--filter 03 --repeat 3"; report path: AI_REPORT=/tmp/x.json
+AI_REPORT ?= ../eval/report.json
 ai-eval: ## Run the AI import eval (eval/cases) against the configured model; report in eval/report.json
-	@set -a; [ -f .env ] && . ./.env; set +a; \
-	if [ -z "$$ANTHROPIC_API_KEY" ] && [ -n "$$STRATA_API_KEY" ]; then \
+	@cli_model="$$AI_MODEL"; cli_provider="$$AI_PROVIDER"; \
+	set -a; [ -f .env ] && . ./.env; set +a; \
+	[ -n "$$cli_model" ] && AI_MODEL="$$cli_model"; [ -n "$$cli_provider" ] && AI_PROVIDER="$$cli_provider"; \
+	if [ -n "$(AI_PROVIDER_FILE)" ]; then \
+		test -r "$(AI_PROVIDER_FILE)" || { echo "ai-eval: cannot read $(AI_PROVIDER_FILE)" >&2; exit 1; }; \
+		eval "$$(jq -r '@sh "export AI_BASE_URL=\(.base_url) AI_API_KEY=\(.api_key) file_model=\(.model // "") file_provider=\(.provider // "") file_session=\(.session_header // "")"' "$(AI_PROVIDER_FILE)")" || exit 1; \
+		export AI_PROVIDER="$${AI_PROVIDER:-$${file_provider:-openai-compatible}}" AI_MODEL="$${AI_MODEL:-$$file_model}"; \
+		[ -n "$$file_session" ] && export AI_SESSION_HEADER="$${AI_SESSION_HEADER:-$$file_session}"; \
+		unset file_model file_provider file_session; \
+		echo "ai-eval: using $(AI_PROVIDER_FILE) (AI_PROVIDER=$$AI_PROVIDER, AI_MODEL=$$AI_MODEL)"; \
+	elif [ -z "$$AI_API_KEY" ] && [ -z "$$ANTHROPIC_API_KEY" ] && [ -n "$$STRATA_API_KEY" ]; then \
 		export ANTHROPIC_API_KEY="$$STRATA_API_KEY" ANTHROPIC_BASE_URL="$$STRATA_ANTHROPIC_BASE_URL" AI_MODEL="$$STRATA_MODEL" AI_PROVIDER="$${AI_PROVIDER:-anthropic-compatible}"; \
 		echo "ai-eval: using STRATA_* settings (AI_PROVIDER=$$AI_PROVIDER)"; \
 	fi; \
-	cd backend && cargo run -q -p server --bin ai_eval -- --cases ../eval/cases --out ../eval/report.json $(ARGS)
+	cd backend && cargo run -q -p server --bin ai_eval -- --cases ../eval/cases --out $(AI_REPORT) $(ARGS)

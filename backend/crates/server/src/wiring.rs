@@ -11,7 +11,7 @@ use application::{
     AccountService, AuthConfig, AuthService, DirectoryService, Maintenance, OrderingService,
 };
 use domain::shared::SystemClock;
-use infrastructure::ai::{DemoImportAgent, RigAgentConfig, RigImportAgent};
+use infrastructure::ai::{DemoImportAgent, ExtraHeader, RigAgentConfig, RigImportAgent};
 use infrastructure::ai_import_repo::SqliteImportRunRepo;
 use infrastructure::directory_repo::{SqliteRosterRepo, SqliteVendorRepo};
 use infrastructure::google::GoogleOidcProvider;
@@ -48,11 +48,20 @@ pub fn google_provider(config: &Config) -> anyhow::Result<Option<Arc<dyn Identit
     }
 }
 
-/// The rig agent settings for `config` (`AI_*`, `ANTHROPIC_*`). `None` without an API key.
+/// The rig agent settings for `config` (`AI_*`, legacy `ANTHROPIC_*`). `None` without an API key.
 pub fn rig_agent_config(config: &Config) -> Option<RigAgentConfig> {
-    let key = config.anthropic_api_key.clone()?;
+    let key = config.ai_api_key.as_ref()?.expose().to_owned();
     let mut cfg = RigAgentConfig::new(key, config.ai_model.clone());
-    cfg.base_url = config.anthropic_base_url.clone();
+    cfg.base_url = config.ai_base_url.clone();
+    cfg.extra_headers = config
+        .ai_extra_headers
+        .iter()
+        .map(|(name, value)| ExtraHeader {
+            name: name.clone(),
+            value: value.expose().to_owned(),
+        })
+        .collect();
+    cfg.session_header = config.ai_session_header.clone();
     cfg.max_turns = config.ai_max_turns as usize;
     cfg.provider = config.ai_provider;
     cfg.fallbacks = config.ai_fallbacks;
@@ -71,8 +80,8 @@ pub fn ai_import_service(
     let (agent, demo): (Arc<dyn ImportAgent>, bool) = match config.ai_mode() {
         AiMode::Disabled => return Ok(None),
         AiMode::Demo => (Arc::new(DemoImportAgent::default()), true),
-        AiMode::Anthropic => {
-            let cfg = rig_agent_config(config).context("ANTHROPIC_API_KEY")?;
+        AiMode::Live => {
+            let cfg = rig_agent_config(config).context("AI_API_KEY")?;
             let agent = RigImportAgent::new(cfg).map_err(|e| anyhow::anyhow!(e))?;
             (Arc::new(agent), false)
         }

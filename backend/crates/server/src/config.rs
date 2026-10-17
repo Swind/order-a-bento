@@ -12,7 +12,8 @@ pub enum AppEnv {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiMode {
-    Anthropic,
+    /// A real model behind `AI_PROVIDER`.
+    Live,
     Demo,
     Disabled,
 }
@@ -59,13 +60,21 @@ pub struct Config {
     /// `ADMIN_EMAIL` / `ADMIN_PASSWORD` (both or neither): local admin created at startup if missing.
     pub admin_email: Option<String>,
     pub admin_password: Option<Secret>,
-    pub anthropic_api_key: Option<String>,
-    /// `ANTHROPIC_BASE_URL`: API origin override (mock servers, gateways).
-    pub anthropic_base_url: Option<String>,
+    /// Resolved API key: `AI_API_KEY`, else (Anthropic providers only) `ANTHROPIC_API_KEY`.
+    /// AI is enabled when this is set.
+    pub ai_api_key: Option<Secret>,
+    /// Resolved API origin: `AI_BASE_URL`, else (Anthropic providers only) `ANTHROPIC_BASE_URL`.
+    /// Required for `openai-compatible`; optional (mock servers, gateways) for Anthropic.
+    pub ai_base_url: Option<String>,
+    /// `AI_EXTRA_HEADERS` (`name=value,name2=value2`): sent with every model request.
+    /// Values are secrets: never shown in `Debug`.
+    pub ai_extra_headers: Vec<(String, Secret)>,
+    /// `AI_SESSION_HEADER`: name of a header that carries the import run's id (one id per run).
+    pub ai_session_header: Option<String>,
     pub ai_model: String,
     pub ai_daily_quota_per_user: u32,
     pub ai_max_turns: u32,
-    /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible`).
+    /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible` | `openai-compatible`).
     pub ai_provider: AiProvider,
     /// `AI_FALLBACKS` (`default` | `off`): server-side model fallback on refusals.
     /// Anthropic only; defaults to on there and off for other providers.
@@ -204,14 +213,83 @@ impl Config {
         let ai_provider = match get("AI_PROVIDER").map(str::to_ascii_lowercase).as_deref() {
             None | Some("anthropic") => AiProvider::Anthropic,
             Some("anthropic-compatible") => AiProvider::AnthropicCompatible,
+            Some("openai-compatible") => AiProvider::OpenAiCompatible,
             Some(other) => {
                 return Err(ConfigError::Invalid {
                     key: "AI_PROVIDER",
                     value: other.to_owned(),
-                    reason: "expected anthropic or anthropic-compatible",
+                    reason: "expected anthropic, anthropic-compatible or openai-compatible",
                 });
             }
         };
+        // Connection: AI_* applies to every provider and wins; ANTHROPIC_* is the
+        // older spelling, still read for the two Anthropic providers only.
+        let anthropic_family = ai_provider != AiProvider::OpenAiCompatible;
+        let from_anthropic = |k: &str| if anthropic_family { opt(k) } else { None };
+        let ai_api_key = opt("AI_API_KEY")
+            .or_else(|| from_anthropic("ANTHROPIC_API_KEY"))
+            .map(Secret);
+        let ai_base_url = opt("AI_BASE_URL").or_else(|| from_anthropic("ANTHROPIC_BASE_URL"));
+        if !anthropic_family {
+            if ai_api_key.is_none() && opt("ANTHROPIC_API_KEY").is_some() {
+                return Err(ConfigError::Invalid {
+                    key: "AI_API_KEY",
+                    value: String::new(),
+                    reason: "required with AI_PROVIDER=openai-compatible (ANTHROPIC_API_KEY is only read for the Anthropic providers)",
+                });
+            }
+            if ai_api_key.is_some() && get("AI_MODEL").is_none() {
+                return Err(ConfigError::Invalid {
+                    key: "AI_MODEL",
+                    value: String::new(),
+                    reason: "required with AI_PROVIDER=openai-compatible (the default is a Claude model)",
+                });
+            }
+            if ai_api_key.is_some() && ai_base_url.is_none() {
+                return Err(ConfigError::Invalid {
+                    key: "AI_BASE_URL",
+                    value: String::new(),
+                    reason: "required with AI_PROVIDER=openai-compatible",
+                });
+            }
+        }
+        let header_name = |key: &'static str, name: &str| -> Result<(), ConfigError> {
+            let ok = !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            ok.then_some(()).ok_or_else(|| ConfigError::Invalid {
+                key,
+                value: name.to_owned(),
+                reason: "expected a header name (letters, digits, - and _)",
+            })
+        };
+        let ai_session_header = opt("AI_SESSION_HEADER");
+        if let Some(name) = &ai_session_header {
+            header_name("AI_SESSION_HEADER", name)?;
+        }
+        // Values are never echoed in errors: they may be credentials.
+        let mut ai_extra_headers = Vec::new();
+        for entry in get("AI_EXTRA_HEADERS").unwrap_or("").split(',') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let bad = |reason: &'static str| ConfigError::Invalid {
+                key: "AI_EXTRA_HEADERS",
+                value: "<redacted>".into(),
+                reason,
+            };
+            let (name, value) = entry
+                .split_once('=')
+                .ok_or_else(|| bad("expected name=value,name2=value2"))?;
+            let (name, value) = (name.trim(), value.trim());
+            header_name("AI_EXTRA_HEADERS", name).map_err(|_| bad("invalid header name"))?;
+            if value.is_empty() || !value.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+                return Err(bad("header values must be non-empty printable ASCII"));
+            }
+            ai_extra_headers.push((name.to_owned(), Secret(value.to_owned())));
+        }
         let claude = ai_provider == AiProvider::Anthropic;
         let ai_fallbacks = match get("AI_FALLBACKS").map(str::to_ascii_lowercase).as_deref() {
             None => claude,
@@ -320,8 +398,10 @@ impl Config {
             password_login_enabled,
             admin_email,
             admin_password,
-            anthropic_api_key: opt("ANTHROPIC_API_KEY"),
-            anthropic_base_url: opt("ANTHROPIC_BASE_URL"),
+            ai_api_key,
+            ai_base_url,
+            ai_extra_headers,
+            ai_session_header,
             ai_model: string("AI_MODEL", "claude-opus-5-5"),
             ai_daily_quota_per_user: num(
                 get("AI_DAILY_QUOTA_PER_USER"),
@@ -387,8 +467,8 @@ impl Config {
     /// Which AI agent to run: the real one with an API key, else the scripted
     /// demo agent when `AI_DEMO=true` (never in production), else none.
     pub fn ai_mode(&self) -> AiMode {
-        if self.anthropic_api_key.is_some() {
-            AiMode::Anthropic
+        if self.ai_api_key.is_some() {
+            AiMode::Live
         } else if self.ai_demo && !self.is_production() {
             AiMode::Demo
         } else {
@@ -429,7 +509,7 @@ mod tests {
         assert_eq!(c.port, 3000);
         assert_eq!(c.app_env, AppEnv::Development);
         assert!(!c.dev_login);
-        assert!(c.google_client_id.is_none() && c.anthropic_api_key.is_none());
+        assert!(c.google_client_id.is_none() && c.ai_api_key.is_none());
         assert!(c.trusted_proxies.is_empty());
         assert_eq!(c.public_rate_limit_burst, 30);
         assert_eq!(
@@ -499,14 +579,14 @@ mod tests {
         assert_eq!(c.ai_model, "claude-opus-5-5");
         assert_eq!((c.ai_max_turns, c.ai_daily_quota_per_user), (8, 30));
         assert!(c.ai_fallbacks && !c.ai_demo);
-        assert!(c.anthropic_base_url.is_none());
+        assert!(c.ai_base_url.is_none());
         assert_eq!(c.ai_mode(), AiMode::Disabled);
 
         let c = Config::from_map(&m(&[("AI_DEMO", "true")])).unwrap();
         assert_eq!(c.ai_mode(), AiMode::Demo);
         // a key wins over demo mode
         let c = Config::from_map(&m(&[("AI_DEMO", "true"), ("ANTHROPIC_API_KEY", "k")])).unwrap();
-        assert_eq!(c.ai_mode(), AiMode::Anthropic);
+        assert_eq!(c.ai_mode(), AiMode::Live);
         let c = Config::from_map(&m(&[
             ("APP_ENV", "production"),
             ("ANTHROPIC_API_KEY", "k"),
@@ -514,9 +594,9 @@ mod tests {
             ("ANTHROPIC_BASE_URL", "http://127.0.0.1:9"),
         ]))
         .unwrap();
-        assert_eq!(c.ai_mode(), AiMode::Anthropic);
+        assert_eq!(c.ai_mode(), AiMode::Live);
         assert!(!c.ai_fallbacks);
-        assert_eq!(c.anthropic_base_url.as_deref(), Some("http://127.0.0.1:9"));
+        assert_eq!(c.ai_base_url.as_deref(), Some("http://127.0.0.1:9"));
         assert!(Config::from_map(&m(&[("AI_FALLBACKS", "maybe")])).is_err());
         assert!(Config::from_map(&m(&[("AI_DEMO", "perhaps")])).is_err());
     }
@@ -712,6 +792,123 @@ mod tests {
         ] {
             assert!(Config::from_map(&m(&[(k, v)])).is_err(), "{k}={v}");
         }
+    }
+
+    #[test]
+    fn ai_connection_precedence_and_openai_compatible() {
+        let m = |kv: &[(&str, &str)]| -> HashMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // AI_* wins over the legacy ANTHROPIC_* spelling on the Anthropic providers
+        let c = Config::from_map(&m(&[
+            ("AI_API_KEY", "new"),
+            ("ANTHROPIC_API_KEY", "old"),
+            ("AI_BASE_URL", "http://new"),
+            ("ANTHROPIC_BASE_URL", "http://old"),
+        ]))
+        .unwrap();
+        assert_eq!(c.ai_api_key.as_ref().unwrap().expose(), "new");
+        assert_eq!(c.ai_base_url.as_deref(), Some("http://new"));
+        // ... and AI_* alone enables AI
+        let c = Config::from_map(&m(&[("AI_API_KEY", "k")])).unwrap();
+        assert_eq!(c.ai_mode(), AiMode::Live);
+
+        // openai-compatible: key, base URL and model are all required
+        let ok = [
+            ("AI_PROVIDER", "openai-compatible"),
+            ("AI_API_KEY", "k"),
+            ("AI_BASE_URL", "https://gw.example/v1"),
+            ("AI_MODEL", "deepseek-v4.1-flash"),
+        ];
+        let c = Config::from_map(&m(&ok)).unwrap();
+        assert_eq!(c.ai_provider, AiProvider::OpenAiCompatible);
+        assert_eq!(c.ai_mode(), AiMode::Live);
+        assert!(!c.ai_fallbacks && !c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Off);
+        assert_eq!(
+            (c.ai_request_timeout_secs, c.ai_run_timeout_secs),
+            (180, 300)
+        );
+        assert!(Config::from_map(&m(&ok[..2])).is_err()); // no base URL / model
+        let no_url = [ok[0], ok[1], ok[3]];
+        assert!(matches!(
+            Config::from_map(&m(&no_url)).unwrap_err(),
+            ConfigError::Invalid {
+                key: "AI_BASE_URL",
+                ..
+            }
+        ));
+        let no_model = [ok[0], ok[1], ok[2]];
+        assert!(matches!(
+            Config::from_map(&m(&no_model)).unwrap_err(),
+            ConfigError::Invalid {
+                key: "AI_MODEL",
+                ..
+            }
+        ));
+        // ANTHROPIC_* is never a fallback here
+        let c = Config::from_map(&m(&[
+            ("AI_PROVIDER", "openai-compatible"),
+            ("AI_BASE_URL", "http://x"),
+        ]))
+        .unwrap();
+        assert_eq!(c.ai_mode(), AiMode::Disabled);
+        let err = Config::from_map(&m(&[
+            ("AI_PROVIDER", "openai-compatible"),
+            ("ANTHROPIC_API_KEY", "old"),
+            ("AI_BASE_URL", "http://x"),
+            ("AI_MODEL", "m"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                key: "AI_API_KEY",
+                ..
+            }
+        ));
+        // fallbacks are Anthropic-only
+        let mut bad = ok.to_vec();
+        bad.push(("AI_FALLBACKS", "default"));
+        assert!(Config::from_map(&m(&bad)).is_err());
+        // opt-ins
+        let mut on = ok.to_vec();
+        on.extend([("AI_STRICT_TOOLS", "true"), ("AI_REASONING", "low")]);
+        let c = Config::from_map(&m(&on)).unwrap();
+        assert!(c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Low);
+    }
+
+    #[test]
+    fn ai_extra_and_session_headers() {
+        let m = |kv: &[(&str, &str)]| -> HashMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert!(c.ai_extra_headers.is_empty() && c.ai_session_header.is_none());
+        let c = Config::from_map(&m(&[
+            ("AI_EXTRA_HEADERS", "x-a=1, X-Token = s3cret=,"),
+            ("AI_SESSION_HEADER", "x-opencode-session"),
+        ]))
+        .unwrap();
+        let pairs: Vec<_> = c
+            .ai_extra_headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.expose()))
+            .collect();
+        assert_eq!(pairs, [("x-a", "1"), ("X-Token", "s3cret=")]);
+        assert_eq!(c.ai_session_header.as_deref(), Some("x-opencode-session"));
+        // values never reach Debug output
+        assert!(!format!("{c:?}").contains("s3cret"));
+        for bad in ["novalue", "=v", "bad name=v", "a=", "a=é"] {
+            let err = Config::from_map(&m(&[("AI_EXTRA_HEADERS", bad)])).unwrap_err();
+            assert!(!err.to_string().contains(bad), "echoed {bad}");
+        }
+        assert!(Config::from_map(&m(&[("AI_SESSION_HEADER", "bad name")])).is_err());
     }
 
     #[test]

@@ -1055,37 +1055,51 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 - 前端上傳前壓縮：長邊縮至 ≤ 1568px、JPEG quality 0.85。
 - 後端限制：≤ 5 MB、MIME 僅 `image/jpeg|png|webp`（以 magic bytes 驗證，不信任 Content-Type）。
 - 圖片**不落地保存**（只在記憶體中轉送）；`ai_import_runs` 只存提案、摘要、tool 呼叫紀錄與 token 用量。
-- 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、`anthropic-compatible` 預設 300 秒）；失敗回 `502`（`code: "ai_unavailable"`），前端顯示「辨識失敗，請重試或手動輸入」。
+- 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、compatible provider 預設 300 秒）；失敗回 `502`（`code: "ai_unavailable"`），前端顯示「辨識失敗，請重試或手動輸入」。
 - Claude 可能回傳 `stop_reason: "refusal"`（照片觸發安全分類器）。由 9.3 的 hook 判定為 `AiError::Refused`，回 `422`（`code: "ai_refused"`），前端提示改用手動輸入。
 - 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 計數。
-- 金鑰 `ANTHROPIC_API_KEY` 只存在後端環境變數，絕不送到前端。
+- 金鑰 `AI_API_KEY`（舊名 `ANTHROPIC_API_KEY`）只存在後端環境變數，絕不送到前端。
 - 測試：`FakeImportAgent` 實作同一個 port，直接呼叫 tools 的業務邏輯產生固定提案，CI 不呼叫真實 API。
 
-### 9.7 Provider 設定（Claude 與 Anthropic 相容 gateway）
-`RigImportAgent` 預設針對 Claude 調校：`strict: true` tool schema、`output_config.effort = low`（rig 會一併加上 adaptive thinking 與其 beta header）、server-side fallback（beta header + `fallbacks: "default"`）。連到「Anthropic 相容 gateway」（後面接 Qwen 等其他模型）時，這些參數可能被拒絕或被忽略，因此以環境變數切換，連線仍共用 `ANTHROPIC_API_KEY`／`ANTHROPIC_BASE_URL`／`AI_MODEL`：
+### 9.7 Provider 設定（Claude、Anthropic 相容 gateway、OpenAI 相容伺服器）
+`RigImportAgent` 預設針對 Claude 調校：`strict: true` tool schema、`output_config.effort = low`（rig 會一併加上 adaptive thinking 與其 beta header）、server-side fallback（beta header + `fallbacks: "default"`）。連到「Anthropic 相容 gateway」（後面接 Qwen 等其他模型）或「OpenAI 相容伺服器」（Chat Completions，如 DeepSeek）時，這些參數可能被拒絕或被忽略，因此以環境變數切換。三種 provider 共用同一組連線設定（見下「連線設定」）：
 
-| 變數 | `anthropic`（預設） | `anthropic-compatible` |
-|---|---|---|
-| `AI_PROVIDER` | Anthropic 官方 API | gateway；rig dialect 改為 gateway quirks，且接受 `signature` 為空的 thinking 區塊並原樣送回 |
-| `AI_FALLBACKS` | `default` | 預設 `off`；設為 `default` 於啟動時報錯 |
-| `AI_STRICT_TOOLS` | `true` | 預設 `false`（可個別開啟） |
-| `AI_REASONING` | `low` | 預設 `off`（可個別開啟為 `low`） |
-| `AI_REQUEST_TIMEOUT_SECS`（單次 model 呼叫） | `60` | 預設 `180` |
-| `AI_RUN_TIMEOUT_SECS`（整個 run，含重試） | `90` | 預設 `300` |
+| 變數 | `anthropic`（預設） | `anthropic-compatible` | `openai-compatible` |
+|---|---|---|---|
+| `AI_PROVIDER` | Anthropic 官方 API（`/v1/messages`） | gateway；rig dialect 改為 gateway quirks，且接受 `signature` 為空的 thinking 區塊並原樣送回 | rig 的 OpenAI Chat Completions wire（`/v1/chat/completions`，OpenAI dialect + `reasoning_content` 回送） |
+| `AI_FALLBACKS` | `default` | 預設 `off`；設為 `default` 於啟動時報錯 | 同左 |
+| `AI_STRICT_TOOLS` | `true` | 預設 `false`（可個別開啟） | 同左（`function.strict: true`） |
+| `AI_REASONING` | `low`（`output_config.effort`） | 預設 `off`（可個別開啟為 `low`） | 預設 `off`＝不送；`low`＝`reasoning_effort: "low"` |
+| `AI_REQUEST_TIMEOUT_SECS`（單次 model 呼叫） | `60` | 預設 `180` | 預設 `180` |
+| `AI_RUN_TIMEOUT_SECS`（整個 run，含重試） | `90` | 預設 `300` | 預設 `300` |
+
+**連線設定**：`AI_API_KEY`、`AI_BASE_URL` 對所有 provider 通用；舊的 `ANTHROPIC_API_KEY`／`ANTHROPIC_BASE_URL` 仍可用，但只作為 `anthropic`／`anthropic-compatible` 的後備（`AI_*` 優先），`openai-compatible` 不讀它們。啟動時驗證：`openai-compatible` 有金鑰時必須同時有 `AI_BASE_URL` 與 `AI_MODEL`（預設模型是 Claude，沒有意義），只有 `ANTHROPIC_API_KEY` 而沒有 `AI_API_KEY` 時報錯（否則會靜默停用 AI）。「有金鑰＝啟用 AI」的判斷不變。`openai-compatible` 的 `AI_BASE_URL` 是伺服器 origin，結尾有無 `/v1` 皆可（程式去掉結尾 `/v1` 後固定接 `/v1/chat/completions`）。
+
+**額外 header**：`AI_EXTRA_HEADERS=name=value,name2=value2` 加在每個 model 請求上；`AI_SESSION_HEADER=<name>` 則在每次匯入 run 開始時以該 run 的 id（`ImportRunId`）當值，同一 run 的所有 model 呼叫共用。session 取「每次匯入 run」而非每個請求或每位使用者：gateway 用 session 做路由與 prompt cache，一個 run 的多輪呼叫共享同一份前綴，需要黏在同一個後端；跨 run 或跨使用者共用則會把不相干的流量綁在一起，而每個請求一個 id 又失去快取效果。service 層重試同一個 run 時沿用同一個 id。實作上有額外 header 時，每個 run 以 `default_headers` 建一個專用的 reqwest client（值標為 sensitive）；沒有時共用全域連線池。header 值在 `Config`／`RigAgentConfig` 的 `Debug` 中一律遮蔽，設定錯誤的訊息也不回顯值。
 
 逾時預設值的理由：量化 Qwen 等模型在 Strata gateway 上，一次「22 個品項 + thinking、約 3k output tokens」的呼叫實測 60–100 秒，三輪的整個 run 約 80–150 秒，60／90 秒必然逾時；180 秒約為最慢單次呼叫的 2 倍餘裕，300 秒可容納 3–4 次這樣的呼叫。設定時須 `AI_REQUEST_TIMEOUT_SECS` > 0 且 ≤ `AI_RUN_TIMEOUT_SECS`，否則啟動時報錯。`make ai-eval` 直接呼叫 agent（不經 application 層的重試），其每案例外層保護 `--timeout` 預設即為 `AI_RUN_TIMEOUT_SECS`。
 
 **長時間 run 與前端**：前端以單一同步請求 `POST /ai/import-runs` 等待結果（不輪詢），對話框顯示「AI 辨識中」並提供「取消等待」（abort 請求）。請求因此可能開著數分鐘，反向代理的讀取逾時必須大於 `AI_RUN_TIMEOUT_SECS`（Caddy `reverse_proxy` 預設無讀取逾時；nginx 的 `proxy_read_timeout` 預設 60 秒、Cloudflare 代理約 100 秒就會回 524，需調整或改用較短的 `AI_RUN_TIMEOUT_SECS`）。
 
-不論 provider，refusal 判定、逾時／重試、`AgentHook` 的 token 用量統計都相同；單元測試以 mock Anthropic server 驗證兩種 provider 的 request 形狀差異（`infrastructure/tests/rig_agent.rs`）與設定解析（`server/src/config.rs`）。
+不論 provider，refusal 判定、逾時／重試、`AgentHook` 的 token 用量統計都相同；單元測試以 mock Anthropic／OpenAI server 驗證各 provider 的 request 形狀（`image_url` data URL、tools、header、`reasoning_content` 回送）、錯誤對應與設定解析（`infrastructure/tests/rig_agent.rs`、`server/src/config.rs`）。錯誤對應另包含：圖片被伺服器拒絕的 400（內文含 image 且 invalid／unsupported）→ `AiError::InvalidImage`；`finish_reason: content_filter` → `Refused`；401/403 → 不可重試的「authentication failed」。
 
 實測（Strata gateway，量化 Qwen，`thinking` 區塊 `signature` 為空）：strict nullable schema、`eager_input_streaming`、`output_config`、`thinking`（adaptive／enabled／disabled）、fallbacks beta／欄位、base64 圖片、多輪 tool_use／tool_result（含回送空 signature 的 thinking）皆被接受或忽略，錯誤格式為 Anthropic 風格（`{"error":{"type":"invalid_request_error"|"authentication_error","message":...}}`）。該 gateway 位於 Cloudflare 後面，預設的 Python urllib User-Agent 會被擋（`403 error code: 1010`），rig 的 reqwest 請求不受影響。
+
+實測（opencode Go，`https://opencode.ai/zen/go`，模型 `deepseek-v4.1-flash`，`openai-compatible`）：
+- 必須帶 `x-opencode-session`，否則 `400 {"type":"error","error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session and cannot be routed efficiently. ..."}}`；任何字串都可，故用 `AI_SESSION_HEADER` 帶 run id。位於 Cloudflare 後面，Python urllib 的 User-Agent 會被擋（`403 error code: 1010`），reqwest 不受影響。
+- 圖片 `image_url` data URL 可用；損毀圖片回 `400 {"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"Upstream request failed: [invalid_request_error] .messages[0].image[0]: You have uploaded an unsupported image. Please make sure your image is valid and has one of the following formats: webp, png, jpeg, and gif. ..."}}`，對應 `AiError::InvalidImage`。錯誤金鑰 `401 {"error":{"type":"server_error","message":"Upstream request failed: Invalid credential"}}`；不存在的模型 `400 {"error":{"type":"server_error","message":"Upstream request failed: Model is unavailable."}}`（不特別對應，歸為不可重試的 provider error）。
+- `strict: true` 且含 nullable 型別（`["integer","null"]`、`anyOf` + `null`）的 function schema 被接受，eval 結果與不送 strict 相當，因此維持預設 `AI_STRICT_TOOLS=false`。
+- `reasoning_effort`：`low`／`high`／`minimal` 皆被接受；`none`（或 `thinking: {"type":"disabled"}`）會關閉 thinking。**不送參數時伺服器預設就會 thinking**（回應帶 `reasoning_content`，`usage.completion_tokens_details.reasoning_tokens` 計入 `completion_tokens`，故 `Usage.output_tokens` 已含 reasoning）。全案例 eval：預設 13.1 秒、`low` 13.2 秒，差異不大，故預設 `AI_REASONING=off`。目前 `AI_REASONING` 沒有「關閉 thinking」的值（`none`），若想再省延遲可日後加入。
+- `reasoning_content` 回送：此端點**不要求**（thinking 模式、多輪 tool call，不帶、帶、帶空字串三種皆 200）。DeepSeek 官方 API 則要求同一個 tool-call 迴圈內的 assistant 訊息帶回 `reasoning_content`，因此仍照做：rig 的 OpenAI dialect 設 `reasoning_field = "reasoning_content"`，有 thinking 的回合原樣送回、沒有的回合送空字串（單元測試驗證）。
+
+Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數）：20 次中 17 通過，平均 13.1 秒、2.8 輪，總 token 輸入 238k／輸出 26k（每次約 11.9k／1.3k）；比較 Strata／Qwen（10 案例 × 1 次，10/10，平均 24.5 秒，約 109k／11k）。DeepSeek 約快一倍，且案例 10（Qwen 會把鹽烤鯖魚飯改成鹽烤鱈魚飯、多出黑胡椒飯）兩次都全對；失敗皆為手寫／小字的讀字錯誤（焢肉飯→焗肉飯、挪威鯖魚飯↔鮭魚飯、多列被劃掉的「周杰」）與 scorer 對空白的敏感度（「VIP 餐盒」vs 預期「VIP餐盒」）。摘要與 warnings 均為繁體中文。
 
 ### 9.8 Eval 工具（`make ai-eval`）
 手動執行（不屬於 `make check`／CI；會呼叫真實模型）。實作為 `server` crate 的 `ai_eval` binary（`cargo run -p server --bin ai_eval`）：與伺服器共用 `Config` 與 `wiring::rig_agent_config`，因此量到的就是正式環境的設定；放在 `server` 而非獨立 crate 是為了不重複設定解析與組裝，也不增加 workspace 的依賴面。
 - 案例：`eval/cases/<name>/{image.png|image.jpg, expected.json, source.html}`；圖片由 `source.html` 以 `python3 eval/render.py`（headless Chrome + Pillow）產生，可重現。`expected.json`：`kind`（`roster`／`vendor`／`none`）、預期成員（可含 `note_contains`）或店家資訊與菜單（名稱、價格、分類）、`forbidden`（不得出現在名稱的字串，如電話、廣告、注入文字）、`vendor.note_forbidden`、選用的 `seed`（預先建立名單／店家，`target_seeded` 決定是否指定為目標）。
 - 每案例在全新的暫存 SQLite 上以同樣的 tools 執行 `RigImportAgent`，將最後的待確認提案逐欄比對：名稱 precision／recall、價格完全一致率、分類／備註／店家資訊命中率、被禁止字串與價格 0 的次數、結果（ok／refused／error／timeout）、model 呼叫次數、tool 呼叫數、耗時、token。`none` 類案例要求沒有任何提案。
-- 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 寫到 `eval/report.json`，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
+- 連線設定與伺服器相同；`make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=… AI_SESSION_HEADER=…` 可從 JSON 檔（`base_url`／`api_key`）讀入連線並預設 `openai-compatible`，不印出金鑰（見 deploy.md）。
+- 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 預設寫到 `eval/report.json`，可用 `AI_REPORT` 改，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
 
 ---
 
@@ -1124,17 +1138,19 @@ GOOGLE_OAUTH_ENABLED=              # 空＝自動（兩個憑證都有才啟用�
 PASSWORD_LOGIN_ENABLED=true        # 本機帳號 email + 密碼登入
 ADMIN_EMAIL=                       # 與 ADMIN_PASSWORD 成對；啟動時帳號不存在才建立（容器 bootstrap，優先用 CLI）
 ADMIN_PASSWORD=
-ANTHROPIC_API_KEY=...
-AI_MODEL=claude-opus-5-5
+AI_API_KEY=...                   # 舊名 ANTHROPIC_API_KEY 仍可用（僅 anthropic／anthropic-compatible）
+# AI_BASE_URL=...                # 覆寫 API 位址（gateway／測試）；openai-compatible 必填
+AI_MODEL=claude-opus-5-5         # openai-compatible 必須明確設定
 AI_DAILY_QUOTA_PER_USER=30
 AI_MAX_TURNS=8
-AI_PROVIDER=anthropic            # anthropic | anthropic-compatible（9.7）
+AI_PROVIDER=anthropic            # anthropic | anthropic-compatible | openai-compatible（9.7）
 AI_FALLBACKS=default             # off = 關閉 server-side fallback（僅 anthropic 可用 default）
-# AI_STRICT_TOOLS=true           # 預設：anthropic 為 true、anthropic-compatible 為 false
-# AI_REASONING=low               # low | off；預設：anthropic 為 low、anthropic-compatible 為 off
-# AI_REQUEST_TIMEOUT_SECS=60     # 單次 model 呼叫逾時；預設：anthropic 60、anthropic-compatible 180
-# AI_RUN_TIMEOUT_SECS=90         # 整個 run（含重試）逾時，須 >= 上一項；預設：anthropic 90、anthropic-compatible 300
-# ANTHROPIC_BASE_URL=...         # 覆寫 API 位址（gateway／測試）
+# AI_STRICT_TOOLS=true           # 預設：anthropic 為 true、compatible 為 false
+# AI_REASONING=low               # low | off；預設：anthropic 為 low、compatible 為 off
+# AI_REQUEST_TIMEOUT_SECS=60     # 單次 model 呼叫逾時；預設：anthropic 60、compatible 180
+# AI_RUN_TIMEOUT_SECS=90         # 整個 run（含重試）逾時，須 >= 上一項；預設：anthropic 90、compatible 300
+# AI_EXTRA_HEADERS=a=1,b=2       # 每個 model 請求額外的 header（值視為機密）
+# AI_SESSION_HEADER=x-opencode-session  # 每次匯入 run 帶一個新 id 的 header 名稱
 SESSION_TTL_DAYS=14
 TRUSTED_PROXIES=10.0.0.0/8          # 反向代理的 IP 範圍；空值 = 不信任 X-Forwarded-For
 CLIENT_INFO_RETENTION_DAYS=90

@@ -1,4 +1,5 @@
-//! [`ImportAgent`] backed by rig + Anthropic (design 9).
+//! [`ImportAgent`] backed by rig: Anthropic Messages, or an OpenAI-compatible
+//! Chat Completions server (design 9).
 //!
 //! The agent is built per request (cheap: ~0.4 ms, the HTTP pool is shared by
 //! rig). The tools hold the request's `Arc<ImportToolContext>`, so they can only
@@ -11,14 +12,17 @@ use application::ai_import::prompt::import_agent_system_prompt;
 use application::ai_import::{AgentInput, AgentOutcome, AiError, ImportAgent, ImportToolContext};
 use async_trait::async_trait;
 use domain::ai_import::{ImportMode, Usage};
-use rig::AgentBuilder;
 use rig::agent::{AgentHook, HookContext, ModelTurnAction, ModelTurnFinished};
 use rig::completion::{Effort, Reasoning};
 use rig::message::{ImageMediaType, UserContent};
+use rig::operation::Completion;
 use rig::providers::anthropic::extension::{
     AnthropicOptions, Fallbacks, SERVER_SIDE_FALLBACK_BETA,
 };
 use rig::providers::anthropic::{ANTHROPIC, AnthropicConfig, Dialect, Quirks};
+use rig::providers::openai::wire::OPENAI;
+use rig::providers::openai::{OpenAIConfig, Route};
+use rig::{AgentBuilder, DynModel};
 
 use super::tools::add_import_tools;
 
@@ -38,6 +42,25 @@ pub enum AiProvider {
     /// blocks with an empty signature are replayed as thinking, as such
     /// servers return them.
     AnthropicCompatible,
+    /// Any server that speaks OpenAI Chat Completions (`/v1/chat/completions`):
+    /// OpenAI itself, DeepSeek, vLLM, LiteLLM, opencode ... Images go as
+    /// `image_url` data URLs; `reasoning_content` is replayed to the server
+    /// as DeepSeek-style thinking models expect.
+    OpenAiCompatible,
+}
+
+/// An extra HTTP request header (`AI_EXTRA_HEADERS`). The value may be a
+/// credential, so `Debug` never shows it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ExtraHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl std::fmt::Debug for ExtraHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}=<redacted>", self.name)
+    }
 }
 
 /// Reasoning request sent with every model call (`AI_REASONING`).
@@ -68,6 +91,12 @@ pub struct RigAgentConfig {
     pub fallbacks: bool,
     /// Timeout of one HTTP request to the API.
     pub request_timeout: Duration,
+    /// Headers added to every request (`AI_EXTRA_HEADERS`).
+    pub extra_headers: Vec<ExtraHeader>,
+    /// Name of a header that carries the import run's id on every request of
+    /// that run (`AI_SESSION_HEADER`, e.g. `x-opencode-session`): gateways that
+    /// route or cache by session need one id per agent run.
+    pub session_header: Option<String>,
 }
 
 impl RigAgentConfig {
@@ -82,6 +111,8 @@ impl RigAgentConfig {
             max_turns: 8,
             fallbacks: true,
             request_timeout: Duration::from_secs(60),
+            extra_headers: Vec::new(),
+            session_header: None,
         }
     }
 }
@@ -99,6 +130,8 @@ impl std::fmt::Debug for RigAgentConfig {
             .field("max_turns", &self.max_turns)
             .field("fallbacks", &self.fallbacks)
             .field("request_timeout", &self.request_timeout)
+            .field("extra_headers", &self.extra_headers)
+            .field("session_header", &self.session_header)
             .finish()
     }
 }
@@ -116,6 +149,36 @@ impl RigImportAgent {
             .build()
             .map_err(|e| format!("building the HTTP client: {e}"))?;
         Ok(Self { config, http })
+    }
+
+    /// The HTTP client for one run. Without per-run headers it is the shared
+    /// pool; with them (session id, extra headers) a client carrying those as
+    /// default headers, so every request of the run has them.
+    fn http_for_run(&self, session_id: &str) -> Result<reqwest::Client, AiError> {
+        let cfg = &self.config;
+        if cfg.extra_headers.is_empty() && cfg.session_header.is_none() {
+            return Ok(self.http.clone());
+        }
+        let bad = || unavailable(false, "invalid AI_EXTRA_HEADERS / AI_SESSION_HEADER entry");
+        let mut headers = reqwest::header::HeaderMap::new();
+        let pairs = cfg
+            .extra_headers
+            .iter()
+            .map(|h| (h.name.as_str(), h.value.as_str()))
+            .chain(cfg.session_header.as_deref().map(|n| (n, session_id)));
+        for (name, value) in pairs {
+            let name =
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| bad())?;
+            let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| bad())?;
+            value.set_sensitive(true);
+            headers.insert(name, value);
+        }
+        reqwest::Client::builder()
+            .timeout(cfg.request_timeout)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .default_headers(headers)
+            .build()
+            .map_err(|e| unavailable(false, format!("building the HTTP client: {e}")))
     }
 }
 
@@ -157,6 +220,9 @@ impl AgentHook for TurnHook {
             input_tokens: event.usage.input_tokens.unwrap_or(0),
             output_tokens: event.usage.output_tokens.unwrap_or(0),
         });
+        if let Some(r) = event.usage.reasoning_tokens {
+            tracing::debug!(reasoning_tokens = r, "AI model turn reasoning");
+        }
         let raw = event.raw;
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         seen.call_started = std::time::Instant::now();
@@ -177,6 +243,12 @@ impl AgentHook for TurnHook {
         }
         async { ModelTurnAction::Continue }
     }
+}
+
+/// `url` without trailing slashes and without a final `/v1` segment.
+fn origin_of(url: &str) -> &str {
+    let url = url.trim_end_matches('/');
+    url.strip_suffix("/v1").unwrap_or(url)
 }
 
 fn user_message(input: &AgentInput) -> String {
@@ -254,6 +326,17 @@ fn map_error(e: rig::completion::PromptError, seen: &Seen, request_timeout: Dura
                         format!("authentication failed (http {})", status.unwrap_or(0)),
                     )
                 }
+                // The server could not decode the picture (corrupt, or a
+                // format it does not read): not retryable, the organizer must
+                // upload another photo. The provider text is not passed on.
+                Some(400)
+                    if r.provider_response_body().is_some_and(|b| {
+                        let b = b.to_ascii_lowercase();
+                        b.contains("image") && (b.contains("invalid") || b.contains("unsupported"))
+                    }) =>
+                {
+                    AiError::InvalidImage("the model could not read the image".into())
+                }
                 _ => unavailable(
                     r.retryable,
                     format!(
@@ -288,29 +371,56 @@ impl ImportAgent for RigImportAgent {
         let cfg = &self.config;
         let media_type = image_media_type(&input.image.media_type)?;
 
-        let mut provider = AnthropicConfig::new(&cfg.api_key);
-        if let Some(url) = &cfg.base_url {
-            provider = provider.with_base_url(url);
-        }
+        let http = self.http_for_run(&ctx.run_id.to_string())?;
         // Fallbacks are an Anthropic-only feature.
         let fallbacks = cfg.fallbacks && cfg.provider == AiProvider::Anthropic;
-        if cfg.provider == AiProvider::AnthropicCompatible {
-            let mut quirks = Quirks::gateway();
-            quirks.unsigned_thinking = true;
-            quirks.strict_tool_schemas = cfg.strict_tools;
-            provider.dialect = Dialect {
-                quirks,
-                ..ANTHROPIC
-            };
-        }
-        if fallbacks {
-            provider = provider.with_beta(SERVER_SIDE_FALLBACK_BETA);
-        }
-        let client = provider.connect(rig::http_client::ReqwestClient::from(self.http.clone()));
-        let mut model = client.completion(cfg.model.as_str());
-        if cfg.strict_tools {
-            model.wire = model.wire.with_strict_tools();
-        }
+        let model: DynModel<Completion> = match cfg.provider {
+            AiProvider::OpenAiCompatible => {
+                // The stock OpenAI dialect (typed options such as
+                // `reasoning_effort`) on the Chat Completions route, plus the
+                // `reasoning_content` field DeepSeek-style models want back.
+                let mut dialect = OPENAI;
+                dialect.quirks.completion_route = Route::Chat;
+                dialect.quirks.reasoning_field = Some("reasoning_content");
+                // The base URL is the server's origin, with or without the
+                // OpenAI-style trailing `/v1`; the path below carries it.
+                dialect.quirks.completion_path = "/v1/chat/completions";
+                let mut provider = OpenAIConfig::with_key(&dialect, cfg.api_key.as_str());
+                if let Some(url) = &cfg.base_url {
+                    provider = provider.with_base_url(origin_of(url));
+                }
+                let client = provider.connect(rig::http_client::ReqwestClient::from(http));
+                let mut model = client.chat(cfg.model.as_str());
+                if cfg.strict_tools {
+                    model.wire = model.wire.with_strict_tools();
+                }
+                model.into()
+            }
+            AiProvider::Anthropic | AiProvider::AnthropicCompatible => {
+                let mut provider = AnthropicConfig::new(&cfg.api_key);
+                if let Some(url) = &cfg.base_url {
+                    provider = provider.with_base_url(url);
+                }
+                if cfg.provider == AiProvider::AnthropicCompatible {
+                    let mut quirks = Quirks::gateway();
+                    quirks.unsigned_thinking = true;
+                    quirks.strict_tool_schemas = cfg.strict_tools;
+                    provider.dialect = Dialect {
+                        quirks,
+                        ..ANTHROPIC
+                    };
+                }
+                if fallbacks {
+                    provider = provider.with_beta(SERVER_SIDE_FALLBACK_BETA);
+                }
+                let client = provider.connect(rig::http_client::ReqwestClient::from(http));
+                let mut model = client.completion(cfg.model.as_str());
+                if cfg.strict_tools {
+                    model.wire = model.wire.with_strict_tools();
+                }
+                model.into()
+            }
+        };
 
         let seen = Arc::new(Mutex::new(Seen::default()));
         let hook = TurnHook {

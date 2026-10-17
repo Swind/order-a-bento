@@ -11,13 +11,16 @@ use domain::ai_import::{ImportMode, ImportRunId, ProposalTarget};
 use domain::identity::{Organizer, OrganizerId};
 use domain::shared::SystemClock;
 use infrastructure::ai::{
-    AiProvider, AiReasoning, RigAgentConfig, RigImportAgent, import_tools_parameters,
+    AiProvider, AiReasoning, ExtraHeader, RigAgentConfig, RigImportAgent, import_tools_parameters,
 };
 use infrastructure::directory_repo::{SqliteRosterRepo, SqliteVendorRepo};
 use infrastructure::identity_repo::SqliteOrganizerRepo;
 use infrastructure::sqlite::{Db, TempDir};
 use serde_json::{Value, json};
-use support::{Mock, Reply, end_turn, msg, start, tool_turn, tool_use};
+use support::{
+    Mock, Reply, chat_end_turn, chat_reply, chat_tool_call, chat_tool_turn, end_turn, msg, start,
+    start_openai, tool_turn, tool_use,
+};
 
 const JPEG: &[u8] = &[
     0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, b'J', b'F', b'I', b'F', 0, 1, 1, 0xFF, 0xD9,
@@ -442,4 +445,309 @@ async fn slow_model_call_reports_a_timeout_and_is_not_retryable() {
         }
         other => panic!("unexpected {other:?}"),
     }
+}
+
+// ---- OpenAI-compatible Chat Completions ------------------------------------------------
+
+fn oa_config(url: &str) -> RigAgentConfig {
+    let mut c = RigAgentConfig::new("oa-test-key", "deepseek-v4.1-flash");
+    c.base_url = Some(url.to_string());
+    c.provider = AiProvider::OpenAiCompatible;
+    c.strict_tools = false;
+    c.reasoning = AiReasoning::Off;
+    c.fallbacks = true; // must not leak into this provider
+    c.request_timeout = Duration::from_secs(5);
+    c
+}
+
+fn oa_happy_script() -> Vec<Reply> {
+    vec![
+        Reply::Message(chat_tool_turn(
+            Some("need the vendors first"),
+            vec![chat_tool_call("call_1", "list_vendors", json!({}))],
+        )),
+        Reply::Message(chat_tool_turn(
+            None,
+            vec![chat_tool_call("call_2", "propose_vendor", vendor_args())],
+        )),
+        Reply::Message(chat_end_turn(
+            "已提出阿財排骨便當的菜單，請確認雞腿飯的價格。",
+        )),
+    ]
+}
+
+#[tokio::test]
+async fn openai_happy_path_request_shape_and_usage() {
+    let e = env().await;
+    let (url, mock) = start_openai(oa_happy_script()).await;
+    let out = RigImportAgent::new(oa_config(&url))
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    assert_eq!(
+        out.summary,
+        "已提出阿財排骨便當的菜單，請確認雞腿飯的價格。"
+    );
+    assert_eq!(out.model, "deepseek-v4.1-flash");
+    assert_eq!(out.usage.input_tokens, 3000);
+    assert_eq!(out.usage.output_tokens, 150);
+    assert_eq!(e.ctx.usage().input_tokens, 3000);
+    assert_eq!(mock.calls(), 3);
+    let ProposalTarget::Vendor(v) = &e.ctx.snapshot().await.targets[0] else {
+        panic!("vendor target expected")
+    };
+    assert_eq!(v.menu.len(), 2);
+
+    let body = first_body(&mock);
+    assert_eq!(body["model"], "deepseek-v4.1-flash");
+    assert_eq!(body["max_tokens"], 4096);
+    // nothing Anthropic-specific, no reasoning request by default
+    for k in ["fallbacks", "output_config", "thinking", "reasoning_effort"] {
+        assert!(body.get(k).is_none(), "{k} in {body}");
+    }
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 6);
+    for t in tools {
+        assert_eq!(t["type"], "function");
+        assert!(t["function"].get("strict").is_none(), "{t}");
+        assert_eq!(t["function"]["parameters"]["additionalProperties"], false);
+    }
+    // system prompt, then the user message with text and the image as a data URL
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["role"], "system");
+    assert!(messages[0].to_string().contains("data-entry assistant"));
+    let user = messages.iter().find(|m| m["role"] == "user").unwrap();
+    let parts = user["content"].as_array().unwrap();
+    assert!(
+        parts[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Mode hint: vendor")
+    );
+    let img = parts
+        .iter()
+        .find(|p| p["type"] == "image_url")
+        .expect("image part");
+    let data_url = img["image_url"]["url"].as_str().unwrap();
+    assert!(
+        data_url.starts_with("data:image/jpeg;base64,/9j/"),
+        "{data_url}"
+    );
+
+    let h = mock.headers.lock().unwrap()[0].clone();
+    assert_eq!(h["authorization"], "Bearer oa-test-key");
+    assert!(h.get("anthropic-beta").is_none() && h.get("x-api-key").is_none());
+}
+
+#[tokio::test]
+async fn openai_base_url_may_end_in_v1() {
+    for suffix in ["", "/", "/v1", "/v1/"] {
+        let e = env().await;
+        let (url, mock) = start_openai(oa_happy_script()).await;
+        RigImportAgent::new(oa_config(&format!("{url}{suffix}")))
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap_or_else(|err| panic!("{suffix:?}: {err:?}"));
+        assert_eq!(mock.calls(), 3, "{suffix:?}");
+    }
+}
+
+#[tokio::test]
+async fn openai_replays_reasoning_content_in_the_tool_loop() {
+    let e = env().await;
+    let (url, mock) = start_openai(oa_happy_script()).await;
+    RigImportAgent::new(oa_config(&url))
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let bodies = mock.bodies.lock().unwrap().clone();
+    let assistants = |i: usize| -> Vec<Value> {
+        bodies[i]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "assistant")
+            .cloned()
+            .collect()
+    };
+    let second = assistants(1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["reasoning_content"], "need the vendors first");
+    assert_eq!(
+        second[0]["tool_calls"][0]["function"]["name"],
+        "list_vendors"
+    );
+    // a later turn without thinking still carries the field (some servers require it)
+    let third = assistants(2);
+    assert_eq!(third.len(), 2);
+    assert_eq!(third[1]["reasoning_content"], "");
+}
+
+#[tokio::test]
+async fn openai_opt_in_strict_tools_and_reasoning_effort() {
+    let e = env().await;
+    let (url, mock) = start_openai(oa_happy_script()).await;
+    let mut c = oa_config(&url);
+    c.strict_tools = true;
+    c.reasoning = AiReasoning::Low;
+    RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let body = first_body(&mock);
+    assert_eq!(body["reasoning_effort"], "low");
+    for t in body["tools"].as_array().unwrap() {
+        assert_eq!(t["function"]["strict"], true, "{t}");
+        assert_eq!(t["function"]["parameters"]["additionalProperties"], false);
+    }
+}
+
+#[tokio::test]
+async fn extra_and_session_headers_are_sent_with_a_fresh_session_id_per_run() {
+    let c = |url: &str| {
+        let mut c = oa_config(url);
+        c.extra_headers = vec![ExtraHeader {
+            name: "x-gateway-team".into(),
+            value: "bento".into(),
+        }];
+        c.session_header = Some("x-opencode-session".into());
+        c
+    };
+    let (url, mock) = start_openai(oa_happy_script()).await;
+    let agent = RigImportAgent::new(c(&url)).unwrap();
+    let e1 = env().await;
+    agent.run(e1.ctx.clone(), input()).await.unwrap();
+    let hs = mock.headers.lock().unwrap().clone();
+    assert_eq!(hs.len(), 3);
+    for h in &hs {
+        assert_eq!(h["x-gateway-team"], "bento");
+        // every request of one run shares the run id
+        assert_eq!(h["x-opencode-session"], e1.ctx.run_id.to_string().as_str());
+        assert_eq!(h["authorization"], "Bearer oa-test-key");
+    }
+    // another run through the same agent gets its own session id
+    let (url2, mock2) = start_openai(oa_happy_script()).await;
+    let agent2 = RigImportAgent::new(c(&url2)).unwrap();
+    let e2 = env().await;
+    agent2.run(e2.ctx.clone(), input()).await.unwrap();
+    let h2 = mock2.headers.lock().unwrap()[0].clone();
+    assert_ne!(h2["x-opencode-session"], hs[0]["x-opencode-session"]);
+    // header values never reach Debug output
+    let dbg = format!("{:?}", c(&url));
+    assert!(
+        !dbg.contains("bento") && !dbg.contains("oa-test-key"),
+        "{dbg}"
+    );
+    assert!(dbg.contains("x-gateway-team"));
+}
+
+#[tokio::test]
+async fn session_header_also_works_with_anthropic_providers() {
+    let e = env().await;
+    let (url, mock) = start(happy_script()).await;
+    let mut c = RigAgentConfig::new("sk-ant-test-key", "claude-opus-5-5");
+    c.base_url = Some(url);
+    c.request_timeout = Duration::from_secs(5);
+    c.session_header = Some("x-session".into());
+    RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    assert_eq!(
+        mock.headers.lock().unwrap()[0]["x-session"],
+        e.ctx.run_id.to_string().as_str()
+    );
+}
+
+#[tokio::test]
+async fn openai_content_filter_maps_to_refused_and_keeps_usage() {
+    let e = env().await;
+    let (url, _) = start_openai(vec![Reply::Message(chat_reply(
+        json!({ "role": "assistant", "content": null }),
+        "content_filter",
+    ))])
+    .await;
+    let err = RigImportAgent::new(oa_config(&url))
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap_err();
+    assert_eq!(err, AiError::Refused { category: None });
+    assert_eq!(e.ctx.usage().input_tokens, 1000);
+}
+
+#[tokio::test]
+async fn openai_error_statuses_map_to_ai_errors() {
+    let run = |reply: Reply| async move {
+        let e = env().await;
+        let (url, _) = start_openai(vec![reply]).await;
+        RigImportAgent::new(oa_config(&url))
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap_err()
+    };
+    // bad credentials: not retryable, nothing from the provider body in the detail
+    match run(Reply::Raw(
+        401,
+        json!({ "error": { "type": "server_error", "message": "Upstream request failed: Invalid credential" } }),
+    ))
+    .await
+    {
+        AiError::Unavailable { retryable, detail } => {
+            assert!(!retryable);
+            assert!(detail.contains("authentication failed"), "{detail}");
+            assert!(!detail.contains("Invalid credential") && !detail.contains("oa-test-key"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // the image could not be decoded by the server
+    let err = run(Reply::Raw(
+        400,
+        json!({ "error": { "type": "invalid_request_error", "code": "invalid_request_error",
+            "message": "Upstream request failed: [invalid_request_error] .messages[0].image[0]: You have uploaded an unsupported image." } }),
+    ))
+    .await;
+    assert!(matches!(err, AiError::InvalidImage(_)), "{err:?}");
+    // a missing routing header is a configuration error, not an image problem
+    match run(Reply::Raw(
+        400,
+        json!({ "type": "error", "error": { "type": "MissingSessionID", "message": "Request is missing x-opencode-session" } }),
+    ))
+    .await
+    {
+        AiError::Unavailable { retryable, .. } => assert!(!retryable),
+        other => panic!("unexpected {other:?}"),
+    }
+    for status in [429, 500, 503] {
+        match run(Reply::Error(status, "server_error")).await {
+            AiError::Unavailable { retryable, .. } => assert!(retryable, "{status}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn openai_slow_call_reports_a_timeout() {
+    let e = env().await;
+    let (url, _) = start_openai(vec![Reply::Slow(Duration::from_secs(3))]).await;
+    let mut c = oa_config(&url);
+    c.request_timeout = Duration::from_secs(1);
+    let err = RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        AiError::Unavailable {
+            retryable: false,
+            detail: "model call timed out after 1 s".into()
+        }
+    );
 }

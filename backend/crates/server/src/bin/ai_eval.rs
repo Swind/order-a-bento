@@ -5,8 +5,8 @@
 //!                                      [--repeat N] [--timeout SECS] [--out report.json]
 //! ```
 //!
-//! Uses the same settings as the server (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
-//! `AI_MODEL`, `AI_PROVIDER`, `AI_*`), so it measures exactly what production runs.
+//! Uses the same settings as the server (`AI_API_KEY`, `AI_BASE_URL`,
+//! `AI_MODEL`, `AI_PROVIDER`, `AI_*`; legacy `ANTHROPIC_*` for the Anthropic providers), so it measures exactly what production runs.
 //! Cases live in `eval/cases/<name>/{image.png|image.jpg, expected.json}`.
 
 use std::path::PathBuf;
@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
     let config = Config::from_env().context("loading config")?;
     let Some(cfg) = server::wiring::rig_agent_config(&config) else {
-        bail!("ANTHROPIC_API_KEY is not set (make ai-eval maps STRATA_* onto ANTHROPIC_*)");
+        bail!("AI_API_KEY is not set (make ai-eval maps STRATA_* or AI_PROVIDER_FILE onto AI_*)");
     };
     // Never prints the key: RigAgentConfig's Debug redacts it.
     eprintln!("agent: {cfg:?}");

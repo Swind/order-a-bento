@@ -8,3 +8,6 @@
 .env.*
 !.env.example
 /eval/report*.json
+
+# Local AI provider credentials (never commit)
+/provider.json
