@@ -1081,6 +1081,8 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 
 **額外 header**：`AI_EXTRA_HEADERS=name=value,name2=value2` 加在每個 model 請求上；`AI_SESSION_HEADER=<name>` 則在每次匯入 run 開始時以該 run 的 id（`ImportRunId`）當值，同一 run 的所有 model 呼叫共用。session 取「每次匯入 run」而非每個請求或每位使用者：gateway 用 session 做路由與 prompt cache，一個 run 的多輪呼叫共享同一份前綴，需要黏在同一個後端；跨 run 或跨使用者共用則會把不相干的流量綁在一起，而每個請求一個 id 又失去快取效果。service 層重試同一個 run 時沿用同一個 id。實作上有額外 header 時，每個 run 以 `default_headers` 建一個專用的 reqwest client（值標為 sensitive）；沒有時共用全域連線池。header 值在 `Config`／`RigAgentConfig` 的 `Debug` 中一律遮蔽，設定錯誤的訊息也不回顯值。
 
+**`openai-responses`（OpenAI Responses API）**：有些模型（例如 opencode Go 上的 `gpt-6-luna`）只接受 `POST /v1/responses`，打 `/v1/chat/completions` 會回 `{"type":"error","error":{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}}`。`AI_PROVIDER=openai-responses` 使用 rig 的 OpenAI Responses wire（`client.responses(model)`，只把 dialect 的 path 設為 `/v1/responses`），連線設定、驗證（base URL、key、model 必填，拒絕 `AI_FALLBACKS=default`）、預設值（逾時 180／300、strict 關、reasoning 關）、額外 header／session header 都與 `openai-compatible` 相同，tools、prompt、hook、錯誤對應也共用。差異：圖片是 `input_image` data URL；system prompt 放 `instructions`；上限欄位是 `max_output_tokens`；`AI_REASONING=low` 送 `reasoning: {effort: "low"}`；tool loop 為**無狀態**——固定送 `store: false`，rig 因此自動加 `include: ["reasoning.encrypted_content"]`，並在後續呼叫把 reasoning item（連同密文）、`function_call` 與 `function_call_output` 原樣送回，不使用 `previous_response_id`（實測此端點兩種都可，但不依賴 server 端狀態）。
+
 逾時預設值的理由：量化 Qwen 等模型在 Strata gateway 上，一次「22 個品項 + thinking、約 3k output tokens」的呼叫實測 60–100 秒，三輪的整個 run 約 80–150 秒，60／90 秒必然逾時；180 秒約為最慢單次呼叫的 2 倍餘裕，300 秒可容納 3–4 次這樣的呼叫。設定時須 `AI_REQUEST_TIMEOUT_SECS` > 0 且 ≤ `AI_RUN_TIMEOUT_SECS`，否則啟動時報錯。`make ai-eval` 直接呼叫 agent（不經 application 層的重試），其每案例外層保護 `--timeout` 預設即為 `AI_RUN_TIMEOUT_SECS`。
 
 **長時間 run 與前端**：前端以單一同步請求 `POST /ai/import-runs` 等待結果（不輪詢），對話框顯示「AI 辨識中」並提供「取消等待」（abort 請求）。請求因此可能開著數分鐘，反向代理的讀取逾時必須大於 `AI_RUN_TIMEOUT_SECS`（Caddy `reverse_proxy` 預設無讀取逾時；nginx 的 `proxy_read_timeout` 預設 60 秒、Cloudflare 代理約 100 秒就會回 524，需調整或改用較短的 `AI_RUN_TIMEOUT_SECS`）。
@@ -1098,11 +1100,18 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 
 Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數）：20 次中 17 通過，平均 13.1 秒、2.8 輪，總 token 輸入 238k／輸出 26k（每次約 11.9k／1.3k）；比較 Strata／Qwen（10 案例 × 1 次，10/10，平均 24.5 秒，約 109k／11k）。DeepSeek 約快一倍，且案例 10（Qwen 會把鹽烤鯖魚飯改成鹽烤鱈魚飯、多出黑胡椒飯）兩次都全對；失敗皆為手寫／小字的讀字錯誤（焢肉飯→焗肉飯、挪威鯖魚飯↔鮭魚飯、多列被劃掉的「周杰」）與 scorer 對空白的敏感度（「VIP 餐盒」vs 預期「VIP餐盒」）。摘要與 warnings 均為繁體中文。
 
+實測（opencode Go，模型 `gpt-6-luna`，`openai-responses`）：
+- `{base}/v1/chat/completions` 回上述 `ModelProtocolUnsupported`；`{base}/v1/responses` 可用，同樣必須帶 `x-opencode-session`。
+- `strict: true` 且含 nullable（`["string","null"]`、`anyOf` + `null`）的 function schema 被接受；`reasoning: {effort: "low"|"high"}` 被接受；`store: false` 加 `include: ["reasoning.encrypted_content"]` 被接受。`effort: "low"` 時通常不產生 reasoning item，`high` 時會回傳帶 `encrypted_content` 的 reasoning item，連同 `function_call` 與 `function_call_output` 送回得 200，不帶 reasoning item 也是 200；`previous_response_id`（預設 store）亦可。
+- 損毀圖片：`400 {"model":"gpt-6-luna","error":{"message":"The image data you provided does not represent a valid image. ...","type":"invalid_request_error","param":"input","code":"invalid_value"}}`（內文含 image 與 invalid，對應 `AiError::InvalidImage`）；不存在的模型 `400 {"error":{"type":"server_error","message":"Upstream request failed: Model is unavailable."}}`。
+- usage：`{input_tokens, output_tokens, input_tokens_details:{cached_tokens, cache_write_tokens}, output_tokens_details:{reasoning_tokens}}`，`output_tokens` 已含 reasoning。
+- Eval（`make ai-eval`，core 7 案例 × 1 次，無 strict、無 reasoning 參數）：6/7 通過，平均 16.6 秒、3.0 輪，token 輸入 88k／輸出 9.8k；唯一失敗為案例 05 的手寫字（焢肉飯讀成烤肉飯）。
+
 ### 9.8 Eval 工具（`make ai-eval`）
 手動執行（不屬於 `make check`／CI；會呼叫真實模型）。實作為 `server` crate 的 `ai_eval` binary（`cargo run -p server --bin ai_eval`）：與伺服器共用 `Config` 與 `wiring::rig_agent_config`，因此量到的就是正式環境的設定；放在 `server` 而非獨立 crate 是為了不重複設定解析與組裝，也不增加 workspace 的依賴面。
 - 案例：`eval/cases/<name>/{image.png|image.jpg, expected.json, source.html}`；圖片由 `source.html` 以 `python3 eval/render.py`（headless Chrome + Pillow）產生，可重現。`expected.json`：`kind`（`roster`／`vendor`／`none`）、預期成員（可含 `note_contains`）或店家資訊與菜單（名稱、價格、分類）、`forbidden`（不得出現在名稱的字串，如電話、廣告、注入文字）、`vendor.note_forbidden`、選用的 `seed`（預先建立名單／店家，`target_seeded` 決定是否指定為目標）。
 - 每案例在全新的暫存 SQLite 上以同樣的 tools 執行 `RigImportAgent`，將最後的待確認提案逐欄比對：名稱 precision／recall、價格完全一致率、分類／備註／店家資訊命中率、被禁止字串與價格 0 的次數、結果（ok／refused／error／timeout）、model 呼叫次數、tool 呼叫數、耗時、token。`none` 類案例要求沒有任何提案。
-- 連線設定與伺服器相同；`make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=… AI_SESSION_HEADER=…` 可從 JSON 檔（`base_url`／`api_key`）讀入連線並預設 `openai-compatible`，不印出金鑰（見 deploy.md）。
+- 連線設定與伺服器相同；`make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=… AI_SESSION_HEADER=…` 可從 JSON 檔（`base_url`／`api_key`）讀入連線並預設 `openai-compatible`（`AI_PROVIDER=openai-responses` 可改用 Responses API），不印出金鑰（見 deploy.md）。
 - 預設只跑 `core` 案例（7 個，每案 1 次，共 7 次模型呼叫）以節省 token；`expected.json` 可加選用欄位 `"tier": "extended"`（預設 `core`）標記簡單、必過的合成案例（01、03、07），加 `--all` 才會一併執行。`--filter` 在所選集合內再篩選；`--repeat` 預設 1，Makefile 不會預設帶更大的值。名稱比對（成員、菜單、店家）在 NameKey 之外再移除所有空白（「VIP餐盒」＝「VIP 餐盒」）。
 - 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 預設寫到 `eval/report.json`，可用 `AI_REPORT` 改，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
 
@@ -1148,7 +1157,7 @@ AI_API_KEY=...                   # 舊名 ANTHROPIC_API_KEY 仍可用（僅 anth
 AI_MODEL=claude-opus-5-5         # openai-compatible 必須明確設定
 AI_DAILY_QUOTA_PER_USER=30
 AI_MAX_TURNS=8
-AI_PROVIDER=anthropic            # anthropic | anthropic-compatible | openai-compatible（9.7）
+AI_PROVIDER=anthropic            # anthropic | anthropic-compatible | openai-compatible | openai-responses（9.7）
 AI_FALLBACKS=default             # off = 關閉 server-side fallback（僅 anthropic 可用 default）
 # AI_STRICT_TOOLS=true           # 預設：anthropic 為 true、compatible 為 false
 # AI_REASONING=low               # low | off；預設：anthropic 為 low、compatible 為 off

@@ -47,6 +47,10 @@ pub enum AiProvider {
     /// `image_url` data URLs; `reasoning_content` is replayed to the server
     /// as DeepSeek-style thinking models expect.
     OpenAiCompatible,
+    /// A server that speaks the OpenAI Responses API (`/v1/responses`), for
+    /// models that do not take Chat Completions. Stateless: `store: false`,
+    /// and the encrypted reasoning items are replayed in the tool loop.
+    OpenAiResponses,
 }
 
 /// An extra HTTP request header (`AI_EXTRA_HEADERS`). The value may be a
@@ -396,6 +400,22 @@ impl ImportAgent for RigImportAgent {
                 }
                 model.into()
             }
+            AiProvider::OpenAiResponses => {
+                let mut dialect = OPENAI;
+                dialect.quirks.completion_route = Route::Responses;
+                // Origin with or without `/v1`; the path below carries it.
+                dialect.quirks.responses.path = "/v1/responses";
+                let mut provider = OpenAIConfig::with_key(&dialect, cfg.api_key.as_str());
+                if let Some(url) = &cfg.base_url {
+                    provider = provider.with_base_url(origin_of(url));
+                }
+                let client = provider.connect(rig::http_client::ReqwestClient::from(http));
+                let mut model = client.responses(cfg.model.as_str());
+                if cfg.strict_tools {
+                    model.wire = model.wire.with_strict_tools();
+                }
+                model.into()
+            }
             AiProvider::Anthropic | AiProvider::AnthropicCompatible => {
                 let mut provider = AnthropicConfig::new(&cfg.api_key);
                 if let Some(url) = &cfg.base_url {
@@ -434,6 +454,11 @@ impl ImportAgent for RigImportAgent {
             .add_hook(hook);
         if cfg.reasoning == AiReasoning::Low {
             builder = builder.reasoning(Reasoning::Effort(Effort::Low));
+        }
+        if cfg.provider == AiProvider::OpenAiResponses {
+            // No server-side state: reasoning items travel with their
+            // ciphertext (rig adds `include` for `store: false`).
+            builder = builder.additional_params(serde_json::json!({ "store": false }));
         }
         if fallbacks {
             builder =

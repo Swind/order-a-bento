@@ -74,7 +74,7 @@ pub struct Config {
     pub ai_model: String,
     pub ai_daily_quota_per_user: u32,
     pub ai_max_turns: u32,
-    /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible` | `openai-compatible`).
+    /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible` | `openai-compatible` | `openai-responses`).
     pub ai_provider: AiProvider,
     /// `AI_FALLBACKS` (`default` | `off`): server-side model fallback on refusals.
     /// Anthropic only; defaults to on there and off for other providers.
@@ -214,17 +214,22 @@ impl Config {
             None | Some("anthropic") => AiProvider::Anthropic,
             Some("anthropic-compatible") => AiProvider::AnthropicCompatible,
             Some("openai-compatible") => AiProvider::OpenAiCompatible,
+            Some("openai-responses") => AiProvider::OpenAiResponses,
             Some(other) => {
                 return Err(ConfigError::Invalid {
                     key: "AI_PROVIDER",
                     value: other.to_owned(),
-                    reason: "expected anthropic, anthropic-compatible or openai-compatible",
+                    reason: "expected anthropic, anthropic-compatible, openai-compatible or openai-responses",
                 });
             }
         };
         // Connection: AI_* applies to every provider and wins; ANTHROPIC_* is the
         // older spelling, still read for the two Anthropic providers only.
-        let anthropic_family = ai_provider != AiProvider::OpenAiCompatible;
+        let anthropic_family = !matches!(
+            ai_provider,
+            AiProvider::OpenAiCompatible | AiProvider::OpenAiResponses
+        );
+        let responses = ai_provider == AiProvider::OpenAiResponses;
         let from_anthropic = |k: &str| if anthropic_family { opt(k) } else { None };
         let ai_api_key = opt("AI_API_KEY")
             .or_else(|| from_anthropic("ANTHROPIC_API_KEY"))
@@ -235,21 +240,33 @@ impl Config {
                 return Err(ConfigError::Invalid {
                     key: "AI_API_KEY",
                     value: String::new(),
-                    reason: "required with AI_PROVIDER=openai-compatible (ANTHROPIC_API_KEY is only read for the Anthropic providers)",
+                    reason: if responses {
+                        "required with AI_PROVIDER=openai-responses (ANTHROPIC_API_KEY is only read for the Anthropic providers)"
+                    } else {
+                        "required with AI_PROVIDER=openai-compatible (ANTHROPIC_API_KEY is only read for the Anthropic providers)"
+                    },
                 });
             }
             if ai_api_key.is_some() && get("AI_MODEL").is_none() {
                 return Err(ConfigError::Invalid {
                     key: "AI_MODEL",
                     value: String::new(),
-                    reason: "required with AI_PROVIDER=openai-compatible (the default is a Claude model)",
+                    reason: if responses {
+                        "required with AI_PROVIDER=openai-responses (the default is a Claude model)"
+                    } else {
+                        "required with AI_PROVIDER=openai-compatible (the default is a Claude model)"
+                    },
                 });
             }
             if ai_api_key.is_some() && ai_base_url.is_none() {
                 return Err(ConfigError::Invalid {
                     key: "AI_BASE_URL",
                     value: String::new(),
-                    reason: "required with AI_PROVIDER=openai-compatible",
+                    reason: if responses {
+                        "required with AI_PROVIDER=openai-responses"
+                    } else {
+                        "required with AI_PROVIDER=openai-compatible"
+                    },
                 });
             }
         }
@@ -874,6 +891,63 @@ mod tests {
         bad.push(("AI_FALLBACKS", "default"));
         assert!(Config::from_map(&m(&bad)).is_err());
         // opt-ins
+        let mut on = ok.to_vec();
+        on.extend([("AI_STRICT_TOOLS", "true"), ("AI_REASONING", "low")]);
+        let c = Config::from_map(&m(&on)).unwrap();
+        assert!(c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Low);
+    }
+
+    #[test]
+    fn openai_responses_shares_the_openai_compatible_rules() {
+        let m = |kv: &[(&str, &str)]| -> HashMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let ok = [
+            ("AI_PROVIDER", "OpenAI-Responses"),
+            ("AI_API_KEY", "k"),
+            ("AI_BASE_URL", "https://gw.example"),
+            ("AI_MODEL", "gpt-6-luna"),
+        ];
+        let c = Config::from_map(&m(&ok)).unwrap();
+        assert_eq!(c.ai_provider, AiProvider::OpenAiResponses);
+        assert_eq!(c.ai_mode(), AiMode::Live);
+        assert!(!c.ai_fallbacks && !c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Off);
+        assert_eq!(
+            (c.ai_request_timeout_secs, c.ai_run_timeout_secs),
+            (180, 300)
+        );
+        for missing in ["AI_BASE_URL", "AI_MODEL"] {
+            let kv: Vec<_> = ok.iter().copied().filter(|(k, _)| *k != missing).collect();
+            assert!(
+                matches!(
+                    Config::from_map(&m(&kv)).unwrap_err(),
+                    ConfigError::Invalid { key, .. } if key == missing
+                ),
+                "{missing}"
+            );
+        }
+        // ANTHROPIC_* is never a fallback; fallbacks are Anthropic-only
+        let err = Config::from_map(&m(&[
+            ("AI_PROVIDER", "openai-responses"),
+            ("ANTHROPIC_API_KEY", "old"),
+            ("AI_BASE_URL", "http://x"),
+            ("AI_MODEL", "m"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                key: "AI_API_KEY",
+                ..
+            }
+        ));
+        let mut bad = ok.to_vec();
+        bad.push(("AI_FALLBACKS", "default"));
+        assert!(Config::from_map(&m(&bad)).is_err());
         let mut on = ok.to_vec();
         on.extend([("AI_STRICT_TOOLS", "true"), ("AI_REASONING", "low")]);
         let c = Config::from_map(&m(&on)).unwrap();

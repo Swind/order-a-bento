@@ -1,5 +1,5 @@
 //! Local mocks of Anthropic's `POST /v1/messages` and OpenAI's
-//! `POST /v1/chat/completions` (unary), scripted per call.
+//! `POST /v1/chat/completions` and `POST /v1/responses` (unary), scripted per call.
 //! Records every request body and its headers.
 #![allow(dead_code)]
 
@@ -61,6 +61,29 @@ pub async fn start_openai(script: Vec<Reply>) -> (String, Arc<Mock>) {
     (url, mock)
 }
 
+/// Like [`start`], but serving the OpenAI Responses API at `/v1/responses`.
+pub async fn start_responses(script: Vec<Reply>) -> (String, Arc<Mock>) {
+    let mock = Arc::new(Mock {
+        script,
+        bodies: Mutex::new(vec![]),
+        headers: Mutex::new(vec![]),
+    });
+    let app = Router::new()
+        .route("/v1/responses", post(responses))
+        .with_state(mock.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (url, mock)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Wire {
+    Messages,
+    Chat,
+    Responses,
+}
+
 impl Mock {
     pub fn calls(&self) -> usize {
         self.bodies.lock().unwrap().len()
@@ -72,7 +95,7 @@ async fn messages(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    reply(mock, headers, body, false).await
+    reply(mock, headers, body, Wire::Messages).await
 }
 
 async fn chat_completions(
@@ -80,10 +103,19 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    reply(mock, headers, body, true).await
+    reply(mock, headers, body, Wire::Chat).await
 }
 
-async fn reply(mock: Arc<Mock>, headers: HeaderMap, body: Value, openai: bool) -> Response {
+async fn responses(
+    State(mock): State<Arc<Mock>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    reply(mock, headers, body, Wire::Responses).await
+}
+
+async fn reply(mock: Arc<Mock>, headers: HeaderMap, body: Value, wire: Wire) -> Response {
+    let openai = wire != Wire::Messages;
     let n = {
         let mut b = mock.bodies.lock().unwrap();
         b.push(body);
@@ -98,6 +130,9 @@ async fn reply(mock: Arc<Mock>, headers: HeaderMap, body: Value, openai: bool) -
         tokio::time::sleep(*d).await;
     }
     match mock.script.get(n) {
+        Some(Reply::Slow(_)) if wire == Wire::Responses => {
+            Json(responses_reply(json!([]))).into_response()
+        }
         Some(Reply::Slow(_)) if openai => Json(chat_reply(
             json!({ "role": "assistant", "content": "" }),
             "stop",
@@ -179,4 +214,33 @@ pub fn chat_tool_turn(reasoning: Option<&str>, calls: Vec<Value>) -> Value {
 
 pub fn chat_end_turn(text: &str) -> Value {
     chat_reply(json!({ "role": "assistant", "content": text }), "stop")
+}
+
+/// An OpenAI Responses API reply with these `output` items.
+pub fn responses_reply(output: Value) -> Value {
+    json!({
+        "id": "resp_mock", "object": "response", "created_at": 1, "status": "completed",
+        "model": "gpt-6-luna", "output": output,
+        "usage": {
+            "input_tokens": 1000, "output_tokens": 50, "total_tokens": 1050,
+            "input_tokens_details": { "cached_tokens": 0 },
+            "output_tokens_details": { "reasoning_tokens": 20 }
+        }
+    })
+}
+
+pub fn responses_call(id: &str, name: &str, args: Value) -> Value {
+    json!({ "type": "function_call", "id": format!("fc_{id}"), "call_id": id, "name": name,
+        "arguments": args.to_string(), "status": "completed" })
+}
+
+pub fn responses_reasoning(id: &str, ciphertext: &str) -> Value {
+    json!({ "type": "reasoning", "id": id, "summary": [], "encrypted_content": ciphertext })
+}
+
+pub fn responses_text(text: &str) -> Value {
+    responses_reply(json!([{
+        "type": "message", "id": "msg_mock", "role": "assistant", "status": "completed",
+        "content": [{ "type": "output_text", "text": text, "annotations": [] }]
+    }]))
 }

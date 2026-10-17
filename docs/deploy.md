@@ -66,17 +66,17 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | 成對設定；啟動時若無該 email 的帳號就建立本機管理員，不覆寫既有帳號（§3.1，優先用 CLI） |
 | `DEV_LOGIN` | `false` | 開發用登入捷徑。**正式環境不可開**（production 下設為 true 會拒絕啟動） |
 | `AI_API_KEY` | 空 | 設定後啟用 AI 匯入；未設定則隱藏 AI 匯入按鈕。所有 `AI_PROVIDER` 通用 |
-| `AI_BASE_URL` | 空 | API 位址（gateway／測試）。`openai-compatible` 必填；`anthropic` 空＝官方位址 |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | 空 | 舊名稱，仍可用，但**只**給 `anthropic`／`anthropic-compatible`；`AI_API_KEY`／`AI_BASE_URL` 有設時以後者為準。`openai-compatible` 不會讀它們（只設了 `ANTHROPIC_API_KEY` 會拒絕啟動，避免誤以為生效） |
+| `AI_BASE_URL` | 空 | API 位址（gateway／測試）。`openai-compatible`／`openai-responses` 必填；`anthropic` 空＝官方位址 |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | 空 | 舊名稱，仍可用，但**只**給 `anthropic`／`anthropic-compatible`；`AI_API_KEY`／`AI_BASE_URL` 有設時以後者為準。`openai-compatible`／`openai-responses` 不會讀它們（只設了 `ANTHROPIC_API_KEY` 會拒絕啟動，避免誤以為生效） |
 | `AI_EXTRA_HEADERS` | 空 | 每個 model 請求額外帶的 header：`name=value,name2=value2`（值內不可有逗號）。值視為機密，不寫入日誌 |
 | `AI_SESSION_HEADER` | 空 | 帶「匯入 run id」的 header 名稱（例如 `x-opencode-session`）。每次匯入產生一個新 id，該次所有 model 呼叫共用；需要 session 路由的 gateway 才要設 |
-| `AI_MODEL` | `claude-opus-5-5` | 使用的模型；`openai-compatible` 必須明確設定 |
+| `AI_MODEL` | `claude-opus-5-5` | 使用的模型；`openai-compatible`／`openai-responses` 必須明確設定 |
 | `AI_MAX_TURNS` | `8` | 每次匯入最多呼叫模型次數 |
 | `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者每日匯入次數上限 |
-| `AI_PROVIDER` | `anthropic` | `anthropic`＝Anthropic 官方 API（Claude 預設值）；`anthropic-compatible`＝相容 Messages API 的 gateway 後面接其他模型（見下方「改用 Anthropic 相容 gateway」）；`openai-compatible`＝相容 OpenAI Chat Completions 的伺服器（DeepSeek、vLLM、LiteLLM、opencode…，見下方「改用 OpenAI 相容伺服器」） |
+| `AI_PROVIDER` | `anthropic` | `anthropic`＝Anthropic 官方 API（Claude 預設值）；`anthropic-compatible`＝相容 Messages API 的 gateway 後面接其他模型（見下方「改用 Anthropic 相容 gateway」）；`openai-compatible`＝相容 OpenAI Chat Completions 的伺服器（DeepSeek、vLLM、LiteLLM、opencode…，見下方「改用 OpenAI 相容伺服器」）；`openai-responses`＝只支援 OpenAI Responses API（`/v1/responses`）的模型，如 opencode Go 上的 `gpt-6-luna`（見下方「Responses API」） |
 | `AI_FALLBACKS` | `default`（compatible 為 `off`） | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉。fallback 是 Anthropic 專屬功能，compatible provider 設 `default` 會拒絕啟動 |
 | `AI_STRICT_TOOLS` | `true`（compatible 為 `false`） | 是否送出 `strict: true` 的 tool schema |
-| `AI_REASONING` | `low`（compatible 為 `off`） | `low`＝Anthropic 送 `output_config.effort=low` 與 adaptive thinking，`openai-compatible` 送 `reasoning_effort=low`；`off`＝不送任何 reasoning 參數（用伺服器預設） |
+| `AI_REASONING` | `low`（compatible 為 `off`） | `low`＝Anthropic 送 `output_config.effort=low` 與 adaptive thinking，`openai-compatible` 送 `reasoning_effort=low`，`openai-responses` 送 `reasoning: {effort: "low"}`；`off`＝不送任何 reasoning 參數（用伺服器預設） |
 | `AI_DEMO` | `false` | 腳本化假資料，僅限開發；production 拒絕啟動 |
 | `SESSION_TTL_DAYS` | `14` | 登入 session 有效天數（過半後滑動延長） |
 | `TRUSTED_PROXIES` | 空 | 可信反向代理 IP／CIDR（逗號分隔，如 `127.0.0.1,172.16.0.0/12`）。僅來自這些位址的連線才採信 `X-Forwarded-For`；**放在反向代理後面時必須設定**，否則所有人的 IP 都會是代理的 IP，且公開端點的 rate limit 會共用同一桶 |
@@ -133,8 +133,17 @@ AI 匯入也可走 OpenAI Chat Completions（`POST {AI_BASE_URL}/v1/chat/complet
 - 錯誤：401/403 顯示為「authentication failed」；圖片被伺服器判定無法解碼的 400 視為「圖片無效」；429／5xx／連線錯誤視為可重試。
 - opencode Go（`https://opencode.ai/zen/go`）要求每個請求帶 `x-opencode-session`，否則回 `400 MissingSessionID`；請設 `AI_SESSION_HEADER=x-opencode-session`（每次匯入一個 id）。該站位於 Cloudflare 後面，非瀏覽器的 User-Agent（如 Python urllib）會被擋（`403 error code: 1010`），後端使用的 reqwest 不受影響。
 
+#### Responses API（`AI_PROVIDER=openai-responses`）
+
+部分模型（如 opencode Go 的 `gpt-6-luna`）打 `/v1/chat/completions` 只會得到 `ModelProtocolUnsupported`，只接受 `POST {AI_BASE_URL}/v1/responses`。設定與 `openai-compatible` 完全相同（`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 必填，有無結尾 `/v1` 皆可，`AI_SESSION_HEADER`／`AI_EXTRA_HEADERS` 照用，預設值與逾時一致），只把 `AI_PROVIDER` 換成 `openai-responses`：
+
+- 圖片以 `input_image` data URL 傳送；請求固定 `store: false`（不依賴 server 端狀態），reasoning item 連同加密內容在同一次 run 的後續呼叫原樣送回。
+- `AI_REASONING=low` 送 `reasoning: {effort: "low"}`；`AI_STRICT_TOOLS=true` 送 `strict: true`（此端點兩者皆接受）。
+- 錯誤對應與其他 provider 相同（401/403、圖片無效的 400、429／5xx、逾時）。
+- 評測：`make ai-eval AI_PROVIDER_FILE=provider.json AI_PROVIDER=openai-responses AI_MODEL=gpt-6-luna AI_SESSION_HEADER=x-opencode-session`。
+
 **評測**：`make ai-eval`（手動，不屬於 CI／`make check`）會對 `eval/cases/*` 的合成圖片跑與正式環境相同的 agent，輸出每案例的名稱 precision／recall、價格完全一致率、token、耗時，並寫出 `eval/report.json`（`AI_REPORT=路徑` 可改，相對於 `backend/`，建議用絕對路徑）。連線設定與伺服器相同（`AI_API_KEY`／`AI_BASE_URL`／`AI_MODEL`／`AI_PROVIDER`…），另有兩個捷徑：
-- `make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=deepseek-v4.1-flash AI_SESSION_HEADER=x-opencode-session`：從 JSON 檔（`{"base_url": "...", "api_key": "..."}`，可選 `model`、`provider`、`session_header`）讀入 `AI_BASE_URL`／`AI_API_KEY`，預設 `AI_PROVIDER=openai-compatible`；金鑰不會印出（`provider.json` 已列入 .gitignore）。在 make 命令列給的 `AI_MODEL`／`AI_PROVIDER` 優先於 `.env`。
+- `make ai-eval AI_PROVIDER_FILE=provider.json AI_MODEL=deepseek-v4.1-flash AI_SESSION_HEADER=x-opencode-session`：從 JSON 檔（`{"base_url": "...", "api_key": "..."}`，可選 `model`、`provider`、`session_header`）讀入 `AI_BASE_URL`／`AI_API_KEY`，預設 `AI_PROVIDER=openai-compatible`（檔內 `provider` 或命令列 `AI_PROVIDER=openai-responses` 可改）；金鑰不會印出（`provider.json` 已列入 .gitignore）。在 make 命令列給的 `AI_MODEL`／`AI_PROVIDER` 優先於 `.env`。
 - 沒有設定 `AI_API_KEY`／`ANTHROPIC_API_KEY` 時，會把 `.env` 或環境中的 `STRATA_API_KEY`／`STRATA_ANTHROPIC_BASE_URL`／`STRATA_MODEL` 對應到 `ANTHROPIC_*`／`AI_MODEL` 並使用 `AI_PROVIDER=anthropic-compatible`。
 
 可加參數：`make ai-eval ARGS="--filter 03 --repeat 3"`。每次執行會呼叫真實模型，請留意費用。
@@ -224,7 +233,7 @@ docker run ...                           # 同樣的 volume 與參數
 - [ ] `TRUSTED_PROXIES` 只包含自己的反向代理；不要填 `0.0.0.0/0`。
 - [ ] 本機管理員密碼夠長且不重複使用；用 CLI 建立，或首次啟動後移除 `ADMIN_PASSWORD`。不需要密碼登入時設 `PASSWORD_LOGIN_ENABLED=false`。
 - [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
-- [ ] 使用非 Claude 的模型時 `AI_PROVIDER=anthropic-compatible`／`openai-compatible`（並設 `AI_BASE_URL`、`AI_MODEL`），且已跑過 `make ai-eval`。
+- [ ] 使用非 Claude 的模型時 `AI_PROVIDER=anthropic-compatible`／`openai-compatible`／`openai-responses`（並設 `AI_BASE_URL`、`AI_MODEL`），且已跑過 `make ai-eval`。
 - [ ] `AI_API_KEY`、Litestream 憑證以 env／secret 管理；Litestream bucket 設為私有並使用最小權限金鑰。
 - [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。
 - [ ] 以單一實例執行，`/data` 為持久 volume。

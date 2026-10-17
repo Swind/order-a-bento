@@ -18,8 +18,9 @@ use infrastructure::identity_repo::SqliteOrganizerRepo;
 use infrastructure::sqlite::{Db, TempDir};
 use serde_json::{Value, json};
 use support::{
-    Mock, Reply, chat_end_turn, chat_reply, chat_tool_call, chat_tool_turn, end_turn, msg, start,
-    start_openai, tool_turn, tool_use,
+    Mock, Reply, chat_end_turn, chat_reply, chat_tool_call, chat_tool_turn, end_turn, msg,
+    responses_call, responses_reasoning, responses_reply, responses_text, start, start_openai,
+    start_responses, tool_turn, tool_use,
 };
 
 const JPEG: &[u8] = &[
@@ -737,6 +738,253 @@ async fn openai_slow_call_reports_a_timeout() {
     let e = env().await;
     let (url, _) = start_openai(vec![Reply::Slow(Duration::from_secs(3))]).await;
     let mut c = oa_config(&url);
+    c.request_timeout = Duration::from_secs(1);
+    let err = RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        AiError::Unavailable {
+            retryable: false,
+            detail: "model call timed out after 1 s".into()
+        }
+    );
+}
+
+fn rs_config(url: &str) -> RigAgentConfig {
+    let mut c = oa_config(url);
+    c.model = "gpt-6-luna".into();
+    c.provider = AiProvider::OpenAiResponses;
+    c
+}
+
+fn rs_happy_script() -> Vec<Reply> {
+    vec![
+        Reply::Message(responses_reply(json!([
+            responses_reasoning("rs_1", "CIPHER1"),
+            responses_call("call_1", "list_vendors", json!({})),
+        ]))),
+        Reply::Message(responses_reply(json!([responses_call(
+            "call_2",
+            "propose_vendor",
+            vendor_args()
+        )]))),
+        Reply::Message(responses_text("已提出阿財排骨便當的菜單。")),
+    ]
+}
+
+#[tokio::test]
+async fn responses_happy_path_request_shape_loop_and_usage() {
+    let e = env().await;
+    let (url, mock) = start_responses(rs_happy_script()).await;
+    let out = RigImportAgent::new(rs_config(&url))
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    assert_eq!(out.summary, "已提出阿財排骨便當的菜單。");
+    assert_eq!(out.model, "gpt-6-luna");
+    assert_eq!(out.usage.input_tokens, 3000);
+    assert_eq!(out.usage.output_tokens, 150);
+    assert_eq!(mock.calls(), 3);
+    let ProposalTarget::Vendor(v) = &e.ctx.snapshot().await.targets[0] else {
+        panic!("vendor target expected")
+    };
+    assert_eq!(v.menu.len(), 2);
+
+    let body = first_body(&mock);
+    assert_eq!(body["model"], "gpt-6-luna");
+    assert_eq!(body["max_output_tokens"], 4096);
+    assert_eq!(body["store"], false);
+    assert!(
+        body["include"]
+            .to_string()
+            .contains("reasoning.encrypted_content")
+    );
+    assert!(body.get("reasoning").is_none() && body.get("previous_response_id").is_none());
+    assert!(
+        body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("data-entry assistant")
+    );
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 6);
+    for t in tools {
+        assert_eq!(t["type"], "function");
+        assert!(t.get("strict").is_none_or(|s| s == false), "{t}");
+        assert_eq!(t["parameters"]["additionalProperties"], false);
+    }
+    // the photo is an input_image data URL next to the text
+    let parts: Vec<&Value> = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().unwrap())
+        .collect();
+    assert!(
+        parts.iter().any(|p| p["type"] == "input_text"
+            && p["text"].as_str().unwrap().contains("Mode hint: vendor"))
+    );
+    let img = parts
+        .iter()
+        .find(|p| p["type"] == "input_image")
+        .expect("image part");
+    let data_url = img["image_url"].as_str().unwrap();
+    assert!(
+        data_url.starts_with("data:image/jpeg;base64,/9j/"),
+        "{data_url}"
+    );
+
+    let h = mock.headers.lock().unwrap()[0].clone();
+    assert_eq!(h["authorization"], "Bearer oa-test-key");
+
+    // second request: the reasoning item (with its ciphertext), the call, then its output
+    let bodies = mock.bodies.lock().unwrap();
+    let items = bodies[1]["input"].as_array().unwrap();
+    let reasoning = items
+        .iter()
+        .find(|i| i["type"] == "reasoning")
+        .expect("reasoning replayed");
+    assert_eq!(reasoning["encrypted_content"], "CIPHER1");
+    let call_pos = items
+        .iter()
+        .position(|i| i["type"] == "function_call")
+        .unwrap();
+    assert_eq!(items[call_pos]["call_id"], "call_1");
+    let out_item = items
+        .iter()
+        .find(|i| i["type"] == "function_call_output")
+        .unwrap();
+    assert_eq!(out_item["call_id"], "call_1");
+    assert!(out_item["output"].is_string());
+    assert!(items.iter().position(|i| i["type"] == "reasoning").unwrap() < call_pos);
+    assert_eq!(bodies[1]["store"], false);
+}
+
+#[tokio::test]
+async fn responses_base_url_may_end_in_v1() {
+    for suffix in ["", "/", "/v1", "/v1/"] {
+        let e = env().await;
+        let (url, mock) = start_responses(rs_happy_script()).await;
+        RigImportAgent::new(rs_config(&format!("{url}{suffix}")))
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap_or_else(|err| panic!("{suffix:?}: {err:?}"));
+        assert_eq!(mock.calls(), 3, "{suffix:?}");
+    }
+}
+
+#[tokio::test]
+async fn responses_opt_in_strict_tools_and_reasoning_effort() {
+    let e = env().await;
+    let (url, mock) = start_responses(rs_happy_script()).await;
+    let mut c = rs_config(&url);
+    c.strict_tools = true;
+    c.reasoning = AiReasoning::Low;
+    RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let body = first_body(&mock);
+    assert_eq!(body["reasoning"]["effort"], "low");
+    for t in body["tools"].as_array().unwrap() {
+        assert_eq!(t["strict"], true, "{t}");
+    }
+}
+
+#[tokio::test]
+async fn responses_sends_session_and_extra_headers() {
+    let e = env().await;
+    let (url, mock) = start_responses(rs_happy_script()).await;
+    let mut c = rs_config(&url);
+    c.session_header = Some("x-opencode-session".into());
+    c.extra_headers = vec![ExtraHeader {
+        name: "x-team".into(),
+        value: "bento".into(),
+    }];
+    RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let headers = mock.headers.lock().unwrap();
+    let sess = headers[0]["x-opencode-session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(sess, e.ctx.run_id.to_string());
+    for h in headers.iter() {
+        assert_eq!(h["x-opencode-session"], sess.as_str());
+        assert_eq!(h["x-team"], "bento");
+    }
+}
+
+#[tokio::test]
+async fn responses_content_filter_maps_to_refused_and_keeps_usage() {
+    let e = env().await;
+    let mut r = responses_reply(json!([]));
+    r["status"] = json!("incomplete");
+    r["incomplete_details"] = json!({ "reason": "content_filter" });
+    let (url, _) = start_responses(vec![Reply::Message(r)]).await;
+    let err = RigImportAgent::new(rs_config(&url))
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap_err();
+    assert_eq!(err, AiError::Refused { category: None });
+    assert_eq!(e.ctx.usage().input_tokens, 1000);
+}
+
+#[tokio::test]
+async fn responses_error_statuses_map_to_ai_errors() {
+    let run = |reply: Reply| async move {
+        let e = env().await;
+        let (url, _) = start_responses(vec![reply]).await;
+        RigImportAgent::new(rs_config(&url))
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap_err()
+    };
+    match run(Reply::Raw(
+        401,
+        json!({ "error": { "type": "server_error", "message": "Upstream request failed: Invalid credential" } }),
+    ))
+    .await
+    {
+        AiError::Unavailable { retryable, detail } => {
+            assert!(!retryable);
+            assert!(detail.contains("authentication failed"), "{detail}");
+            assert!(!detail.contains("Invalid credential") && !detail.contains("oa-test-key"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    // the exact error text of the opencode Go endpoint for an undecodable image
+    let err = run(Reply::Raw(
+        400,
+        json!({ "model": "gpt-6-luna", "error": { "message": "The image data you provided does not represent a valid image. Please check your input and try again with one of the supported image formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].",
+            "type": "invalid_request_error", "param": "input", "code": "invalid_value" } }),
+    ))
+    .await;
+    assert!(matches!(err, AiError::InvalidImage(_)), "{err:?}");
+    for status in [429, 500, 503] {
+        match run(Reply::Error(status, "server_error")).await {
+            AiError::Unavailable { retryable, .. } => assert!(retryable, "{status}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_slow_call_reports_a_timeout() {
+    let e = env().await;
+    let (url, _) = start_responses(vec![Reply::Slow(Duration::from_secs(3))]).await;
+    let mut c = rs_config(&url);
     c.request_timeout = Duration::from_secs(1);
     let err = RigImportAgent::new(c)
         .unwrap()
