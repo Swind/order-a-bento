@@ -15,10 +15,10 @@ use rig::AgentBuilder;
 use rig::agent::{AgentHook, HookContext, ModelTurnAction, ModelTurnFinished};
 use rig::completion::{Effort, Reasoning};
 use rig::message::{ImageMediaType, UserContent};
-use rig::providers::anthropic::AnthropicConfig;
 use rig::providers::anthropic::extension::{
     AnthropicOptions, Fallbacks, SERVER_SIDE_FALLBACK_BETA,
 };
+use rig::providers::anthropic::{ANTHROPIC, AnthropicConfig, Dialect, Quirks};
 
 use super::tools::add_import_tools;
 
@@ -26,8 +26,37 @@ use super::tools::add_import_tools;
 const MAX_TOKENS: u64 = 4096;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Which Messages-API server the agent talks to (`AI_PROVIDER`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiProvider {
+    /// Anthropic's own API: Claude defaults (strict tools, effort, fallbacks).
+    #[default]
+    Anthropic,
+    /// A gateway that speaks the Messages API in front of another model
+    /// (vLLM, LiteLLM, a self-hosted Qwen ...). Sends the plain subset: no
+    /// fallbacks beta, and strict tools / effort only when asked for. Thinking
+    /// blocks with an empty signature are replayed as thinking, as such
+    /// servers return them.
+    AnthropicCompatible,
+}
+
+/// Reasoning request sent with every model call (`AI_REASONING`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiReasoning {
+    /// `output_config.effort = "low"` (and adaptive thinking, which rig adds
+    /// with its beta header).
+    #[default]
+    Low,
+    /// Nothing: the server's default reasoning behaviour.
+    Off,
+}
+
 #[derive(Clone)]
 pub struct RigAgentConfig {
+    pub provider: AiProvider,
+    /// Send `strict: true` tool schemas (`AI_STRICT_TOOLS`).
+    pub strict_tools: bool,
+    pub reasoning: AiReasoning,
     pub api_key: String,
     /// Override of the API origin (tests, gateways); `None` = Anthropic.
     pub base_url: Option<String>,
@@ -44,6 +73,9 @@ pub struct RigAgentConfig {
 impl RigAgentConfig {
     pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
+            provider: AiProvider::Anthropic,
+            strict_tools: true,
+            reasoning: AiReasoning::Low,
             api_key: api_key.into(),
             base_url: None,
             model: model.into(),
@@ -58,6 +90,9 @@ impl RigAgentConfig {
 impl std::fmt::Debug for RigAgentConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RigAgentConfig")
+            .field("provider", &self.provider)
+            .field("strict_tools", &self.strict_tools)
+            .field("reasoning", &self.reasoning)
             .field("api_key", &"<redacted>")
             .field("base_url", &self.base_url)
             .field("model", &self.model)
@@ -227,12 +262,25 @@ impl ImportAgent for RigImportAgent {
         if let Some(url) = &cfg.base_url {
             provider = provider.with_base_url(url);
         }
-        if cfg.fallbacks {
+        // Fallbacks are an Anthropic-only feature.
+        let fallbacks = cfg.fallbacks && cfg.provider == AiProvider::Anthropic;
+        if cfg.provider == AiProvider::AnthropicCompatible {
+            let mut quirks = Quirks::gateway();
+            quirks.unsigned_thinking = true;
+            quirks.strict_tool_schemas = cfg.strict_tools;
+            provider.dialect = Dialect {
+                quirks,
+                ..ANTHROPIC
+            };
+        }
+        if fallbacks {
             provider = provider.with_beta(SERVER_SIDE_FALLBACK_BETA);
         }
         let client = provider.connect(rig::http_client::ReqwestClient::from(self.http.clone()));
         let mut model = client.completion(cfg.model.as_str());
-        model.wire = model.wire.with_strict_tools();
+        if cfg.strict_tools {
+            model.wire = model.wire.with_strict_tools();
+        }
 
         let seen = Arc::new(Mutex::new(Seen::default()));
         let hook = TurnHook {
@@ -241,11 +289,13 @@ impl ImportAgent for RigImportAgent {
         };
         let mut builder = AgentBuilder::new(model)
             .preamble(import_agent_system_prompt())
-            .reasoning(Reasoning::Effort(Effort::Low))
             .max_tokens(MAX_TOKENS)
             .default_max_turns(cfg.max_turns)
             .add_hook(hook);
-        if cfg.fallbacks {
+        if cfg.reasoning == AiReasoning::Low {
+            builder = builder.reasoning(Reasoning::Effort(Effort::Low));
+        }
+        if fallbacks {
             builder =
                 builder.provider_option(AnthropicOptions::default().fallbacks(Fallbacks::Default));
         }

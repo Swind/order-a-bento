@@ -1,0 +1,71 @@
+{
+  "kind": "vendor",
+  "description": "Decorative flyer: slogans, hours, two phone numbers, LINE id, add-on prices and promos must not become menu items.",
+  "vendor": {
+    "name": "小林便當店",
+    "phone": "0800-123-456",
+    "address": "新北市板橋區文化路二段88號",
+    "note_forbidden": ["開幕", "創立", "八折", "新客"]
+  },
+  "menu": [
+    {
+      "name": "招牌雞腿飯",
+      "price": 110,
+      "category": "主餐"
+    },
+    {
+      "name": "紅燒獅子頭飯",
+      "price": 95,
+      "category": "主餐"
+    },
+    {
+      "name": "蒜泥白肉飯",
+      "price": 100,
+      "category": "主餐"
+    },
+    {
+      "name": "三杯雞飯",
+      "price": 105,
+      "category": "主餐"
+    },
+    {
+      "name": "滷肉飯",
+      "price": 45,
+      "category": "主餐"
+    },
+    {
+      "name": "貢丸湯",
+      "price": 35,
+      "category": "小菜・湯"
+    },
+    {
+      "name": "燙青菜",
+      "price": 40,
+      "category": "小菜・湯"
+    },
+    {
+      "name": "滷蛋",
+      "price": 15,
+      "category": "小菜・湯"
+    },
+    {
+      "name": "涼拌小黃瓜",
+      "price": 40,
+      "category": "小菜・湯"
+    }
+  ],
+  "forbidden": [
+    "0800",
+    "0912",
+    "新北",
+    "LINE",
+    "加飯",
+    "加蛋",
+    "營業",
+    "開幕",
+    "外送",
+    "創立",
+    "團購",
+    "新客"
+  ]
+}

@@ -70,7 +70,10 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `AI_MODEL` | `claude-opus-5-5` | 使用的模型 |
 | `AI_MAX_TURNS` | `8` | 每次匯入最多呼叫模型次數 |
 | `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者每日匯入次數上限 |
-| `AI_FALLBACKS` | `default` | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉 |
+| `AI_PROVIDER` | `anthropic` | `anthropic`＝Anthropic 官方 API（Claude 預設值）；`anthropic-compatible`＝相容 Messages API 的 gateway 後面接其他模型（見下方「改用 Anthropic 相容 gateway」） |
+| `AI_FALLBACKS` | `default`（`anthropic-compatible` 為 `off`） | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉。fallback 是 Anthropic 專屬功能，`anthropic-compatible` 設 `default` 會拒絕啟動 |
+| `AI_STRICT_TOOLS` | `true`（`anthropic-compatible` 為 `false`） | 是否送出 `strict: true` 的 tool schema |
+| `AI_REASONING` | `low`（`anthropic-compatible` 為 `off`） | `low`＝送 `output_config.effort=low` 與 adaptive thinking；`off`＝不送任何 reasoning 參數 |
 | `AI_DEMO` | `false` | 腳本化假資料，僅限開發；production 拒絕啟動 |
 | `SESSION_TTL_DAYS` | `14` | 登入 session 有效天數（過半後滑動延長） |
 | `TRUSTED_PROXIES` | 空 | 可信反向代理 IP／CIDR（逗號分隔，如 `127.0.0.1,172.16.0.0/12`）。僅來自這些位址的連線才採信 `X-Forwarded-For`；**放在反向代理後面時必須設定**，否則所有人的 IP 都會是代理的 IP，且公開端點的 rate limit 會共用同一桶 |
@@ -86,6 +89,27 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | 空 | bucket 憑證 |
 
 清除 ClientInfo 的依據是 `group_orders.closed_at`（關閉時寫入；封存只能從已關閉狀態進行且保留 `closed_at`；重新開啟會清空 `closed_at`）。因此「開放中」與「重新開啟」的團不會被清除，已關閉／已封存且關閉時間早於保存期限的團會被清除。訂單內容、備註與品項明細不受影響。
+
+### 改用 Anthropic 相容 gateway（非 Claude 模型）
+
+AI 匯入走 Anthropic Messages API（`POST {ANTHROPIC_BASE_URL}/v1/messages`）。若有 gateway 在前面提供同樣的介面、後面接別的模型（例如自架 vLLM／LiteLLM 上的 Qwen），不需改程式，只要設定：
+
+```sh
+-e AI_PROVIDER=anthropic-compatible \
+-e ANTHROPIC_BASE_URL=https://gateway.example.com \   # 不含 /v1/messages
+-e ANTHROPIC_API_KEY=... \
+-e AI_MODEL=<gateway 上的模型名稱> \
+```
+
+`anthropic-compatible` 只送 Messages API 的基本子集：不帶 server-side fallback 的 beta header 與 `fallbacks` 欄位、不送 `strict` tool schema、不送 `output_config`／`thinking`；gateway 回傳的 `thinking` 區塊（`signature` 為空字串）會在下一輪原樣送回。若 gateway 確定支援，可用 `AI_STRICT_TOOLS=true`、`AI_REASONING=low` 個別開啟。不合法的組合（`anthropic-compatible` + `AI_FALLBACKS=default`）會在啟動時拒絕。
+
+注意事項：
+- 模型必須支援**圖片輸入**與 **tool use**；否則匯入會失敗或回傳空提案。
+- gateway 若放在 Cloudflare 等 WAF 後面，可能擋掉非瀏覽器的請求（`403 error code: 1010`）；請對後端伺服器的出口 IP 放行。
+- 錯誤會以 Anthropic 格式（`{"error":{"type":...}}`）回傳；401/403 顯示為「authentication failed」，5xx／連線錯誤視為可重試。
+- 換模型後建議先用 `make ai-eval` 跑一次評測（見下）；較小的量化模型可能漏列、改寫標點，開團者的確認畫面仍是最後防線。
+
+**評測**：`make ai-eval`（手動，不屬於 CI／`make check`）會對 `eval/cases/*` 的合成圖片跑與正式環境相同的 agent，輸出每案例的名稱 precision／recall、價格完全一致率、token、耗時，並寫出 `eval/report.json`。沒有設定 `ANTHROPIC_API_KEY` 時，會把 `.env` 或環境中的 `STRATA_API_KEY`／`STRATA_ANTHROPIC_BASE_URL`／`STRATA_MODEL` 對應到 `ANTHROPIC_*`／`AI_MODEL` 並使用 `AI_PROVIDER=anthropic-compatible`。可加參數：`make ai-eval ARGS="--filter 03 --repeat 3"`。每次執行會呼叫真實模型，請留意費用。
 
 ## 5. 執行
 
@@ -172,6 +196,7 @@ docker run ...                           # 同樣的 volume 與參數
 - [ ] `TRUSTED_PROXIES` 只包含自己的反向代理；不要填 `0.0.0.0/0`。
 - [ ] 本機管理員密碼夠長且不重複使用；用 CLI 建立，或首次啟動後移除 `ADMIN_PASSWORD`。不需要密碼登入時設 `PASSWORD_LOGIN_ENABLED=false`。
 - [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
+- [ ] 使用非 Claude 的 gateway 時 `AI_PROVIDER=anthropic-compatible`，且已跑過 `make ai-eval`。
 - [ ] `ANTHROPIC_API_KEY`、Litestream 憑證以 env／secret 管理；Litestream bucket 設為私有並使用最小權限金鑰。
 - [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。
 - [ ] 以單一實例執行，`/data` 為持久 volume。

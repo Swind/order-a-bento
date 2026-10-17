@@ -1,0 +1,34 @@
+{
+  "kind": "roster",
+  "description": "Roster photo uploaded into an existing roster that already has two of the four people (one with a note); existing names must be reused, not duplicated.",
+  "mode_hint": "roster",
+  "target_seeded": true,
+  "seed": {
+    "roster": {
+      "name": "專案組",
+      "members": [
+        {
+          "name": "王大明",
+          "note": "PM"
+        },
+        {
+          "name": "李小華"
+        }
+      ]
+    }
+  },
+  "members": [
+    {
+      "name": "王大明"
+    },
+    {
+      "name": "李小華"
+    },
+    {
+      "name": "趙子龍"
+    },
+    {
+      "name": "孫尚香"
+    }
+  ]
+}

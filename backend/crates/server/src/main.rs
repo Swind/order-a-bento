@@ -54,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("password login is disabled (PASSWORD_LOGIN_ENABLED=false)");
     }
     match config.ai_mode() {
-        AiMode::Anthropic => tracing::info!(model = %config.ai_model, "AI import: Anthropic"),
+        AiMode::Anthropic => tracing::info!(
+            model = %config.ai_model,
+            provider = ?config.ai_provider,
+            "AI import: Anthropic Messages API"
+        ),
         AiMode::Demo => tracing::warn!("AI import runs on scripted DEMO data (AI_DEMO=true)"),
         AiMode::Disabled => {
             tracing::info!(

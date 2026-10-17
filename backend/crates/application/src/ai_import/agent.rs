@@ -24,6 +24,8 @@ pub struct ImportToolContext {
     /// Token usage reported so far (all attempts). Agents add to it as turns
     /// finish so that a failed or timed-out run still has its usage.
     usage: std::sync::Mutex<Usage>,
+    /// Model calls finished so far (one per [`Self::add_usage`]).
+    turns: std::sync::atomic::AtomicU32,
     /// Tool calls made so far, as `{ "name", "args" }` (debug log).
     tool_calls: std::sync::Mutex<Vec<serde_json::Value>>,
 }
@@ -44,6 +46,7 @@ impl ImportToolContext {
             clock,
             proposal: tokio::sync::Mutex::new(Proposal::default()),
             usage: std::sync::Mutex::new(Usage::default()),
+            turns: std::sync::atomic::AtomicU32::new(0),
             tool_calls: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -53,6 +56,13 @@ impl ImportToolContext {
         let mut g = self.usage.lock().unwrap_or_else(|e| e.into_inner());
         g.input_tokens += u.input_tokens;
         g.output_tokens += u.output_tokens;
+        self.turns
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Model calls finished so far (all attempts).
+    pub fn turns(&self) -> u32 {
+        self.turns.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Usage reported through [`Self::add_usage`] (all attempts).

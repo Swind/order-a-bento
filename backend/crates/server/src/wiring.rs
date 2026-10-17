@@ -47,6 +47,19 @@ pub fn google_provider(config: &Config) -> anyhow::Result<Option<Arc<dyn Identit
     }
 }
 
+/// The rig agent settings for `config` (`AI_*`, `ANTHROPIC_*`). `None` without an API key.
+pub fn rig_agent_config(config: &Config) -> Option<RigAgentConfig> {
+    let key = config.anthropic_api_key.clone()?;
+    let mut cfg = RigAgentConfig::new(key, config.ai_model.clone());
+    cfg.base_url = config.anthropic_base_url.clone();
+    cfg.max_turns = config.ai_max_turns as usize;
+    cfg.provider = config.ai_provider;
+    cfg.fallbacks = config.ai_fallbacks;
+    cfg.strict_tools = config.ai_strict_tools;
+    cfg.reasoning = config.ai_reasoning;
+    Some(cfg)
+}
+
 /// The AI import service for the configured mode (`None` = AI disabled), and
 /// whether it runs the scripted demo agent.
 pub fn ai_import_service(
@@ -57,14 +70,7 @@ pub fn ai_import_service(
         AiMode::Disabled => return Ok(None),
         AiMode::Demo => (Arc::new(DemoImportAgent::default()), true),
         AiMode::Anthropic => {
-            let key = config
-                .anthropic_api_key
-                .clone()
-                .context("ANTHROPIC_API_KEY")?;
-            let mut cfg = RigAgentConfig::new(key, config.ai_model.clone());
-            cfg.base_url = config.anthropic_base_url.clone();
-            cfg.max_turns = config.ai_max_turns as usize;
-            cfg.fallbacks = config.ai_fallbacks;
+            let cfg = rig_agent_config(config).context("ANTHROPIC_API_KEY")?;
             let agent = RigImportAgent::new(cfg).map_err(|e| anyhow::anyhow!(e))?;
             (Arc::new(agent), false)
         }

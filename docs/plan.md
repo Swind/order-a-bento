@@ -130,8 +130,8 @@
 | T5.1 | ✅ 驗收通過 | 218 個後端測試；維護工作（session、ClientInfo 90 天、卡住的 AI run）；Litestream v0.3.13；docker 實跑 non-root、production+DEV_LOGIN 拒絕啟動（真實 S3 備份還原未測） |
 | T5.3a | ✅ 驗收通過 | 111 個前端測試；bundle 865 kB → 最大 chunk 262 kB；瀏覽器實測 toast 在標題列下方、下單頁隱私告知露出於 sticky bar 上方 |
 | T5.2 | ✅ 驗收通過 | 5 個 spec、mobile+desktop 共 7 個測試，連跑 3 次全過（約 5 秒）；CI 加 e2e job（workflow 本身尚未在 GitHub 執行過） |
-| T4.4 | 🔄 進行中 | 以使用者提供的 Strata 閘道（Qwen）跑 eval；合成測試圖 6 組 |
+| T4.4 | ✅ 驗收通過 | `make ai-eval`；7 組合成測試圖（名單、傳單、雜亂傳單、提示注入、非菜單、既有名單）對 Strata（qwen3.8-flash）7/7 PASS，平均 15 秒、約 1 萬 input tokens；prompt 補 3 條規則（核對總人數、note 不放廣告、分類原樣抄）。真實手機照片與 Claude 尚未跑 |
 | T5.3b | ✅ 驗收通過 | 歷史與明細 API 加 itemId；代為修改改以 itemId 對應 |
 | T2.4 | ✅ 驗收通過 | 151 個後端測試；XSS 跳脫測試、未知與格式錯誤 token 輸出相同；完整流程待與 T2.3 一起以瀏覽器驗 |
 | T6.1 | ✅ 驗收通過 | 241 個後端、116 個前端測試、E2E 8 個；實測 CLI 結束碼（3 無效／4 已存在／5 找不到）、ADMIN_* 啟動建帳號、Google 關閉時 503、錯誤統一 401、第 7 次起 429、log 無密碼；0002 migration 以含資料的舊 DB 測過 |
-| T6.2 | 🔄 進行中 | 與 T4.4 同一個 subagent |
+| T6.2 | ✅ 驗收通過 | `AI_PROVIDER=anthropic-compatible`、`AI_STRICT_TOOLS`、`AI_REASONING`；Strata 實測接受所有 Claude 參數，相容模式預設送最小子集；252 個後端測試 |

@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use infrastructure::ai::{AiProvider, AiReasoning};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnv {
     Development,
@@ -63,8 +65,15 @@ pub struct Config {
     pub ai_model: String,
     pub ai_daily_quota_per_user: u32,
     pub ai_max_turns: u32,
+    /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible`).
+    pub ai_provider: AiProvider,
     /// `AI_FALLBACKS` (`default` | `off`): server-side model fallback on refusals.
+    /// Anthropic only; defaults to on there and off for other providers.
     pub ai_fallbacks: bool,
+    /// `AI_STRICT_TOOLS`: strict tool schemas (default: on for `anthropic`, off otherwise).
+    pub ai_strict_tools: bool,
+    /// `AI_REASONING` (`low` | `off`; default: `low` for `anthropic`, `off` otherwise).
+    pub ai_reasoning: AiReasoning,
     /// `AI_DEMO`: scripted demo agent when no API key is set (never in production).
     pub ai_demo: bool,
     pub session_ttl_days: u32,
@@ -188,14 +197,50 @@ impl Config {
             }
         };
         let ai_demo = boolean("AI_DEMO")?;
+        let ai_provider = match get("AI_PROVIDER").map(str::to_ascii_lowercase).as_deref() {
+            None | Some("anthropic") => AiProvider::Anthropic,
+            Some("anthropic-compatible") => AiProvider::AnthropicCompatible,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    key: "AI_PROVIDER",
+                    value: other.to_owned(),
+                    reason: "expected anthropic or anthropic-compatible",
+                });
+            }
+        };
+        let claude = ai_provider == AiProvider::Anthropic;
         let ai_fallbacks = match get("AI_FALLBACKS").map(str::to_ascii_lowercase).as_deref() {
-            None | Some("default") => true,
+            None => claude,
             Some("off") => false,
+            Some("default") if claude => true,
+            Some("default") => {
+                return Err(ConfigError::Invalid {
+                    key: "AI_FALLBACKS",
+                    value: "default".to_owned(),
+                    reason: "server-side fallbacks exist only with AI_PROVIDER=anthropic",
+                });
+            }
             Some(other) => {
                 return Err(ConfigError::Invalid {
                     key: "AI_FALLBACKS",
                     value: other.to_owned(),
                     reason: "expected default or off",
+                });
+            }
+        };
+        let ai_strict_tools = match get("AI_STRICT_TOOLS") {
+            None => claude,
+            Some(_) => boolean("AI_STRICT_TOOLS")?,
+        };
+        let ai_reasoning = match get("AI_REASONING").map(str::to_ascii_lowercase).as_deref() {
+            None if claude => AiReasoning::Low,
+            None | Some("off") => AiReasoning::Off,
+            Some("low") => AiReasoning::Low,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    key: "AI_REASONING",
+                    value: other.to_owned(),
+                    reason: "expected low or off",
                 });
             }
         };
@@ -254,7 +299,10 @@ impl Config {
                 30,
             )?,
             ai_max_turns: num(get("AI_MAX_TURNS"), "AI_MAX_TURNS", 8)?,
+            ai_provider,
             ai_fallbacks,
+            ai_strict_tools,
+            ai_reasoning,
             ai_demo,
             session_ttl_days: num(get("SESSION_TTL_DAYS"), "SESSION_TTL_DAYS", 14)?,
             trusted_proxies: get("TRUSTED_PROXIES")
@@ -535,6 +583,64 @@ mod tests {
             let err = Config::from_map(&env(&kv)).unwrap_err();
             assert!(!err.to_string().contains("long enough pw"));
             assert!(!err.to_string().contains("short\""));
+        }
+    }
+
+    #[test]
+    fn ai_provider_options_and_defaults() {
+        let m = |kv: &[(&str, &str)]| -> HashMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // Claude defaults are unchanged
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert_eq!(c.ai_provider, AiProvider::Anthropic);
+        assert!(c.ai_fallbacks && c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Low);
+
+        // a compatible gateway gets the plain subset by default
+        let c = Config::from_map(&m(&[("AI_PROVIDER", "Anthropic-Compatible")])).unwrap();
+        assert_eq!(c.ai_provider, AiProvider::AnthropicCompatible);
+        assert!(!c.ai_fallbacks && !c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Off);
+
+        // ... with individual opt-ins
+        let c = Config::from_map(&m(&[
+            ("AI_PROVIDER", "anthropic-compatible"),
+            ("AI_STRICT_TOOLS", "true"),
+            ("AI_REASONING", "low"),
+            ("AI_FALLBACKS", "off"),
+        ]))
+        .unwrap();
+        assert!(c.ai_strict_tools && !c.ai_fallbacks);
+        assert_eq!(c.ai_reasoning, AiReasoning::Low);
+
+        // ... and each can be switched off on Anthropic
+        let c =
+            Config::from_map(&m(&[("AI_STRICT_TOOLS", "false"), ("AI_REASONING", "off")])).unwrap();
+        assert!(!c.ai_strict_tools);
+        assert_eq!(c.ai_reasoning, AiReasoning::Off);
+
+        // invalid combinations and values
+        let err = Config::from_map(&m(&[
+            ("AI_PROVIDER", "anthropic-compatible"),
+            ("AI_FALLBACKS", "default"),
+        ]))
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                key: "AI_FALLBACKS",
+                ..
+            }
+        ));
+        for (k, v) in [
+            ("AI_PROVIDER", "openai"),
+            ("AI_REASONING", "high"),
+            ("AI_STRICT_TOOLS", "maybe"),
+        ] {
+            assert!(Config::from_map(&m(&[(k, v)])).is_err(), "{k}={v}");
         }
     }
 

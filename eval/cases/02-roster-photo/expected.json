@@ -1,0 +1,39 @@
+{
+  "kind": "roster",
+  "description": "Rotated, low-contrast photo of a sign-in sheet; mixed English and Chinese names, one struck-out name, tick marks and a header that must not become members.",
+  "members": [
+    {
+      "name": "Amy 林美玲"
+    },
+    {
+      "name": "Kevin"
+    },
+    {
+      "name": "陳大文"
+    },
+    {
+      "name": "Jason Wu"
+    },
+    {
+      "name": "小芳"
+    },
+    {
+      "name": "Linda"
+    },
+    {
+      "name": "阿傑"
+    },
+    {
+      "name": "Peter 張"
+    },
+    {
+      "name": "Emily"
+    }
+  ],
+  "forbidden": [
+    "簽到",
+    "午餐",
+    "打勾",
+    "✓"
+  ]
+}

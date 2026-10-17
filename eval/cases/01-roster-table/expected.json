@@ -1,0 +1,66 @@
+{
+  "kind": "roster",
+  "description": "Clean printed roster table with department and extension columns; notes should carry the department.",
+  "members": [
+    {
+      "name": "王小明",
+      "note_contains": [
+        "業務部"
+      ]
+    },
+    {
+      "name": "林美玲",
+      "note_contains": [
+        "行銷部"
+      ]
+    },
+    {
+      "name": "陳志豪",
+      "note_contains": [
+        "研發部"
+      ]
+    },
+    {
+      "name": "張雅婷",
+      "note_contains": [
+        "研發部"
+      ]
+    },
+    {
+      "name": "黃建宏",
+      "note_contains": [
+        "財務部"
+      ]
+    },
+    {
+      "name": "李佳穎",
+      "note_contains": [
+        "人資部"
+      ]
+    },
+    {
+      "name": "吳宗翰",
+      "note_contains": [
+        "業務部"
+      ]
+    },
+    {
+      "name": "劉怡君",
+      "note_contains": [
+        "行銷部"
+      ]
+    },
+    {
+      "name": "蔡明哲",
+      "note_contains": [
+        "研發部"
+      ]
+    },
+    {
+      "name": "楊淑芬",
+      "note_contains": [
+        "總務部"
+      ]
+    }
+  ]
+}

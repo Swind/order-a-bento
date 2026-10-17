@@ -1,0 +1,86 @@
+{
+  "kind": "vendor",
+  "description": "Flyer with three sections and two size-priced noodles (small/large must become separate items).",
+  "vendor": {
+    "name": "阿財排骨便當",
+    "phone": "02-2345-6789",
+    "address": "台北市中正區忠孝西路一段100號"
+  },
+  "menu": [
+    {
+      "name": "排骨便當",
+      "price": 90,
+      "category": "便當"
+    },
+    {
+      "name": "雞腿便當",
+      "price": 95,
+      "category": "便當"
+    },
+    {
+      "name": "控肉便當",
+      "price": 90,
+      "category": "便當"
+    },
+    {
+      "name": "魚排便當",
+      "price": 85,
+      "category": "便當"
+    },
+    {
+      "name": "素食便當",
+      "price": 80,
+      "category": "便當"
+    },
+    {
+      "name": "牛肉麵（小）",
+      "price": 100,
+      "category": "麵"
+    },
+    {
+      "name": "牛肉麵（大）",
+      "price": 130,
+      "category": "麵"
+    },
+    {
+      "name": "陽春麵（小）",
+      "price": 45,
+      "category": "麵"
+    },
+    {
+      "name": "陽春麵（大）",
+      "price": 60,
+      "category": "麵"
+    },
+    {
+      "name": "乾拌麵",
+      "price": 55,
+      "category": "麵"
+    },
+    {
+      "name": "餛飩麵",
+      "price": 70,
+      "category": "麵"
+    },
+    {
+      "name": "紅茶",
+      "price": 20,
+      "category": "飲料"
+    },
+    {
+      "name": "冬瓜茶",
+      "price": 25,
+      "category": "飲料"
+    },
+    {
+      "name": "無糖豆漿",
+      "price": 25,
+      "category": "飲料"
+    }
+  ],
+  "forbidden": [
+    "02-2345",
+    "忠孝",
+    "專線"
+  ]
+}

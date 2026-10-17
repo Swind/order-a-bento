@@ -10,7 +10,9 @@ use application::ports::OrganizerRepo;
 use domain::ai_import::{ImportMode, ImportRunId, ProposalTarget};
 use domain::identity::{Organizer, OrganizerId};
 use domain::shared::SystemClock;
-use infrastructure::ai::{RigAgentConfig, RigImportAgent, import_tools_parameters};
+use infrastructure::ai::{
+    AiProvider, AiReasoning, RigAgentConfig, RigImportAgent, import_tools_parameters,
+};
 use infrastructure::directory_repo::{SqliteRosterRepo, SqliteVendorRepo};
 use infrastructure::identity_repo::SqliteOrganizerRepo;
 use infrastructure::sqlite::{Db, TempDir};
@@ -199,6 +201,111 @@ async fn no_fallbacks_when_off() {
         .unwrap_or("")
         .to_string();
     assert!(!beta.contains("server-side-fallback"));
+}
+
+fn compat_agent(url: &str, strict: bool, reasoning: AiReasoning) -> RigImportAgent {
+    let mut c = RigAgentConfig::new("gw-test-key", "qwen-test");
+    c.base_url = Some(url.to_string());
+    c.provider = AiProvider::AnthropicCompatible;
+    c.strict_tools = strict;
+    c.reasoning = reasoning;
+    // even a stray `true` must not leak the Anthropic-only feature
+    c.fallbacks = true;
+    c.request_timeout = Duration::from_secs(5);
+    RigImportAgent::new(c).unwrap()
+}
+
+fn beta_header(mock: &Mock) -> String {
+    mock.headers.lock().unwrap()[0]
+        .get("anthropic-beta")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tokio::test]
+async fn compatible_provider_sends_the_plain_subset() {
+    let e = env().await;
+    let (url, mock) = start(happy_script()).await;
+    compat_agent(&url, false, AiReasoning::Off)
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let body = first_body(&mock);
+    assert_eq!(body["model"], "qwen-test");
+    assert!(body.get("fallbacks").is_none());
+    assert!(body.get("output_config").is_none(), "{body}");
+    assert!(body.get("thinking").is_none(), "{body}");
+    assert_eq!(beta_header(&mock), "");
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 6);
+    for t in tools {
+        assert!(t.get("strict").is_none(), "tool {} strict", t["name"]);
+        // our own schema is closed anyway
+        assert_eq!(t["input_schema"]["additionalProperties"], false);
+    }
+    assert_eq!(mock.headers.lock().unwrap()[0]["x-api-key"], "gw-test-key");
+    // the image still goes as a base64 block
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert!(content.iter().any(|c| c["type"] == "image"));
+}
+
+#[tokio::test]
+async fn compatible_provider_opt_in_strict_and_effort() {
+    let e = env().await;
+    let (url, mock) = start(happy_script()).await;
+    compat_agent(&url, true, AiReasoning::Low)
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    let body = first_body(&mock);
+    assert_eq!(body["output_config"]["effort"], "low");
+    assert!(body.get("fallbacks").is_none());
+    assert!(!beta_header(&mock).contains("server-side-fallback"));
+    for t in body["tools"].as_array().unwrap() {
+        assert_eq!(t["strict"], true);
+    }
+}
+
+#[tokio::test]
+async fn compatible_provider_replays_unsigned_thinking() {
+    let e = env().await;
+    let (url, mock) = start(vec![
+        Reply::Message(tool_turn(vec![
+            json!({ "type": "thinking", "thinking": "need the vendors", "signature": "" }),
+            tool_use("toolu_01", "list_vendors", json!({})),
+        ])),
+        Reply::Message(end_turn("沒有可匯入的內容。")),
+    ])
+    .await;
+    let out = compat_agent(&url, false, AiReasoning::Off)
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap();
+    assert_eq!(out.summary, "沒有可匯入的內容。");
+    let second = mock.bodies.lock().unwrap()[1].clone();
+    let assistant = second["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("assistant turn replayed");
+    let blocks = assistant["content"].as_array().unwrap();
+    assert!(
+        blocks
+            .iter()
+            .any(|b| b["type"] == "thinking" && b["thinking"] == "need the vendors"),
+        "{assistant}"
+    );
+    assert!(blocks.iter().any(|b| b["type"] == "tool_use"));
+}
+
+#[tokio::test]
+async fn anthropic_provider_is_unchanged_by_the_new_options() {
+    let c = RigAgentConfig::new("k", "m");
+    assert_eq!(c.provider, AiProvider::Anthropic);
+    assert!(c.strict_tools && c.fallbacks);
+    assert_eq!(c.reasoning, AiReasoning::Low);
 }
 
 #[tokio::test]

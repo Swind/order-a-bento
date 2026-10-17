@@ -997,6 +997,7 @@ let res = agent
      看不出是不是同一人時，照照片寫，並在 warnings 說明。
 2. note：照片中與此人有關的補充（部門、分機）；沒有就填 null，不要編造。
 3. 照片中重複出現的人只列一次。最多 {{MAX_MEMBERS}} 人。
+   送出前逐列核對：照片中的每一列（包含最後幾列）都要處理到；照片若標示總人數（例如「共 10 人」），提出的人數要一致，不一致就重數並補上漏掉的人。
 4. 不要收錄：表頭、欄位名稱、日期、標題（「姓名」「簽到表」「10/17 午餐」）、勾選記號、頁碼、被劃掉的名字（在 warnings 提一下）。
 
 ## 便當店的規則
@@ -1004,7 +1005,7 @@ let res = agent
 - name：店名，不含「訂購專線」等字樣。找不到就填「（未知店家）」並在 warnings 說明。
 - phone：訂購電話，保留原本格式（「02-2345-6789」「0912-345-678」）。多支電話時放第一支，其餘放 note。沒有就填 null。
 - address：沒有就填 null。
-- note：營業時間、公休日、外送門檻（「滿 10 個外送」）、加價選項（「加飯 +10」）等訂購注意事項。沒有就填 null。
+- note：營業時間、公休日、外送門檻（「滿 10 個外送」）、加價選項（「加飯 +10」）等訂購注意事項。促銷標語、廣告詞、創立年份等與訂購無關的內容不要寫。沒有就填 null。
 - 欄位填 null 代表「照片中沒有」，系統不會用 null 覆蓋現有資料。
 
 菜單品項：
@@ -1018,7 +1019,7 @@ let res = agent
    - 看不清楚、被遮住或沒有標價時填 null，confidence 設 low，並在 warnings 說明。**絕對不要猜價格。**
    - 與現有價格不同時照傳單填寫（系統會顯示原價 → 新價讓開團者確認）。
 3. description：配菜、份量、辣度等補充；沒有就填 null。
-4. category：傳單上的分類標題（「飯類」「麵類」「小菜」）；沒有就填 null。
+4. category：傳單上的分類標題（「飯類」「麵類」「小菜」），原樣抄寫，包含標點符號；沒有就填 null。
 5. 已劃掉或標示「售完」「停售」的品項不要列，在 warnings 提一下。最多 {{MAX_MENU_ITEMS}} 個品項。
 
 ## confidence
@@ -1051,6 +1052,26 @@ let res = agent
 - 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 計數。
 - 金鑰 `ANTHROPIC_API_KEY` 只存在後端環境變數，絕不送到前端。
 - 測試：`FakeImportAgent` 實作同一個 port，直接呼叫 tools 的業務邏輯產生固定提案，CI 不呼叫真實 API。
+
+### 9.7 Provider 設定（Claude 與 Anthropic 相容 gateway）
+`RigImportAgent` 預設針對 Claude 調校：`strict: true` tool schema、`output_config.effort = low`（rig 會一併加上 adaptive thinking 與其 beta header）、server-side fallback（beta header + `fallbacks: "default"`）。連到「Anthropic 相容 gateway」（後面接 Qwen 等其他模型）時，這些參數可能被拒絕或被忽略，因此以環境變數切換，連線仍共用 `ANTHROPIC_API_KEY`／`ANTHROPIC_BASE_URL`／`AI_MODEL`：
+
+| 變數 | `anthropic`（預設） | `anthropic-compatible` |
+|---|---|---|
+| `AI_PROVIDER` | Anthropic 官方 API | gateway；rig dialect 改為 gateway quirks，且接受 `signature` 為空的 thinking 區塊並原樣送回 |
+| `AI_FALLBACKS` | `default` | 預設 `off`；設為 `default` 於啟動時報錯 |
+| `AI_STRICT_TOOLS` | `true` | 預設 `false`（可個別開啟） |
+| `AI_REASONING` | `low` | 預設 `off`（可個別開啟為 `low`） |
+
+不論 provider，refusal 判定、逾時／重試、`AgentHook` 的 token 用量統計都相同；單元測試以 mock Anthropic server 驗證兩種 provider 的 request 形狀差異（`infrastructure/tests/rig_agent.rs`）與設定解析（`server/src/config.rs`）。
+
+實測（Strata gateway，量化 Qwen，`thinking` 區塊 `signature` 為空）：strict nullable schema、`eager_input_streaming`、`output_config`、`thinking`（adaptive／enabled／disabled）、fallbacks beta／欄位、base64 圖片、多輪 tool_use／tool_result（含回送空 signature 的 thinking）皆被接受或忽略，錯誤格式為 Anthropic 風格（`{"error":{"type":"invalid_request_error"|"authentication_error","message":...}}`）。該 gateway 位於 Cloudflare 後面，預設的 Python urllib User-Agent 會被擋（`403 error code: 1010`），rig 的 reqwest 請求不受影響。
+
+### 9.8 Eval 工具（`make ai-eval`）
+手動執行（不屬於 `make check`／CI；會呼叫真實模型）。實作為 `server` crate 的 `ai_eval` binary（`cargo run -p server --bin ai_eval`）：與伺服器共用 `Config` 與 `wiring::rig_agent_config`，因此量到的就是正式環境的設定；放在 `server` 而非獨立 crate 是為了不重複設定解析與組裝，也不增加 workspace 的依賴面。
+- 案例：`eval/cases/<name>/{image.png|image.jpg, expected.json, source.html}`；圖片由 `source.html` 以 `python3 eval/render.py`（headless Chrome + Pillow）產生，可重現。`expected.json`：`kind`（`roster`／`vendor`／`none`）、預期成員（可含 `note_contains`）或店家資訊與菜單（名稱、價格、分類）、`forbidden`（不得出現在名稱的字串，如電話、廣告、注入文字）、`vendor.note_forbidden`、選用的 `seed`（預先建立名單／店家，`target_seeded` 決定是否指定為目標）。
+- 每案例在全新的暫存 SQLite 上以同樣的 tools 執行 `RigImportAgent`，將最後的待確認提案逐欄比對：名稱 precision／recall、價格完全一致率、分類／備註／店家資訊命中率、被禁止字串與價格 0 的次數、結果（ok／refused／error／timeout）、model 呼叫次數、tool 呼叫數、耗時、token。`none` 類案例要求沒有任何提案。
+- 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 寫到 `eval/report.json`，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
 
 ---
 
@@ -1093,7 +1114,11 @@ ANTHROPIC_API_KEY=...
 AI_MODEL=claude-opus-5-5
 AI_DAILY_QUOTA_PER_USER=30
 AI_MAX_TURNS=8
-AI_FALLBACKS=default             # off = 關閉 server-side fallback
+AI_PROVIDER=anthropic            # anthropic | anthropic-compatible（9.7）
+AI_FALLBACKS=default             # off = 關閉 server-side fallback（僅 anthropic 可用 default）
+# AI_STRICT_TOOLS=true           # 預設：anthropic 為 true、anthropic-compatible 為 false
+# AI_REASONING=low               # low | off；預設：anthropic 為 low、anthropic-compatible 為 off
+# ANTHROPIC_BASE_URL=...         # 覆寫 API 位址（gateway／測試）
 SESSION_TTL_DAYS=14
 TRUSTED_PROXIES=10.0.0.0/8          # 反向代理的 IP 範圍；空值 = 不信任 X-Forwarded-For
 CLIENT_INFO_RETENTION_DAYS=90
