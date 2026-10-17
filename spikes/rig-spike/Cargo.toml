@@ -1,0 +1,16 @@
+[package]
+name = "rig-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+rig = { git = "https://github.com/Swind/rig", rev = "36f287befa9e6013579d7ba8a957a27f604d7d50" }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+reqwest = { version = "0.13", features = ["rustls"] }
