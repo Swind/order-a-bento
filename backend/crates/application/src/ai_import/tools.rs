@@ -52,7 +52,7 @@ pub struct ToolMessage {
 
 fn not_found(what: &str) -> ToolMessage {
     ToolMessage {
-        error: format!("找不到{what}，請使用 list 工具回傳的 id"),
+        error: format!("{what} not found; use an id returned by a list tool"),
     }
 }
 
@@ -114,10 +114,10 @@ pub async fn get_roster(
     args: GetRosterArgs,
 ) -> Result<GetRosterOutput, ToolError> {
     let Some(id) = parse_id::<RosterId>(&args.roster_id) else {
-        return Ok(GetRosterOutput::Error(not_found("名單")));
+        return Ok(GetRosterOutput::Error(not_found("roster")));
     };
     Ok(match ctx.rosters.find(ctx.organizer_id, id).await? {
-        None => GetRosterOutput::Error(not_found("名單")),
+        None => GetRosterOutput::Error(not_found("roster")),
         Some(s) => GetRosterOutput::Found(RosterDetail {
             id: id.to_string(),
             name: s.value.name().to_string(),
@@ -196,10 +196,10 @@ pub async fn get_vendor(
     args: GetVendorArgs,
 ) -> Result<GetVendorOutput, ToolError> {
     let Some(id) = parse_id::<VendorId>(&args.vendor_id) else {
-        return Ok(GetVendorOutput::Error(not_found("店家")));
+        return Ok(GetVendorOutput::Error(not_found("vendor")));
     };
     Ok(match ctx.vendors.find(ctx.organizer_id, id).await? {
-        None => GetVendorOutput::Error(not_found("店家")),
+        None => GetVendorOutput::Error(not_found("vendor")),
         Some(s) => {
             let v = &s.value;
             GetVendorOutput::Found(VendorDetail {
@@ -333,7 +333,7 @@ fn text_field(
         let n = raw.as_deref().map_or(0, |s| s.chars().count());
         (
             raw,
-            format!("{field} 最多 {max} 個字元（目前 {n} 個），請精簡"),
+            format!("{field} must be at most {max} characters (currently {n}); shorten it"),
         )
     })
 }
@@ -393,14 +393,14 @@ pub async fn propose_roster_members(
             let Some(id) = parse_id::<RosterId>(&r.roster_id) else {
                 return Ok(out.rejected(
                     "target.rosterId",
-                    "rosterId 格式不正確，請使用 list_rosters 回傳的 id",
+                    "rosterId is malformed; use an id returned by list_rosters",
                 ));
             };
             match ctx.rosters.find(ctx.organizer_id, id).await? {
                 None => {
                     return Ok(out.rejected(
                         "target.rosterId",
-                        "找不到這份名單，請使用 list_rosters 回傳的 id，或改用 newRosterName 建立新名單",
+                        "Roster not found; use an id returned by list_rosters, or use newRosterName to create a new roster",
                     ));
                 }
                 Some(s) => (TargetRef::Existing { existing_id: id }, Some(s.value)),
@@ -417,7 +417,7 @@ pub async fn propose_roster_members(
                 return Ok(out.rejected(
                     "target.newRosterName",
                     format!(
-                        "newRosterName 必須是 1–{} 個字元，沒有標題就用「新名單」",
+                        "newRosterName must be 1–{} characters; use 「新名單」 when the photo has no title",
                         RosterName::MAX_LEN
                     ),
                 ));
@@ -441,7 +441,7 @@ pub async fn propose_roster_members(
         return Ok(out.rejected(
             "members",
             format!(
-                "名單最多 {} 人（現有 {} 人，這次新增 {} 人會超過），請減少人數",
+                "A roster holds at most {} members ({} exist, adding {} would exceed that); reduce the number of members",
                 Roster::MAX_MEMBERS,
                 existing_members.len(),
                 new_keys.len()
@@ -451,7 +451,7 @@ pub async fn propose_roster_members(
     if args.members.is_empty() {
         return Ok(out.rejected(
             "members",
-            "members 是空的；照片中沒有人員資料就不要呼叫此工具",
+            "members is empty; do not call this tool when the photo has no people",
         ));
     }
 
@@ -473,10 +473,10 @@ pub async fn propose_roster_members(
                 let issue = name_issue(&m.name, PersonName::MAX_LEN);
                 issues.push(issue);
                 let msg = if issue == Issue::NameEmpty {
-                    "name 不可為空，請補上名字或移除這一筆".to_string()
+                    "name must not be empty; fill in the name or remove this entry".to_string()
                 } else {
                     format!(
-                        "name 最多 {} 個字元，請只保留人名，其餘放進 note",
+                        "name must be at most {} characters; keep only the person's name and put the rest in note",
                         PersonName::MAX_LEN
                     )
                 };
@@ -496,7 +496,7 @@ pub async fn propose_roster_members(
                         Some(i),
                         "name",
                         format!(
-                            "name「{name}」與第 {} 筆重複（視為同一人），請只列一次",
+                            "name 「{name}」 duplicates entry {} (treated as the same person); list it once",
                             first + 1
                         ),
                     );
@@ -653,14 +653,14 @@ pub async fn propose_vendor(
             let Some(id) = parse_id::<VendorId>(&r.vendor_id) else {
                 return Ok(out.rejected(
                     "target.vendorId",
-                    "vendorId 格式不正確，請使用 list_vendors 回傳的 id",
+                    "vendorId is malformed; use an id returned by list_vendors",
                 ));
             };
             match ctx.vendors.find(ctx.organizer_id, id).await? {
                 None => {
                     return Ok(out.rejected(
                         "target.vendorId",
-                        "找不到這間店家，請使用 list_vendors 回傳的 id，或改用 \"new\"",
+                        "Vendor not found; use an id returned by list_vendors, or use \"new\"",
                     ));
                 }
                 Some(s) => (TargetRef::Existing { existing_id: id }, Some(s.value)),
@@ -673,7 +673,7 @@ pub async fn propose_vendor(
                     return Ok(out.rejected(
                         "info.name",
                         format!(
-                            "info.name 必須是 1–{} 個字元；找不到店名就填「（未知店家）」",
+                            "info.name must be 1–{} characters; use 「（未知店家）」 when the vendor name cannot be found",
                             VendorName::MAX_LEN
                         ),
                     ));
@@ -687,7 +687,7 @@ pub async fn propose_vendor(
                 Some(id) => match ctx.vendors.find(ctx.organizer_id, id).await? {
                     Some(s) => {
                         out.notes.push(format!(
-                            "已有同名店家「{}」，已改為更新該店家（不會新增重複店家）",
+                            "A vendor named 「{}」 already exists, so that vendor is updated instead (no duplicate is created)",
                             s.value.name()
                         ));
                         (TargetRef::Existing { existing_id: id }, Some(s.value))
@@ -725,7 +725,7 @@ pub async fn propose_vendor(
         return Ok(out.rejected(
             "menuItems",
             format!(
-                "菜單最多 {} 個品項（現有 {} 個，這次新增 {} 個會超過），請減少品項",
+                "A menu holds at most {} items ({} exist, adding {} would exceed that); reduce the number of items",
                 Vendor::MAX_MENU_ITEMS,
                 existing_items.len(),
                 new_keys.len()
@@ -741,7 +741,7 @@ pub async fn propose_vendor(
                 && NameKey::from(args.info.name.as_str()) != v.name().key()
             {
                 out.notes.push(format!(
-                    "店名維持現有的「{}」，不會改名；info.name 只用來判斷是哪間店",
+                    "The vendor keeps its existing name 「{}」 and is not renamed; info.name is only used to identify the vendor",
                     v.name()
                 ));
             }
@@ -812,7 +812,7 @@ pub async fn propose_vendor(
                         Some(i),
                         "price",
                         format!(
-                            "price 必須介於 {}–{}（目前 {p}）；看不清楚請填 null，不要猜",
+                            "price must be between {} and {} (got {p}); use null when it is unreadable, do not guess",
                             Money::MIN_PRICE,
                             Money::MAX_PRICE
                         ),
@@ -828,10 +828,10 @@ pub async fn propose_vendor(
                 issues.push(issue);
                 fatal = true;
                 let msg = if issue == Issue::NameEmpty {
-                    "name 不可為空，請補上品名或移除這一筆".to_string()
+                    "name must not be empty; fill in the item name or remove this entry".to_string()
                 } else {
                     format!(
-                        "name 最多 {} 個字元，說明請放進 description",
+                        "name must be at most {} characters; put explanations in description",
                         ItemName::MAX_LEN
                     )
                 };
@@ -853,7 +853,7 @@ pub async fn propose_vendor(
                         Some(i),
                         "name",
                         format!(
-                            "name「{name}」與第 {} 筆重複（視為同一品項），請只列一次或改名區分",
+                            "name 「{name}」 duplicates entry {} (treated as the same item); list it once or rename to tell them apart",
                             first + 1
                         ),
                     );

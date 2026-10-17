@@ -74,6 +74,10 @@ pub struct Config {
     pub ai_strict_tools: bool,
     /// `AI_REASONING` (`low` | `off`; default: `low` for `anthropic`, `off` otherwise).
     pub ai_reasoning: AiReasoning,
+    /// `AI_REQUEST_TIMEOUT_SECS`: one model call (HTTP request). Default 60 (`anthropic`) / 180 (`anthropic-compatible`).
+    pub ai_request_timeout_secs: u64,
+    /// `AI_RUN_TIMEOUT_SECS`: a whole import run incl. the retry. Default 90 / 300.
+    pub ai_run_timeout_secs: u64,
     /// `AI_DEMO`: scripted demo agent when no API key is set (never in production).
     pub ai_demo: bool,
     pub session_ttl_days: u32,
@@ -244,6 +248,32 @@ impl Config {
                 });
             }
         };
+        // Slow gateways (quantised models behind a proxy) need far more than Claude does.
+        let (default_request, default_run) = if claude { (60, 90) } else { (180, 300) };
+        let ai_request_timeout_secs: u64 = num(
+            get("AI_REQUEST_TIMEOUT_SECS"),
+            "AI_REQUEST_TIMEOUT_SECS",
+            default_request,
+        )?;
+        let ai_run_timeout_secs: u64 = num(
+            get("AI_RUN_TIMEOUT_SECS"),
+            "AI_RUN_TIMEOUT_SECS",
+            default_run,
+        )?;
+        if ai_request_timeout_secs == 0 {
+            return Err(ConfigError::Invalid {
+                key: "AI_REQUEST_TIMEOUT_SECS",
+                value: "0".into(),
+                reason: "must be greater than 0",
+            });
+        }
+        if ai_run_timeout_secs < ai_request_timeout_secs {
+            return Err(ConfigError::Invalid {
+                key: "AI_RUN_TIMEOUT_SECS",
+                value: ai_run_timeout_secs.to_string(),
+                reason: "must be at least AI_REQUEST_TIMEOUT_SECS",
+            });
+        }
 
         let list = |k: &str| -> Option<Vec<String>> {
             get(k).map(|v| {
@@ -303,6 +333,8 @@ impl Config {
             ai_fallbacks,
             ai_strict_tools,
             ai_reasoning,
+            ai_request_timeout_secs,
+            ai_run_timeout_secs,
             ai_demo,
             session_ttl_days: num(get("SESSION_TTL_DAYS"), "SESSION_TTL_DAYS", 14)?,
             trusted_proxies: get("TRUSTED_PROXIES")
@@ -487,6 +519,44 @@ mod tests {
         assert_eq!(c.anthropic_base_url.as_deref(), Some("http://127.0.0.1:9"));
         assert!(Config::from_map(&m(&[("AI_FALLBACKS", "maybe")])).is_err());
         assert!(Config::from_map(&m(&[("AI_DEMO", "perhaps")])).is_err());
+    }
+
+    #[test]
+    fn ai_timeouts_defaults_and_validation() {
+        let c = Config::from_map(&HashMap::new()).unwrap();
+        assert_eq!((c.ai_request_timeout_secs, c.ai_run_timeout_secs), (60, 90));
+        let c = Config::from_map(&env(&[("AI_PROVIDER", "anthropic-compatible")])).unwrap();
+        assert_eq!(
+            (c.ai_request_timeout_secs, c.ai_run_timeout_secs),
+            (180, 300)
+        );
+        let c = Config::from_map(&env(&[
+            ("AI_REQUEST_TIMEOUT_SECS", "120"),
+            ("AI_RUN_TIMEOUT_SECS", "120"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            (c.ai_request_timeout_secs, c.ai_run_timeout_secs),
+            (120, 120)
+        );
+        for bad in [
+            [
+                ("AI_REQUEST_TIMEOUT_SECS", "0"),
+                ("AI_RUN_TIMEOUT_SECS", "90"),
+            ],
+            [
+                ("AI_REQUEST_TIMEOUT_SECS", "100"),
+                ("AI_RUN_TIMEOUT_SECS", "90"),
+            ],
+            [
+                ("AI_REQUEST_TIMEOUT_SECS", "abc"),
+                ("AI_RUN_TIMEOUT_SECS", "90"),
+            ],
+        ] {
+            assert!(Config::from_map(&env(&bad)).is_err(), "{bad:?}");
+        }
+        // raising only the request timeout above the default run timeout is rejected
+        assert!(Config::from_map(&env(&[("AI_REQUEST_TIMEOUT_SECS", "100")])).is_err());
     }
 
     fn env(kv: &[(&str, &str)]) -> HashMap<String, String> {

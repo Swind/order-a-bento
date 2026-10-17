@@ -115,7 +115,7 @@ tool!(
     "list_rosters",
     NoArgs,
     Vec<RosterListItem>,
-    "列出開團者所有的人員名單（id、名稱、成員數）。",
+    "List all of the organizer's rosters (id, name, member count).",
     |ctx, _a| tools::list_rosters(ctx)
 );
 tool!(
@@ -123,7 +123,7 @@ tool!(
     "get_roster",
     GetRosterArgs,
     GetRosterOutput,
-    "取得一份名單的現有成員（名字與備註）。",
+    "Get the current members of one roster (names and notes).",
     |ctx, a| tools::get_roster(ctx, a)
 );
 tool!(
@@ -131,7 +131,7 @@ tool!(
     "list_vendors",
     NoArgs,
     Vec<VendorListItem>,
-    "列出開團者所有的便當店（id、名稱、電話、品項數）。",
+    "List all of the organizer's vendors (id, name, phone, item count).",
     |ctx, _a| tools::list_vendors(ctx)
 );
 tool!(
@@ -139,7 +139,7 @@ tool!(
     "get_vendor",
     GetVendorArgs,
     GetVendorOutput,
-    "取得一間便當店的現有資訊與菜單。",
+    "Get the current info and menu of one vendor.",
     |ctx, a| tools::get_vendor(ctx, a)
 );
 tool!(
@@ -147,7 +147,7 @@ tool!(
     "propose_roster_members",
     ProposeRosterMembersArgs,
     ProposalDiffSummary,
-    "提出要新增或覆蓋的名單成員。只會記錄待確認的變更，開團者確認後才會生效。回傳 errors 時請修正後再呼叫一次。",
+    "Propose roster members to add or overwrite. This only records a pending change; it takes effect after the organizer confirms. If it returns errors, fix them and call it once more.",
     |ctx, a| tools::propose_roster_members(ctx, a)
 );
 tool!(
@@ -155,7 +155,7 @@ tool!(
     "propose_vendor",
     ProposeVendorArgs,
     ProposalDiffSummary,
-    "提出要新增或覆蓋的店家資訊與菜單品項。只會記錄待確認的變更，開團者確認後才會生效。回傳 errors 時請修正後再呼叫一次。",
+    "Propose vendor info and menu items to add or overwrite. This only records a pending change; it takes effect after the organizer confirms. If it returns errors, fix them and call it once more.",
     |ctx, a| tools::propose_vendor(ctx, a)
 );
 

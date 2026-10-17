@@ -1,6 +1,7 @@
 //! Builds the application state (adapters + use cases) from configuration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use api::{AppState, RateLimitConfig, WebSettings};
@@ -57,6 +58,7 @@ pub fn rig_agent_config(config: &Config) -> Option<RigAgentConfig> {
     cfg.fallbacks = config.ai_fallbacks;
     cfg.strict_tools = config.ai_strict_tools;
     cfg.reasoning = config.ai_reasoning;
+    cfg.request_timeout = Duration::from_secs(config.ai_request_timeout_secs);
     Some(cfg)
 }
 
@@ -77,6 +79,8 @@ pub fn ai_import_service(
     };
     let runs = Arc::new(SqliteImportRunRepo::new(db.clone()));
     let model = if demo { "demo" } else { &config.ai_model };
+    let mut ai_config = AiImportConfig::new(model, config.ai_daily_quota_per_user);
+    ai_config.timeout = Duration::from_secs(config.ai_run_timeout_secs);
     Ok(Some((
         AiImportService {
             runs: runs.clone(),
@@ -85,7 +89,7 @@ pub fn ai_import_service(
             vendors: Arc::new(SqliteVendorRepo::new(db.clone())),
             agent,
             clock: Arc::new(SystemClock),
-            config: AiImportConfig::new(model, config.ai_daily_quota_per_user),
+            config: ai_config,
         },
         demo,
     )))

@@ -98,6 +98,7 @@ impl std::fmt::Debug for RigAgentConfig {
             .field("model", &self.model)
             .field("max_turns", &self.max_turns)
             .field("fallbacks", &self.fallbacks)
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
 }
@@ -119,12 +120,24 @@ impl RigImportAgent {
 }
 
 /// What the hook saw, shared with the code that maps the final result.
-#[derive(Default)]
 struct Seen {
+    /// Start of the model call in flight: the run start, then each finished turn. rig's error
+    /// report drops reqwest's `is_timeout()`, so a timeout is recognised by elapsed time.
+    call_started: std::time::Instant,
     /// `Some(category)` once a turn ended with `stop_reason == "refusal"`.
     refusal: Option<Option<String>>,
     /// `model` of the last response (differs from the request after a fallback).
     model: Option<String>,
+}
+
+impl Default for Seen {
+    fn default() -> Self {
+        Self {
+            call_started: std::time::Instant::now(),
+            refusal: None,
+            model: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -146,6 +159,7 @@ impl AgentHook for TurnHook {
         });
         let raw = event.raw;
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        seen.call_started = std::time::Instant::now();
         if let Some(m) = raw.get("model").and_then(|m| m.as_str()) {
             seen.model = Some(m.to_owned());
         }
@@ -166,10 +180,10 @@ impl AgentHook for TurnHook {
 }
 
 fn user_message(input: &AgentInput) -> String {
-    let mut lines = vec!["請處理這張照片。".to_string()];
+    let mut lines = vec!["Please process this photo.".to_string()];
     if let Some(mode) = input.mode_hint {
         lines.push(format!(
-            "模式提示：{}",
+            "Mode hint: {}",
             match mode {
                 ImportMode::Roster => "roster",
                 ImportMode::Vendor => "vendor",
@@ -177,13 +191,13 @@ fn user_message(input: &AgentInput) -> String {
         ));
     }
     if let Some(id) = input.target_roster_id {
-        lines.push(format!("目標名單 id：{id}"));
+        lines.push(format!("Target roster id: {id}"));
     }
     if let Some(id) = input.target_vendor_id {
-        lines.push(format!("目標店家 id：{id}"));
+        lines.push(format!("Target vendor id: {id}"));
     }
     if let Some(i) = &input.instruction {
-        lines.push(format!("開團者指示：{i}"));
+        lines.push(format!("Organizer instruction: {i}"));
     }
     lines.join("\n")
 }
@@ -205,7 +219,7 @@ fn unavailable(retryable: bool, detail: impl Into<String>) -> AiError {
     }
 }
 
-fn map_error(e: rig::completion::PromptError, seen: &Seen) -> AiError {
+fn map_error(e: rig::completion::PromptError, seen: &Seen, request_timeout: Duration) -> AiError {
     if let Some(category) = &seen.refusal {
         return AiError::Refused {
             category: category.clone(),
@@ -216,6 +230,22 @@ fn map_error(e: rig::completion::PromptError, seen: &Seen) -> AiError {
         PromptError::Report(r) => {
             let status = r.http_status;
             let code = r.code.as_deref().unwrap_or("-");
+            // reqwest's client timeout surfaces as an opaque status-less Http error. Not retried: a second full timeout on a slow
+            // gateway would only burn the run budget; the user can retry by hand.
+            let timed_out = r.kind.code() == "timeout"
+                || (status.is_none()
+                    && r.kind.code() == "http"
+                    && seen.call_started.elapsed() + Duration::from_millis(500) >= request_timeout);
+            if timed_out {
+                tracing::warn!(
+                    timeout_secs = request_timeout.as_secs(),
+                    "AI model call timed out (raise AI_REQUEST_TIMEOUT_SECS for slow gateways)"
+                );
+                return unavailable(
+                    false,
+                    format!("model call timed out after {} s", request_timeout.as_secs()),
+                );
+            }
             match status {
                 Some(401 | 403) => {
                     tracing::error!(status, "AI provider rejected the credentials");
@@ -326,7 +356,7 @@ impl ImportAgent for RigImportAgent {
                     model: seen.model.clone().unwrap_or_else(|| cfg.model.clone()),
                 })
             }
-            Err(e) => Err(map_error(e, &seen)),
+            Err(e) => Err(map_error(e, &seen, cfg.request_timeout)),
         }
     }
 }

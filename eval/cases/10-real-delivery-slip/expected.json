@@ -1,0 +1,132 @@
+{
+  "kind": "vendor",
+  "description": "Real photo of a used delivery slip: handwritten quantities, a customer's phone/address and order notes must not leak into the vendor; another shop's flyer is visible in the background (和風牛肉飯, 黃金豬排飯, 海陸雙霸餐) and must be ignored.",
+  "vendor": {
+    "name": "上野烤肉飯",
+    "phone": "(02) 8672-2727",
+    "address": "新北市三峽區文化路242號",
+    "note_forbidden": [
+      "0975",
+      "行政大樓"
+    ]
+  },
+  "menu": [
+    {
+      "name": "烤肉飯",
+      "price": 115,
+      "category": "烤類"
+    },
+    {
+      "name": "烤排骨飯",
+      "price": 115,
+      "category": "烤類"
+    },
+    {
+      "name": "烤雞排飯",
+      "price": 120,
+      "category": "烤類"
+    },
+    {
+      "name": "烤雞柳飯",
+      "price": 115,
+      "category": "烤類"
+    },
+    {
+      "name": "烤五花肉飯",
+      "price": 120,
+      "category": "烤類"
+    },
+    {
+      "name": "鹽烤鯖魚飯",
+      "price": 120,
+      "category": "烤類"
+    },
+    {
+      "name": "烤雞腿飯",
+      "price": 120,
+      "category": "烤類"
+    },
+    {
+      "name": "烤豚排飯",
+      "price": 120,
+      "category": "烤類"
+    },
+    {
+      "name": "香酥魚排飯",
+      "price": 115,
+      "category": "香酥類"
+    },
+    {
+      "name": "香酥排骨飯",
+      "price": 115,
+      "category": "香酥類"
+    },
+    {
+      "name": "香酥雞排飯",
+      "price": 120,
+      "category": "香酥類"
+    },
+    {
+      "name": "香酥雞柳飯",
+      "price": 115,
+      "category": "香酥類"
+    },
+    {
+      "name": "香酥雞腿飯",
+      "price": 120,
+      "category": "香酥類"
+    },
+    {
+      "name": "豪大雞排飯",
+      "price": 120,
+      "category": "香酥類"
+    },
+    {
+      "name": "黑胡椒排骨飯",
+      "price": 115,
+      "category": "黑胡椒類"
+    },
+    {
+      "name": "黑胡椒雞排飯",
+      "price": 120,
+      "category": "黑胡椒類"
+    },
+    {
+      "name": "黑胡椒雞柳飯",
+      "price": 115,
+      "category": "黑胡椒類"
+    },
+    {
+      "name": "黑胡椒雞腿飯",
+      "price": 120,
+      "category": "黑胡椒類"
+    },
+    {
+      "name": "黑胡椒豚排飯",
+      "price": 120,
+      "category": "黑胡椒類"
+    },
+    {
+      "name": "滷雞腿飯",
+      "price": 120,
+      "category": "滷類"
+    },
+    {
+      "name": "白飯",
+      "price": 15,
+      "category": "飯類"
+    },
+    {
+      "name": "菜飯",
+      "price": 95,
+      "category": "飯類"
+    }
+  ],
+  "forbidden": [
+    "和風牛肉",
+    "黃金豬排",
+    "海陸雙霸",
+    "0975",
+    "送貨單"
+  ]
+}

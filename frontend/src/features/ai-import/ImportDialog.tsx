@@ -122,7 +122,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
           <div role="status" className="flex flex-col items-center gap-4 py-8 text-center">
             <DialogTitle className="sr-only">AI 辨識中</DialogTitle>
             <Loader2 className="size-10 animate-spin text-primary" aria-hidden />
-            <p className="text-base font-medium">AI 辨識中…（約 10–60 秒）</p>
+            <p className="text-base font-medium">AI 辨識中…（通常 10–60 秒，模型較慢時可能需要數分鐘）</p>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
               <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
             </div>

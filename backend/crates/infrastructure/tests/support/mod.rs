@@ -17,6 +17,8 @@ pub enum Reply {
     Message(Value),
     /// Error status with an Anthropic-style error body.
     Error(u16, &'static str),
+    /// Sleep this long, then answer 200 with an empty message (a slow gateway).
+    Slow(std::time::Duration),
 }
 
 pub struct Mock {
@@ -61,7 +63,11 @@ async fn messages(
         .map(|(k, v)| (k.to_string(), json!(v.to_str().unwrap_or("?"))))
         .collect();
     mock.headers.lock().unwrap().push(Value::Object(h));
+    if let Some(Reply::Slow(d)) = mock.script.get(n) {
+        tokio::time::sleep(*d).await;
+    }
     match mock.script.get(n) {
+        Some(Reply::Slow(_)) => Json(msg(json!([]), "end_turn", json!({}))).into_response(),
         Some(Reply::Message(m)) => Json(m.clone()).into_response(),
         Some(Reply::Error(status, kind)) => (
             StatusCode::from_u16(*status).unwrap(),

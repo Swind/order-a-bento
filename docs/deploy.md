@@ -106,6 +106,8 @@ AI 匯入走 Anthropic Messages API（`POST {ANTHROPIC_BASE_URL}/v1/messages`）
 注意事項：
 - 模型必須支援**圖片輸入**與 **tool use**；否則匯入會失敗或回傳空提案。
 - gateway 若放在 Cloudflare 等 WAF 後面，可能擋掉非瀏覽器的請求（`403 error code: 1010`）；請對後端伺服器的出口 IP 放行。
+- **逾時**：`anthropic-compatible` 預設單次 model 呼叫 180 秒（`AI_REQUEST_TIMEOUT_SECS`）、整個匯入 300 秒（`AI_RUN_TIMEOUT_SECS`）；`anthropic` 為 60／90 秒。慢的 gateway（如量化模型）可再調高，需滿足 0 < 單次 ≤ 整體。單次呼叫逾時會顯示「model call timed out after N s」且不重試。
+- 匯入是單一同步請求，最久會開著 `AI_RUN_TIMEOUT_SECS` 秒，**反向代理的讀取逾時必須比它長**：Caddy 的 `reverse_proxy` 預設不限；nginx 請設 `proxy_read_timeout 330s;`（預設 60 秒會先回 504）；Cloudflare 代理約 100 秒就會回 524（免費方案無法調高），此時請把 `AI_RUN_TIMEOUT_SECS` 設在 100 秒以下，或讓此服務不經 Cloudflare 代理。
 - 錯誤會以 Anthropic 格式（`{"error":{"type":...}}`）回傳；401/403 顯示為「authentication failed」，5xx／連線錯誤視為可重試。
 - 換模型後建議先用 `make ai-eval` 跑一次評測（見下）；較小的量化模型可能漏列、改寫標點，開團者的確認畫面仍是最後防線。
 

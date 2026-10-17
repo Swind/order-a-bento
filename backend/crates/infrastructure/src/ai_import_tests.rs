@@ -223,7 +223,7 @@ async fn read_tools_are_scoped_by_organizer() {
         .unwrap(),
     )
     .unwrap();
-    assert!(v["error"].as_str().unwrap().contains("找不到名單"));
+    assert!(v["error"].as_str().unwrap().contains("roster not found"));
 
     let vs = tools::list_vendors(&ctx).await.unwrap();
     assert_eq!(vs.len(), 1);
@@ -367,8 +367,8 @@ async fn propose_roster_reports_fixable_errors_but_records_entries() {
             (Some(4), "note")
         ]
     );
-    assert!(out.errors[1].message.contains("最多 50"));
-    assert!(out.errors[2].message.contains("第 1 筆"));
+    assert!(out.errors[1].message.contains("at most 50"));
+    assert!(out.errors[2].message.contains("entry 1"));
     let p = ctx.snapshot().await;
     let ProposalTarget::Roster(t) = &p.targets[0] else {
         panic!()
@@ -552,7 +552,7 @@ async fn propose_vendor_new_and_existing_by_name() {
     .await
     .unwrap();
     assert_eq!(out.notes.len(), 1);
-    assert!(out.notes[0].contains("已有同名店家"));
+    assert!(out.notes[0].contains("already exists"));
     assert_eq!((out.created, out.updated, out.unchanged), (1, 1, 1));
     assert_eq!(out.info.as_deref(), Some("update"));
     assert_eq!(out.price_changes.len(), 1);
@@ -608,7 +608,7 @@ async fn propose_vendor_existing_target_is_not_renamed_and_price_errors() {
     .await
     .unwrap();
     assert!(out.recorded);
-    assert!(out.notes[0].contains("不會改名"));
+    assert!(out.notes[0].contains("is not renamed"));
     let errs: Vec<_> = out
         .errors
         .iter()
@@ -623,7 +623,11 @@ async fn propose_vendor_existing_target_is_not_renamed_and_price_errors() {
             (Some(4), "name")
         ]
     );
-    assert!(out.errors[0].message.contains("price 必須介於 1–100000"));
+    assert!(
+        out.errors[0]
+            .message
+            .contains("price must be between 1 and 100000")
+    );
     let p = ctx.snapshot().await;
     let ProposalTarget::Vendor(t) = &p.targets[0] else {
         panic!()

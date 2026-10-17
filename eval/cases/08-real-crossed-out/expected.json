@@ -1,0 +1,41 @@
+{
+  "kind": "vendor",
+  "description": "Real phone screenshot of a LINE album: photo grid, prices only in the banner (排骨 110, others 100); four items crossed out with a red X must be left out.",
+  "vendor": {
+    "name": "北大老師梁社漢特餐"
+  },
+  "menu": [
+    {
+      "name": "滷腿排餐",
+      "price": 100
+    },
+    {
+      "name": "排骨飯",
+      "price": 110
+    },
+    {
+      "name": "椒鹽雞塊飯",
+      "price": 100
+    },
+    {
+      "name": "紅糟肉飯",
+      "price": 100
+    },
+    {
+      "name": "炸腿排飯",
+      "price": 100
+    },
+    {
+      "name": "素食餐（7菜）",
+      "price": 100
+    }
+  ],
+  "forbidden": [
+    "椒鹽菲力",
+    "炸棒腿",
+    "滷棒腿",
+    "控肉",
+    "照片",
+    "4G"
+  ]
+}

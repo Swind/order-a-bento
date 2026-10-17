@@ -162,12 +162,12 @@ async fn first_request_shape_with_fallbacks() {
         body["system"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("資料輸入助理")
+            .contains("data-entry assistant")
     );
     let content = body["messages"][0]["content"].as_array().unwrap();
     let text = content[0]["text"].as_str().unwrap();
-    assert!(text.contains("模式提示：vendor"));
-    assert!(text.contains("開團者指示：這是午餐店的菜單"));
+    assert!(text.contains("Mode hint: vendor"));
+    assert!(text.contains("Organizer instruction: 這是午餐店的菜單"));
     let img = content
         .iter()
         .find(|c| c["type"] == "image")
@@ -420,5 +420,26 @@ fn tool_schemas_are_strict_compatible() {
     assert_eq!(tools.len(), 6);
     for (name, schema) in &tools {
         check(name, schema);
+    }
+}
+
+#[tokio::test]
+async fn slow_model_call_reports_a_timeout_and_is_not_retryable() {
+    let e = env().await;
+    let (url, _) = start(vec![Reply::Slow(Duration::from_secs(3))]).await;
+    let mut c = RigAgentConfig::new("sk-ant-test-key", "claude-opus-5-5");
+    c.base_url = Some(url);
+    c.request_timeout = Duration::from_secs(1);
+    let err = RigImportAgent::new(c)
+        .unwrap()
+        .run(e.ctx.clone(), input())
+        .await
+        .unwrap_err();
+    match err {
+        AiError::Unavailable { retryable, detail } => {
+            assert!(!retryable);
+            assert_eq!(detail, "model call timed out after 1 s");
+        }
+        other => panic!("unexpected {other:?}"),
     }
 }

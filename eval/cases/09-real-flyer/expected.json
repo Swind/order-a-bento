@@ -1,0 +1,63 @@
+{
+  "kind": "vendor",
+  "description": "Real photo of a printed flyer held in a hand: letter-spaced names, descriptions under each item, '人氣招牌' badges, an add-on rule (全五穀 +5) and the branch's address and phone on a separate card.",
+  "vendor": {
+    "name": "向陽冬瓜肉飯",
+    "phone": "(02) 2680-5251",
+    "address": "新北市樹林區學成路532號",
+    "note_forbidden": [
+      "經營"
+    ]
+  },
+  "menu": [
+    {
+      "name": "冬瓜肉飯盒",
+      "price": 80
+    },
+    {
+      "name": "健康菜飯",
+      "price": 90
+    },
+    {
+      "name": "煎豬排飯",
+      "price": 110
+    },
+    {
+      "name": "招牌雞腿排飯",
+      "price": 120
+    },
+    {
+      "name": "煎辣味雞腿排飯",
+      "price": 130
+    },
+    {
+      "name": "秋刀魚飯",
+      "price": 100
+    },
+    {
+      "name": "薄鹽鯖魚飯",
+      "price": 150
+    },
+    {
+      "name": "大比目魚飯",
+      "price": 150
+    },
+    {
+      "name": "紅燒虱目魚飯",
+      "price": 160
+    },
+    {
+      "name": "挪威鮭魚飯",
+      "price": 200
+    },
+    {
+      "name": "VIP餐盒",
+      "price": 260
+    }
+  ],
+  "forbidden": [
+    "人氣",
+    "全五穀",
+    "北大店"
+  ]
+}

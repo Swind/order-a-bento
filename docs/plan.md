@@ -135,3 +135,4 @@
 | T2.4 | ✅ 驗收通過 | 151 個後端測試；XSS 跳脫測試、未知與格式錯誤 token 輸出相同；完整流程待與 T2.3 一起以瀏覽器驗 |
 | T6.1 | ✅ 驗收通過 | 241 個後端、116 個前端測試、E2E 8 個；實測 CLI 結束碼（3 無效／4 已存在／5 找不到）、ADMIN_* 啟動建帳號、Google 關閉時 503、錯誤統一 401、第 7 次起 429、log 無密碼；0002 migration 以含資料的舊 DB 測過 |
 | T6.2 | ✅ 驗收通過 | `AI_PROVIDER=anthropic-compatible`、`AI_STRICT_TOOLS`、`AI_REASONING`；Strata 實測接受所有 Claude 參數，相容模式預設送最小子集；252 個後端測試 |
+| T4.5 | ✅ 驗收通過 | 使用者提供 3 張真實照片（劃掉品項的相簿截圖、手拿傳單、用過的送貨單，訂購人電話已塗掉）加入 eval；AI 逾時可設定（`AI_REQUEST_TIMEOUT_SECS`／`AI_RUN_TIMEOUT_SECS`，相容閘道預設 180／300 秒）；system prompt 與送給模型的文字改英文，給使用者看的仍為繁中；Strata 全套 10/10 PASS，送貨單剩鯖→鱈誤讀等模型本身的 OCR 錯誤；254 個後端測試 |

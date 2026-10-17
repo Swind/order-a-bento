@@ -21,7 +21,8 @@ struct Args {
     cases: PathBuf,
     filter: Option<String>,
     repeat: u32,
-    timeout: Duration,
+    /// Outer guard per case; `None` = the configured `AI_RUN_TIMEOUT_SECS`.
+    timeout: Option<Duration>,
     out: Option<PathBuf>,
 }
 
@@ -30,7 +31,7 @@ fn parse_args() -> anyhow::Result<Args> {
         cases: PathBuf::from("../eval/cases"),
         filter: None,
         repeat: 1,
-        timeout: Duration::from_secs(300),
+        timeout: None,
         out: None,
     };
     let mut it = std::env::args().skip(1);
@@ -41,7 +42,9 @@ fn parse_args() -> anyhow::Result<Args> {
             "--filter" => a.filter = Some(value("--filter")?),
             "--repeat" => a.repeat = value("--repeat")?.parse().context("--repeat")?,
             "--timeout" => {
-                a.timeout = Duration::from_secs(value("--timeout")?.parse().context("--timeout")?)
+                a.timeout = Some(Duration::from_secs(
+                    value("--timeout")?.parse().context("--timeout")?,
+                ))
             }
             "--out" => a.out = Some(value("--out")?.into()),
             "-h" | "--help" => {
@@ -65,6 +68,15 @@ async fn main() -> anyhow::Result<()> {
     };
     // Never prints the key: RigAgentConfig's Debug redacts it.
     eprintln!("agent: {cfg:?}");
+    // The eval calls the agent directly (no retry), so the run timeout is the natural guard;
+    // `--timeout` must not undercut a slow gateway's per-call limit by accident.
+    let timeout = args
+        .timeout
+        .unwrap_or(Duration::from_secs(config.ai_run_timeout_secs));
+    eprintln!(
+        "per-call timeout {:?}, per-case guard {timeout:?}",
+        cfg.request_timeout
+    );
     let agent = RigImportAgent::new(cfg).map_err(|e| anyhow::anyhow!(e))?;
 
     let cases = load_cases(&args.cases, args.filter.as_deref()).map_err(|e| anyhow::anyhow!(e))?;
@@ -75,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     for case in &cases {
         for n in 1..=args.repeat {
             eprintln!("running {} (#{n}) ...", case.name);
-            let run = run_case(&agent, case, n, args.timeout)
+            let run = run_case(&agent, case, n, timeout)
                 .await
                 .map_err(|e| anyhow::anyhow!("{}: {e}", case.name))?;
             eprintln!(

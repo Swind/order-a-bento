@@ -28,13 +28,13 @@ mod tests {
     fn placeholders_are_substituted() {
         let p = import_agent_system_prompt();
         assert!(!p.contains("{{"), "unsubstituted placeholder");
-        assert!(p.contains("1–50 字元"));
-        assert!(p.contains("最多 500 人"));
-        assert!(p.contains("範圍 1–100000"));
-        assert!(p.contains("最多 200 個品項"));
-        assert!(p.contains("1–50 字元，使用傳單上的原名"));
+        assert!(p.contains("1–50 characters"));
+        assert!(p.contains("At most 500 people"));
+        assert!(p.contains("in the range 1–100000"));
+        assert!(p.contains("At most 200 items"));
+        assert!(p.contains("1–50 characters, using the original name"));
         // tied to the constants, not just literals
-        assert!(p.contains(&format!("最多 {} 人", Roster::MAX_MEMBERS)));
+        assert!(p.contains(&format!("At most {} people", Roster::MAX_MEMBERS)));
         assert!(p.contains(&format!("{}–{}", Money::MIN_PRICE, Money::MAX_PRICE)));
     }
 }
