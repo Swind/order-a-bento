@@ -27,24 +27,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home-dir /data bento \
     && mkdir /data && chown bento:bento /data
-# Litestream (optional SQLite replication, enabled by LITESTREAM_BUCKET; see deploy/entrypoint.sh)
-ARG TARGETARCH
-ARG LITESTREAM_VERSION=0.3.13
-ARG LITESTREAM_SHA256_AMD64=eb75a3de5cab03875cdae9f5f539e6aedadd66607003d9b1e7a9077948818ba0
-ARG LITESTREAM_SHA256_ARM64=9585f5a508516bd66af2b2376bab4de256a5ef8e2b73ec760559e679628f2d59
-RUN set -eu; \
-    case "${TARGETARCH:-amd64}" in \
-      amd64) sha="$LITESTREAM_SHA256_AMD64" ;; \
-      arm64) sha="$LITESTREAM_SHA256_ARM64" ;; \
-      *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/litestream.tgz "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz"; \
-    echo "${sha}  /tmp/litestream.tgz" | sha256sum -c -; \
-    tar -xzf /tmp/litestream.tgz -C /usr/local/bin litestream; \
-    rm /tmp/litestream.tgz
 COPY --from=backend /app/backend/target/release/server /usr/local/bin/server
-COPY deploy/litestream.yml /etc/litestream.yml
-COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 USER bento
 ENV DATABASE_URL=sqlite:///data/bento.db \
     APP_ENV=production \
@@ -53,5 +36,4 @@ VOLUME /data
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
     CMD curl -fsS http://127.0.0.1:3000/healthz || exit 1
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["server"]
+ENTRYPOINT ["/usr/local/bin/server"]

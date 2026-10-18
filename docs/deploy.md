@@ -5,8 +5,7 @@
 ## 1. 前置需求
 
 - Docker（或可執行 Linux 容器的環境）、一個對外的 HTTPS 網域（例：`https://bento.example.com`）。
-- Google OAuth 用戶端（見 §3）。
-- 選用：Anthropic API key（AI 匯入）、S3 相容 bucket（Litestream 備份）。
+- 選用：Google OAuth 用戶端（見 §3；不設定也能用本機帳號登入）、Anthropic API key（AI 匯入）。
 
 ## 2. 建置映像
 
@@ -59,7 +58,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `PORT` | `3000` | 監聽埠 |
 | `APP_BASE_URL` | `http://localhost:3000` | **必設**。公開網址，用於 OAuth 回呼、分享連結；`https://` 開頭時 cookie 才帶 `Secure` |
 | `ALLOWED_ORIGINS` | production 為空 | 額外允許送出狀態變更請求的 Origin（逗號分隔，CSRF 檢查）；`APP_BASE_URL` 的 origin 一律允許，通常不需設定 |
-| `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑。使用 Litestream 時必須是 `/data/bento.db` |
+| `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑 |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth（§3） |
 | `GOOGLE_OAUTH_ENABLED` | 空（自動） | 空＝有 Google 憑證才啟用；`false`＝停用；`true`＝必須有憑證，否則拒絕啟動（§3.1） |
 | `PASSWORD_LOGIN_ENABLED` | `true` | 本機帳號 email + 密碼登入；`false` 時 `/auth/password-login` 回 404 |
@@ -85,11 +84,6 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `PUBLIC_RATE_LIMIT_BURST` / `PUBLIC_RATE_LIMIT_PER_SEC` | `30` / `2` | 公開端點每個 client IP 的 token bucket |
 | `DISPLAY_UTC_OFFSET` | `+08:00` | 連結預覽（OG）中截止時間顯示的時區 |
 | `RUST_LOG` | `info,tower_http=info` | 日誌等級 |
-| `LITESTREAM_BUCKET` | 空 | 設定後啟用 Litestream（§7） |
-| `LITESTREAM_PATH` | `bento` | bucket 內前綴 |
-| `LITESTREAM_ENDPOINT` | 空 | S3 相容服務 endpoint（AWS S3 留空） |
-| `LITESTREAM_REGION` | 空 | region（R2 用 `auto`） |
-| `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | 空 | bucket 憑證 |
 
 清除 ClientInfo 的依據是 `group_orders.closed_at`（關閉時寫入；封存只能從已關閉狀態進行且保留 `closed_at`；重新開啟會清空 `closed_at`）。因此「開放中」與「重新開啟」的團不會被清除，已關閉／已封存且關閉時間早於保存期限的團會被清除。訂單內容、備註與品項明細不受影響。
 
@@ -180,36 +174,31 @@ bento.example.com {
 
 Caddy 自動申請並續期 HTTPS 憑證。應用程式只信任 `TRUSTED_PROXIES` 內的連線所帶的 `X-Forwarded-For`，其他來源的該標頭會被忽略。
 
-## 7. 備份：Litestream
+## 7. 備份
 
-設定 `LITESTREAM_BUCKET`（及 endpoint／憑證）即啟用，映像內為 Litestream v0.3.13（建置時驗證 sha256）。啟動流程（`deploy/entrypoint.sh`）：
-
-1. 若 `/data/bento.db` 不存在且 replica 有資料 → `litestream restore` 還原；
-2. `litestream replicate -exec server`：Litestream 啟動並監督伺服器，持續把 WAL 複寫到 bucket（每 10 秒同步，快照保留 7 天；設定見 `deploy/litestream.yml`）。
-
-未設定 `LITESTREAM_BUCKET` 時直接執行伺服器，不經過 Litestream。
+映像不含 `sqlite3`，建議短暫停機後打包整個 volume。停機時複製 `bento.db` 連同 `-wal`／`-shm`，備份才一致：
 
 ```sh
-docker run -d --name bento -v bento-data:/data \
-  -e LITESTREAM_BUCKET=my-bucket -e LITESTREAM_PATH=bento \
-  -e LITESTREAM_ENDPOINT=https://<account>.r2.cloudflarestorage.com -e LITESTREAM_REGION=auto \
-  -e LITESTREAM_ACCESS_KEY_ID=... -e LITESTREAM_SECRET_ACCESS_KEY=... \
-  ... order-a-bento:latest
+docker stop bento
+docker run --rm -v bento-data:/data -v "$PWD":/backup debian:bookworm-slim \
+  tar czf /backup/bento-$(date +%F).tgz -C /data .
+docker start bento
 ```
 
-**災難還原**：在全新主機（空 volume）用相同的 `LITESTREAM_*` 啟動容器即自動還原。手動還原：
+**還原**：停掉容器，把備份解到 volume，再啟動：
 
 ```sh
-docker run --rm -v bento-data:/data --env-file litestream.env --entrypoint litestream \
-  order-a-bento:latest restore -config /etc/litestream.yml -if-replica-exists /data/bento.db
+docker stop bento
+docker run --rm -v bento-data:/data -v "$PWD":/backup debian:bookworm-slim \
+  sh -c 'rm -f /data/bento.db* && tar xzf /backup/bento-YYYY-MM-DD.tgz -C /data && chown -R 10001 /data'
+docker start bento
 ```
 
 注意事項：
 
-- SQLite 必須為 WAL 模式（本應用預設即是），**只能有一個應用程式實例，且不可有其他程式寫入該 DB 檔**；兩個實例共用同一個 replica 會互相破壞。
-- 不要直接複製 `bento.db` 單檔當備份（會漏掉 `-wal`）；要手動備份請用 `sqlite3 bento.db ".backup out.db"`。
-- Litestream 為非同步複寫，崩潰時最多損失數秒資料。
-- 定期（例如每季）實際演練一次還原。
+- **只能有一個應用程式實例，且不可有其他程式寫入該 DB 檔**。
+- 不要在服務執行中直接複製 `bento.db` 單檔當備份（會漏掉 `-wal`）。
+- 備份檔請存放到另一台主機或異地；定期（例如每季）實際演練一次還原。
 
 ## 8. 健康檢查
 
@@ -223,7 +212,7 @@ docker stop bento && docker rm bento
 docker run ...                           # 同樣的 volume 與參數
 ```
 
-資料庫 migration 於啟動時自動執行（向前相容，無降版 migration）；升級前建議先確認最近一次 Litestream 複寫正常，或手動 `.backup`。停機時間約為容器重啟時間。
+資料庫 migration 於啟動時自動執行（向前相容，無降版 migration）；升級前建議先依 §7 做一次備份。停機時間約為容器重啟時間。
 
 ## 10. 安全檢查清單
 
@@ -234,6 +223,6 @@ docker run ...                           # 同樣的 volume 與參數
 - [ ] 本機管理員密碼夠長且不重複使用；用 CLI 建立，或首次啟動後移除 `ADMIN_PASSWORD`。不需要密碼登入時設 `PASSWORD_LOGIN_ENABLED=false`。
 - [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
 - [ ] 使用非 Claude 的模型時 `AI_PROVIDER=anthropic-compatible`／`openai-compatible`／`openai-responses`（並設 `AI_BASE_URL`、`AI_MODEL`），且已跑過 `make ai-eval`。
-- [ ] `AI_API_KEY`、Litestream 憑證以 env／secret 管理；Litestream bucket 設為私有並使用最小權限金鑰。
+- [ ] `AI_API_KEY` 以 env／secret 管理。
 - [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。
 - [ ] 以單一實例執行，`/data` 為持久 volume。

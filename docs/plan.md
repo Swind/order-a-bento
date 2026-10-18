@@ -127,7 +127,7 @@
 | T4.1 | ✅ 驗收通過 | 191 個後端測試；prompt 與 design §9.4 逐字一致；tools 皆以 organizer_id 限定；apply 單一 transaction 失敗全回滾 |
 | T4.2 | ✅ 驗收通過 | 217 個後端測試；mock Anthropic 驗證請求格式；示範模式實測：上傳驗證、提案（覆蓋價格／缺價）、apply 422 指出欄位、補價後套用、重複套用 409、log 無圖片 |
 | T4.3 | ✅ 驗收通過 | 106 個前端測試；headless Chrome（示範模式）：從店家頁上傳 → 確認畫面缺價時套用停用 → 補價 → 套用回店家頁；實測 2400×1600 PNG 782KB 壓成 1568×1045 JPEG 29KB |
-| T5.1 | ✅ 驗收通過 | 218 個後端測試；維護工作（session、ClientInfo 90 天、卡住的 AI run）；Litestream v0.3.13；docker 實跑 non-root、production+DEV_LOGIN 拒絕啟動（真實 S3 備份還原未測） |
+| T5.1 | ✅ 驗收通過 | 218 個後端測試；維護工作（session、ClientInfo 90 天、卡住的 AI run）；Litestream v0.3.13；docker 實跑 non-root、production+DEV_LOGIN 拒絕啟動（真實 S3 備份還原未測）。註：Litestream 已於 2026-10-18 依 owner 決定移除，改為手動備份 volume |
 | T5.3a | ✅ 驗收通過 | 111 個前端測試；bundle 865 kB → 最大 chunk 262 kB；瀏覽器實測 toast 在標題列下方、下單頁隱私告知露出於 sticky bar 上方 |
 | T5.2 | ✅ 驗收通過 | 5 個 spec、mobile+desktop 共 7 個測試，連跑 3 次全過（約 5 秒）；CI 加 e2e job（workflow 本身尚未在 GitHub 執行過） |
 | T4.4 | ✅ 驗收通過 | `make ai-eval`；7 組合成測試圖（名單、傳單、雜亂傳單、提示注入、非菜單、既有名單）對 Strata（qwen3.8-flash）7/7 PASS，平均 15 秒、約 1 萬 input tokens；prompt 補 3 條規則（核對總人數、note 不放廣告、分類原樣抄）。真實手機照片與 Claude 尚未跑 |

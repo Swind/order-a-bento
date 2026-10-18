@@ -102,7 +102,7 @@ sequenceDiagram
 │  ├── /g/{token}        回傳 index.html（注入 OG meta，供 LINE 預覽）            │
 │  └── /**               React SPA 靜態檔（rust-embed）                           │
 │                                                                                 │
-│  SQLite (WAL)  ── /data/bento.db   ← Litestream 持續備份到 S3/GCS（選配）       │
+│  SQLite (WAL)  ── /data/bento.db                                                │
 └─────────────────────────────────────────────────────────────────────────────────┘
           │                              │
           ▼                              ▼
@@ -1224,7 +1224,7 @@ CLIENT_INFO_RETENTION_DAYS=90
 
 **部署**
 - 多階段 Dockerfile：`node` build 前端 → `rust` build（嵌入前端）→ `distroless` / `debian-slim` 執行。
-- SQLite 檔案放在 volume；使用 Litestream 持續備份（或每日 `VACUUM INTO` 快照）。
+- SQLite 檔案放在 volume；以停機打包 volume 手動備份（見 docs/deploy.md §7）。
 - 可部署於 Fly.io / Railway / 自有 VPS（單機即可；SQLite 不適合多實例水平擴充）。
 - 背景工作（`tokio` interval，每日一次）：清除過期 session、oauth_states、超過保存期限的 ClientInfo。
 - 健康檢查 `/healthz`。
@@ -1262,7 +1262,7 @@ CLIENT_INFO_RETENTION_DAYS=90
 | **M2 開團 + 下單** | 開團精靈、share token、公開下單頁（送出／重新送出／取消）、ClientInfo 記錄 | 可在 LINE 實際使用 |
 | **M3 管理統計** | 統計、明細、領取/繳費 checklist、送出歷史與可疑裝置標示、關閉/重開、輪替連結 | 完整 MVP |
 | **M4 AI 匯入** | rig agent、6 個 tools、system prompt、確認畫面、apply、用量與額度、eval 集 | AI 輔助 |
-| **M5 打磨與上線** | OG 預覽、截止倒數、ClientInfo 清除排程、Litestream、E2E | 正式上線 |
+| **M5 打磨與上線** | OG 預覽、截止倒數、ClientInfo 清除排程、E2E | 正式上線 |
 
 ---
 
