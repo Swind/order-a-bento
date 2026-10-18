@@ -17,5 +17,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
     css: false,
+    // Must exceed asyncUtilTimeout (test-setup.ts) so a slow findBy* reports its own error.
+    testTimeout: 15000,
   },
 });
