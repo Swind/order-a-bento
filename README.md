@@ -97,11 +97,24 @@ make admin EMAIL=you@example.com NAME="你的名字"   # 互動輸入密碼
 
 **限制**：SQLite 只有一個寫入者，**只能跑單一實例**。
 
-### 1. 建置映像
+### 1. 取得映像
+
+CI 在 main 與 `v*` tag 通過後會把 amd64 / arm64 雙架構映像推到 GHCR：
 
 ```sh
-make docker-build
+docker pull ghcr.io/swind/order-a-bento:latest
 ```
+
+| tag | 來源 |
+|---|---|
+| `latest` | main 最新一次 |
+| `sha-<short>` | 每個 main commit |
+| `X.Y.Z`、`X.Y` | 推 `vX.Y.Z` tag 時 |
+
+- GHCR 套件預設為私有：到 GitHub 套件設定改成 public，或在主機 `docker login ghcr.io`（token 需 `read:packages`）。
+- 正式環境建議固定 `sha-` 或版本 tag，不要追 `latest`。
+- 更新：`docker pull` 新 tag，停掉並刪除舊容器，用相同 volume 與環境變數重新 `docker run`（單一實例，見下）。
+- 也可以自行建置：`make docker-build`（產生 `order-a-bento:latest`，為本機架構）。以下範例用本機建置的名稱，改用 GHCR 時把 `order-a-bento:latest` 換成 `ghcr.io/swind/order-a-bento:<tag>`。
 
 映像以非 root 使用者（uid 10001）執行，監聽 3000，資料在 `/data`，預設 `APP_ENV=production`。
 
@@ -256,7 +269,7 @@ docker start bento
 
 ### 部署給自動化工具的重點
 
-- 映像：`order-a-bento:latest`（自行 `docker build -t order-a-bento:latest .`）；入口為 `/usr/local/bin/server`，以非 root 的 `bento`（uid 10001）執行，容器埠 `3000`。
+- 映像：`ghcr.io/swind/order-a-bento`（tag：`latest` = main、`sha-<short>`、tag `vX.Y.Z` 時另有 `X.Y.Z` 與 `X.Y`；amd64 + arm64；套件預設私有，需設為 public 或 `docker login ghcr.io`；正式環境固定 `sha-`／版本 tag）。亦可自行 `docker build -t order-a-bento:latest .`。入口為 `/usr/local/bin/server`，以非 root 的 `bento`（uid 10001）執行，容器埠 `3000`。
 - Volume：掛載到 `/data`，目錄擁有者須為 uid 10001（命名 volume 會自動處理；bind mount 要 `chown 10001`）。
 - 健康檢查：`GET /healthz` 回 200 與 `{"status":"ok"}`（映像已內建 `HEALTHCHECK`）。
 - **只能跑單一實例**（SQLite 單寫入者），升級時先停舊容器再啟動新容器。

@@ -13,6 +13,8 @@
 make docker-build            # 等同 docker build -t order-a-bento:latest .
 ```
 
+CI 也會把雙架構（amd64 / arm64，arm64 為交叉編譯）映像推到 `ghcr.io/swind/order-a-bento`，tag：`latest`（main）、`sha-<short>`、`X.Y.Z` / `X.Y`（推 `v*` tag）。套件預設私有，需改為 public 或 `docker login ghcr.io`（token 需 `read:packages`）；正式環境建議固定 `sha-` 或版本 tag。更新時 `docker pull` 後以相同 volume／環境變數重建容器。
+
 映像以非 root 使用者 `bento`（uid 10001）執行，資料目錄為 `/data`（`VOLUME`），監聽 `3000`。
 
 ## 3. Google 登入設定
