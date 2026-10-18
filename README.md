@@ -85,11 +85,13 @@ make admin EMAIL=you@example.com NAME="你的名字"   # 互動輸入密碼
 
 | 指令 | 說明 |
 |---|---|
-| `make check` | 所有 CI 檢查：fmt、clippy、後端測試、OpenAPI 同步、前端 typecheck、測試、build |
+| `make check` | 所有 CI 檢查：版本一致、fmt、clippy、後端測試、OpenAPI 同步、前端 typecheck、測試、build |
 | `make e2e` | 建置 release 執行檔後跑 Playwright（本機：`CHROME_PATH=/usr/bin/google-chrome make e2e`） |
 | `make gen-api` | 後端 API 改動後，重新匯出 `openapi.json` 並產生前端型別 |
 | `make ai-eval` | 用真實模型跑 AI 匯入評測（會花 token，不在 CI 中） |
 | `make docker-build` | 建置 Docker 映像 `order-a-bento:latest` |
+| `make version` | 印出目前版本 |
+| `make bump V=X.Y.Z` | 升版：更新 Cargo.toml、Cargo.lock、前端 package.json／lock（不會 commit） |
 
 ## 部署
 
@@ -99,7 +101,7 @@ make admin EMAIL=you@example.com NAME="你的名字"   # 互動輸入密碼
 
 ### 1. 取得映像
 
-CI 在 main 與 `v*` tag 通過後會把 amd64 / arm64 雙架構映像推到 GHCR：
+CI 在 main 通過後會把 amd64 / arm64 雙架構映像推到 GHCR：
 
 ```sh
 docker pull ghcr.io/swind/order-a-bento:latest
@@ -109,7 +111,8 @@ docker pull ghcr.io/swind/order-a-bento:latest
 |---|---|
 | `latest` | main 最新一次 |
 | `sha-<short>` | 每個 main commit |
-| `X.Y.Z`、`X.Y` | 推 `vX.Y.Z` tag 時 |
+| `X.Y.Z.<build>` | main 每次通過 CI（`<build>` 為 GitHub Actions run number），例如 `0.1.0.42` |
+| `X.Y.Z` | main 最新一次的該版本（版本號見下方「版本」） |
 
 - GHCR 套件預設為私有：到 GitHub 套件設定改成 public，或在主機 `docker login ghcr.io`（token 需 `read:packages`）。
 - 正式環境建議固定 `sha-` 或版本 tag，不要追 `latest`。
@@ -194,6 +197,13 @@ docker start bento
 - 升級：建置新映像，停掉舊容器，用同樣的 volume 和參數啟動。migration 在啟動時自動執行。
 - 健康檢查：`GET /healthz`，映像內建 Docker `HEALTHCHECK`。
 
+## 版本
+
+- 版本號只在 `backend/Cargo.toml` 的 `[workspace.package].version` 設定，`frontend/package.json` 與 lock 檔跟著它走；`scripts/version.sh check`（`make check` 與 CI 都會跑）在不一致時失敗。
+- 升版流程：`make bump V=X.Y.Z` → commit → push 到 main → CI 發佈映像 `X.Y.Z.<run_number>`（同時更新 `X.Y.Z`、`latest`、`sha-<short>`）。
+- 建置編號由 CI 以 `BUILD_NUMBER` build arg 傳入並編進執行檔；本機建置沒有編號，版本就是 `X.Y.Z`。
+- `server --version`（或 `-V`）印出 `server X.Y.Z.<build>`；`GET /healthz` 的 JSON 也有 `version` 欄位。
+
 ## 環境變數
 
 規則（適用所有變數）：
@@ -269,9 +279,9 @@ docker start bento
 
 ### 部署給自動化工具的重點
 
-- 映像：`ghcr.io/swind/order-a-bento`（tag：`latest` = main、`sha-<short>`、tag `vX.Y.Z` 時另有 `X.Y.Z` 與 `X.Y`；amd64 + arm64；套件預設私有，需設為 public 或 `docker login ghcr.io`；正式環境固定 `sha-`／版本 tag）。亦可自行 `docker build -t order-a-bento:latest .`。入口為 `/usr/local/bin/server`，以非 root 的 `bento`（uid 10001）執行，容器埠 `3000`。
+- 映像：`ghcr.io/swind/order-a-bento`（tag：`latest` = main、`sha-<short>`、`X.Y.Z`、`X.Y.Z.<build>`；amd64 + arm64；套件預設私有，需設為 public 或 `docker login ghcr.io`；正式環境固定 `sha-`／版本 tag）。亦可自行 `docker build -t order-a-bento:latest .`。入口為 `/usr/local/bin/server`，以非 root 的 `bento`（uid 10001）執行，容器埠 `3000`。
 - Volume：掛載到 `/data`，目錄擁有者須為 uid 10001（命名 volume 會自動處理；bind mount 要 `chown 10001`）。
-- 健康檢查：`GET /healthz` 回 200 與 `{"status":"ok"}`（映像已內建 `HEALTHCHECK`）。
+- 健康檢查：`GET /healthz` 回 200 與 `{"status":"ok","version":"X.Y.Z.<build>"}`（映像已內建 `HEALTHCHECK`）。
 - **只能跑單一實例**（SQLite 單寫入者），升級時先停舊容器再啟動新容器。
 - `docker run --env-file` 格式：每行 `KEY=value`，**值不加引號、不可有行內註解**（`#` 之後的內容會成為值的一部分）；整行註解需獨立一行。
 - 非互動建立管理員：

@@ -11,7 +11,7 @@ use infrastructure::timefmt::to_text;
 
 /// Order-a-bento server. Without a subcommand it starts the HTTP server.
 #[derive(Debug, Parser)]
-#[command(name = "server", version)]
+#[command(name = "server", version = api::version::version())]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -372,5 +372,17 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["server", "admin", "create", "--email", "a@b.c"]).is_err());
         assert!(Cli::try_parse_from(["server", "admin", "list"]).is_ok());
+    }
+
+    #[test]
+    fn version_flags_print_server_version() {
+        for flag in ["--version", "-V"] {
+            let e = Cli::try_parse_from(["server", flag]).unwrap_err();
+            assert_eq!(e.kind(), clap::error::ErrorKind::DisplayVersion);
+            assert_eq!(
+                e.to_string().trim(),
+                format!("server {}", api::version::version())
+            );
+        }
     }
 }

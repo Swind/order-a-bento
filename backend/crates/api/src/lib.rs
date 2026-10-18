@@ -11,6 +11,7 @@ pub mod session;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod testing;
+pub mod version;
 pub mod web;
 
 use axum::Router;

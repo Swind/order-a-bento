@@ -3399,12 +3399,18 @@
       "HealthResponse": {
         "type": "object",
         "required": [
-          "status"
+          "status",
+          "version"
         ],
         "properties": {
           "status": {
             "type": "string",
             "example": "ok"
+          },
+          "version": {
+            "type": "string",
+            "description": "Application version, with the CI build number appended when built by CI.",
+            "example": "0.1.0.42"
           }
         }
       },

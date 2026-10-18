@@ -13,6 +13,9 @@ use crate::state::AppState;
 pub struct HealthResponse {
     #[schema(example = "ok")]
     pub status: String,
+    /// Application version, with the CI build number appended when built by CI.
+    #[schema(example = "0.1.0.42")]
+    pub version: String,
 }
 
 /// Liveness/readiness probe; verifies the database answers `SELECT 1`.
@@ -30,6 +33,7 @@ pub async fn healthz(State(state): State<AppState>) -> Result<Json<HealthRespons
     sqlx::query("SELECT 1").execute(&state.db.read).await?;
     Ok(Json(HealthResponse {
         status: "ok".into(),
+        version: crate::version::version().to_string(),
     }))
 }
 
@@ -58,6 +62,7 @@ mod tests {
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["status"], "ok");
+        assert_eq!(v["version"], crate::version::version());
     }
 
     #[tokio::test]

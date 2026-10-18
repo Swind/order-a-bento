@@ -50,10 +50,12 @@ COPY --from=planner /app/backend/recipe.json recipe.json
 # Same target/profile/package/env as the final build below. Does not need the frontend.
 RUN . /env.sh && cargo chef cook --release --locked --target "$RUST_TARGET" -p server --recipe-path recipe.json
 COPY backend/ ./
+# Declared after the cook step so a new build number never invalidates the dependency cache.
+ARG BUILD_NUMBER
 # rust-embed embeds ../frontend/dist (relative to backend/crates/server) at compile time
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
 RUN . /env.sh \
-    && cargo build --release --locked -p server --target "$RUST_TARGET" \
+    && BUILD_NUMBER="$BUILD_NUMBER" cargo build --release --locked -p server --target "$RUST_TARGET" \
     && mkdir -p /out \
     && cp "target/$RUST_TARGET/release/server" /out/server
 

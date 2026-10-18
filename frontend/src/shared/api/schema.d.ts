@@ -768,6 +768,11 @@ export interface components {
         HealthResponse: {
             /** @example ok */
             status: string;
+            /**
+             * @description Application version, with the CI build number appended when built by CI.
+             * @example 0.1.0.42
+             */
+            version: string;
         };
         HistoryLineDto: {
             /** @description The offered item this line orders. */

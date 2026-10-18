@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
   pull_request:
 
 env:
@@ -17,6 +16,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      - name: Version sync check
+        run: ../scripts/version.sh check
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -106,16 +107,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: ver
+        run: |
+          echo "version=$(scripts/version.sh get)" >> "$GITHUB_OUTPUT"
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/order-a-bento
           tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}.${{ steps.ver.outputs.build }},enable={{is_default_branch}}
+            type=raw,value=${{ steps.ver.outputs.version }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
           labels: |
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}.${{ steps.ver.outputs.build }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
       - uses: docker/build-push-action@v6
@@ -125,5 +131,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: BUILD_NUMBER=${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
