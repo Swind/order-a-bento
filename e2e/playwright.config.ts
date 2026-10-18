@@ -70,6 +70,10 @@ export default defineConfig({
       GOOGLE_OAUTH_ENABLED: "false",
       PASSWORD_LOGIN_ENABLED: "true",
       AI_DEMO: "true",
+      // A real key would win over AI_DEMO; blank them so neither the shell nor
+      // a repo-root .env (dotenvy never overrides set vars) can reach a live model.
+      AI_API_KEY: "",
+      ANTHROPIC_API_KEY: "",
       APP_BASE_URL: BASE_URL,
       ALLOWED_ORIGINS: BASE_URL,
       PUBLIC_RATE_LIMIT_BURST: "1000",
