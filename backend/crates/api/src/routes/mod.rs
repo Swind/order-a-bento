@@ -3,6 +3,7 @@
 pub mod ai_import;
 pub mod auth;
 pub mod common;
+pub mod delivery_addresses;
 pub mod group_orders;
 pub mod health;
 pub mod me;

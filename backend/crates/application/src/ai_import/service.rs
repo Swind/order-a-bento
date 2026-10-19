@@ -69,8 +69,15 @@ pub struct StartImportCmd {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AcceptedChange {
+    DeliveryAddress(AcceptedDeliveryAddress),
     Roster(AcceptedRoster),
     Vendor(AcceptedVendor),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcceptedDeliveryAddress {
+    pub name: String,
+    pub address: String,
 }
 
 /// `{ "type":"roster", "roster": {"kind":"existing","existingId":".."} | {"kind":"new","name":".."},
@@ -140,6 +147,7 @@ pub struct ApplyCmd {
 /// Aggregates touched by an apply.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ApplyResult {
+    pub delivery_address_ids: Vec<domain::directory::DeliveryAddressId>,
     pub roster_ids: Vec<RosterId>,
     pub vendor_ids: Vec<VendorId>,
 }
@@ -375,6 +383,34 @@ impl AiImportService {
         for (ci, change) in cmd.accepted.iter().enumerate() {
             let p = format!("accepted[{ci}]");
             match change {
+                AcceptedChange::DeliveryAddress(a) => {
+                    if !seen_targets.insert(format!(
+                        "delivery-address:{}",
+                        NameKey::from(a.name.as_str())
+                    )) {
+                        errors.push(err(format!("{p}.name"), "送餐地點重複"));
+                    }
+                    match domain::directory::DeliveryAddress::new(org, &a.name, &a.address) {
+                        Ok(address) => prepared.push(Prepared::DeliveryAddress(address)),
+                        Err(e) => errors.push(err(
+                            format!(
+                                "{p}.{}",
+                                if matches!(
+                                    e,
+                                    DomainError::Invalid {
+                                        field: "address",
+                                        ..
+                                    }
+                                ) {
+                                    "address"
+                                } else {
+                                    "name"
+                                }
+                            ),
+                            reason(&e),
+                        )),
+                    }
+                }
                 AcceptedChange::Roster(r) => {
                     let key = match &r.roster {
                         TargetRef::Existing { existing_id } => format!("roster:{existing_id}"),
@@ -417,6 +453,10 @@ impl AiImportService {
         let mut result = ApplyResult::default();
         for item in prepared {
             match item {
+                Prepared::DeliveryAddress(a) => {
+                    result.delivery_address_ids.push(a.id);
+                    steps.push(ImportApplyStep::CreateDeliveryAddress(a));
+                }
                 Prepared::Roster(r) => match r.target {
                     ResolvedRoster::Existing(rid) => {
                         if self.rosters.find(org, rid).await?.is_none() {
@@ -560,6 +600,7 @@ struct ValidVendor {
     items: Vec<MenuItemInput>,
 }
 enum Prepared {
+    DeliveryAddress(domain::directory::DeliveryAddress),
     Roster(ValidRoster),
     Vendor(ValidVendor),
 }

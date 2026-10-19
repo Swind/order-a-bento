@@ -46,6 +46,7 @@ fn api_router(dev_login: bool, password_login: bool) -> OpenApiRouter<AppState> 
                 .merge(routes::me::router())
                 .merge(routes::ai_import::router())
                 .merge(routes::rosters::router())
+                .merge(routes::delivery_addresses::router())
                 .merge(routes::vendors::router())
                 .merge(routes::group_orders::router())
                 .merge(routes::public::router()),

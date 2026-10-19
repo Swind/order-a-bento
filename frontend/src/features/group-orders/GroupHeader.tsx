@@ -1,6 +1,7 @@
 import { Pencil } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
 import { errorMessage } from "@/shared/api/errors";
 import type { GroupOrderDetail } from "@/shared/api/types";
 import { ConfirmActionButton } from "@/shared/components/ConfirmActionButton";
@@ -9,6 +10,49 @@ import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { StatusBadge } from "./GroupCard";
 import { usePatchGroup, useRotateShareToken } from "./hooks";
+
+function DeliveryAddressEditor({ group, readOnly }: { group: GroupOrderDetail; readOnly: boolean }) {
+  const patch = usePatchGroup(group.id);
+  const [editing, setEditing] = useState(false);
+  const [id, setId] = useState("");
+
+  function save(deliveryAddressId: string | null) {
+    patch.mutate({ deliveryAddressId }, {
+      onSuccess: () => setEditing(false),
+      onError: (e) => toast.error(errorMessage(e)),
+    });
+  }
+
+  return (
+    <div className="space-y-2 text-sm">
+      <p className="break-words">
+        {group.deliveryAddress ? `送餐地址：${group.deliveryAddress}` : "尚未設定送餐地址"}
+      </p>
+      {editing ? (
+        <div className="space-y-2">
+          <DeliveryAddressSelect value={id} onChange={setId} disabled={patch.isPending} />
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" className="h-11" disabled={!id || patch.isPending} onClick={() => save(id)}>
+              儲存送餐地址
+            </Button>
+            {group.deliveryAddress && (
+              <Button type="button" variant="outline" className="h-11" disabled={patch.isPending} onClick={() => save(null)}>
+                清除地址
+              </Button>
+            )}
+            <Button type="button" variant="ghost" className="h-11" onClick={() => setEditing(false)}>
+              取消
+            </Button>
+          </div>
+        </div>
+      ) : !readOnly && (
+        <Button type="button" variant="outline" className="h-11" onClick={() => { setId(""); setEditing(true); }}>
+          設定送餐地址
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function TitleEditor({ group, readOnly }: { group: GroupOrderDetail; readOnly: boolean }) {
   const patch = usePatchGroup(group.id);
@@ -162,6 +206,7 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
         {group.vendor.phone && ` · ${group.vendor.phone}`}
       </p>
       <DeadlineEditor key={group.deadlineAt ?? "none"} group={group} readOnly={archived} />
+      <DeliveryAddressEditor group={group} readOnly={archived} />
       {group.note && <p className="text-sm">{group.note}</p>}
 
       {archived ? (

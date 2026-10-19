@@ -2,6 +2,7 @@
 
 pub mod ai;
 pub mod ai_import_repo;
+pub mod delivery_address_repo;
 pub mod directory_repo;
 pub mod google;
 pub mod identity_repo;

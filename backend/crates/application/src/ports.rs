@@ -209,6 +209,31 @@ pub struct Stored<T> {
     pub updated_at: SystemTime,
 }
 
+#[async_trait]
+pub trait DeliveryAddressRepo: Send + Sync {
+    async fn list(
+        &self,
+        org: OrganizerId,
+    ) -> PortResult<Vec<Stored<domain::directory::DeliveryAddress>>>;
+    async fn find(
+        &self,
+        org: OrganizerId,
+        id: domain::directory::DeliveryAddressId,
+    ) -> PortResult<Option<Stored<domain::directory::DeliveryAddress>>>;
+    /// Create or replace; updates must belong to `value.organizer_id`.
+    async fn save(
+        &self,
+        value: domain::directory::DeliveryAddress,
+        now: SystemTime,
+        create: bool,
+    ) -> RepoResult<Stored<domain::directory::DeliveryAddress>>;
+    async fn delete(
+        &self,
+        org: OrganizerId,
+        id: domain::directory::DeliveryAddressId,
+    ) -> PortResult<bool>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterSummary {
     pub id: RosterId,
@@ -567,6 +592,7 @@ pub trait ImportRunRepo: Send + Sync {
 
 /// One write of an import apply (see [`ImportApplyRepo`]).
 pub enum ImportApplyStep {
+    CreateDeliveryAddress(domain::directory::DeliveryAddress),
     CreateRoster(Roster),
     ModifyRoster {
         id: RosterId,

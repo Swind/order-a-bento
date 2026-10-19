@@ -10,7 +10,7 @@ pub mod tools;
 pub use agent::{AgentInput, AgentOutcome, AiError, ImageInput, ImportAgent, ImportToolContext};
 pub use fake::{FakeImportAgent, FakeToolCall};
 pub use service::{
-    AcceptedChange, AcceptedMember, AcceptedMenuItem, AcceptedRoster, AcceptedVendor,
-    AcceptedVendorInfo, AiImportConfig, AiImportError, AiImportService, ApplyCmd, ApplyResult,
-    ChangeError, ImportRunView, StartImportCmd,
+    AcceptedChange, AcceptedDeliveryAddress, AcceptedMember, AcceptedMenuItem, AcceptedRoster,
+    AcceptedVendor, AcceptedVendorInfo, AiImportConfig, AiImportError, AiImportService, ApplyCmd,
+    ApplyResult, ChangeError, ImportRunView, StartImportCmd,
 };

@@ -254,6 +254,9 @@ impl ImportApplyRepo for SqliteImportRunRepo {
         let org = run.organizer_id;
         for step in steps {
             match step {
+                ImportApplyStep::CreateDeliveryAddress(a) => {
+                    crate::delivery_address_repo::create_tx(&mut tx, &a, now).await?;
+                }
                 ImportApplyStep::CreateRoster(r) => {
                     create_roster_tx(&mut tx, r, now).await?;
                 }

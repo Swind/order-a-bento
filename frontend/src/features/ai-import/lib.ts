@@ -93,7 +93,7 @@ export interface VendorTargetState {
 export type TargetState = RosterTargetState | VendorTargetState;
 
 export function initState(proposal: ImportProposal): TargetState[] {
-  return proposal.targets.map((t): TargetState => {
+  return proposal.targets.filter((t) => t.type !== "deliveryAddress").map((t): TargetState => {
     if (t.type === "roster") {
       return {
         type: "roster",

@@ -371,6 +371,205 @@
         }
       }
     },
+    "/api/v1/delivery-addresses": {
+      "get": {
+        "tags": [
+          "directory"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryAddressDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "directory"
+        ],
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveDeliveryAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryAddressDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/delivery-addresses/{id}": {
+      "put": {
+        "tags": [
+          "directory"
+        ],
+        "operationId": "update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveDeliveryAddressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryAddressDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "directory"
+        ],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/group-orders": {
       "get": {
         "tags": [
@@ -2668,6 +2867,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/AcceptedDeliveryAddressDto"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "deliveryAddress"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/AcceptedRosterDto"
               },
               {
@@ -2709,6 +2929,21 @@
           }
         ],
         "description": "A confirmed (possibly edited) change sent to `apply`."
+      },
+      "AcceptedDeliveryAddressDto": {
+        "type": "object",
+        "required": [
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
       },
       "AcceptedMemberDto": {
         "type": "object",
@@ -2866,6 +3101,12 @@
           "vendorIds"
         ],
         "properties": {
+          "deliveryAddressIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "rosterIds": {
             "type": "array",
             "items": {
@@ -3029,6 +3270,12 @@
             "format": "date-time",
             "description": "RFC 3339 timestamp; must be in the future."
           },
+          "deliveryAddressId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "note": {
             "type": [
               "string",
@@ -3143,6 +3390,29 @@
             }
           }
         ]
+      },
+      "DeliveryAddressDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "address",
+          "updatedAt"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
       },
       "DevLoginRequest": {
         "type": "object",
@@ -3308,6 +3578,12 @@
             ],
             "format": "date-time"
           },
+          "deliveryAddress": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -3450,6 +3726,7 @@
       "ImportModeDto": {
         "type": "string",
         "enum": [
+          "deliveryAddress",
           "roster",
           "vendor"
         ]
@@ -4123,6 +4400,13 @@
             "format": "date-time",
             "description": "Absent = keep, `null` = clear, RFC 3339 = set (must be in the future)."
           },
+          "deliveryAddressId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent = keep the snapshot; null = clear; id = snapshot this saved address."
+          },
           "note": {
             "type": [
               "string",
@@ -4352,6 +4636,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ProposedDeliveryAddressDto"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "deliveryAddress"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/RosterTargetDto"
               },
               {
@@ -4392,6 +4697,25 @@
             ]
           }
         ]
+      },
+      "ProposedDeliveryAddressDto": {
+        "type": "object",
+        "required": [
+          "name",
+          "address",
+          "confidence"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/ConfidenceDto"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
       },
       "ProposedMemberDto": {
         "type": "object",
@@ -4716,6 +5040,21 @@
           }
         }
       },
+      "SaveDeliveryAddressRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "SetSoldOutRequest": {
         "type": "object",
         "required": [
@@ -4744,7 +5083,7 @@
       },
       "StartImportForm": {
         "type": "object",
-        "description": "Multipart body of `POST /ai/import-runs` (documentation only). `mode` is\nrequired: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.",
+        "description": "Multipart body of `POST /ai/import-runs` (documentation only). `mode` is\nrequired: `roster` for people, `vendor` for menus, `deliveryAddress` for delivery locations.",
         "required": [
           "image",
           "mode"
@@ -4765,6 +5104,7 @@
           "mode": {
             "type": "string",
             "enum": [
+              "deliveryAddress",
               "roster",
               "vendor"
             ]

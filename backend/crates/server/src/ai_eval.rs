@@ -500,6 +500,9 @@ pub async fn run_case(
     let vendors = Arc::new(SqliteVendorRepo::new(db.clone()));
 
     let directory = DirectoryService {
+        delivery_addresses: Arc::new(
+            infrastructure::delivery_address_repo::SqliteDeliveryAddressRepo::new(db.clone()),
+        ),
         rosters: rosters.clone(),
         vendors: vendors.clone(),
         clock: Arc::new(SystemClock),

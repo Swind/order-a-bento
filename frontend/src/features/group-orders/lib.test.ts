@@ -11,20 +11,23 @@ import {
 } from "./lib";
 
 describe("buildOrderText", () => {
-  it("lists ordered items and totals, skipping zero quantities", () => {
+  it("lists only item quantities and their total with clear line breaks, skipping zero quantities", () => {
     expect(
       buildOrderText({
-        title: "週五午餐",
         vendorName: "好吃便當",
+        deliveryAddress: "台北教室（台北市中正區 3 樓）",
         items: [
           { name: "排骨飯", quantity: 7 },
           { name: "素食", quantity: 0 },
           { name: "雞腿飯", quantity: 4 },
         ],
         totalQuantity: 11,
-        totalAmount: 1140,
       }),
-    ).toBe("週五午餐（好吃便當）\n排骨飯 ×7\n雞腿飯 ×4\n共 11 個，$1,140");
+    ).toBe("您好，好吃便當！\n我們這邊是 台北教室（台北市中正區 3 樓）。\n想向您訂購以下便當：\n\n排骨飯 ×7\n雞腿飯 ×4\n\n共 11 個\n\n再麻煩您協助安排外送，\n請問方便接單嗎？謝謝您！");
+  });
+  it("does not invent a delivery address when none is configured", () => {
+    const text = buildOrderText({ vendorName: "便當店", items: [{ name: "排骨飯", quantity: 1 }], totalQuantity: 1 });
+    expect(text).toBe("您好，便當店！\n想向您訂購以下便當：\n\n排骨飯 ×1\n\n共 1 個\n\n請問方便接單嗎？謝謝您！");
   });
 });
 

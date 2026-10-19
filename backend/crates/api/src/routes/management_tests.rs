@@ -9,6 +9,74 @@ fn gid(f: &Fixture) -> String {
     f.group["id"].as_str().unwrap().to_owned()
 }
 
+#[tokio::test]
+async fn delivery_address_snapshot_survives_edits_and_deletion_and_can_be_replaced() {
+    let f = Fixture::new().await;
+    let other = f.c.other().await;
+    let (_, a) =
+        f.c.post(
+            "/delivery-addresses",
+            json!({"name":"台北教室", "address":"舊地址 3 樓"}),
+        )
+        .await;
+    let (_, foreign) = other
+        .post(
+            "/delivery-addresses",
+            json!({"name":"他人教室", "address":"不可讀取"}),
+        )
+        .await;
+    let (_, rosters) = f.c.get("/rosters").await;
+    let (_, vendors) = f.c.get("/vendors").await;
+    let body = json!({"title":"送餐團", "rosterId":rosters[0]["id"], "vendorId":vendors[0]["id"], "deliveryAddressId":a["id"]});
+    let (s, g) = f.c.post("/group-orders", body.clone()).await;
+    assert_eq!(s, StatusCode::CREATED, "{g}");
+    assert_eq!(g["deliveryAddress"], "台北教室（舊地址 3 樓）");
+    let path = format!("/group-orders/{}", g["id"].as_str().unwrap());
+    let mut foreign_body = body;
+    foreign_body["deliveryAddressId"] = foreign["id"].clone();
+    assert_eq!(
+        f.c.post("/group-orders", foreign_body).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.c.patch(&path, json!({"deliveryAddressId":foreign["id"]}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let address_path = format!("/delivery-addresses/{}", a["id"].as_str().unwrap());
+    assert_eq!(
+        f.c.put(
+            &address_path,
+            json!({"name":"新教室", "address":"新地址 5 樓"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.c.get(&path).await.1["deliveryAddress"],
+        "台北教室（舊地址 3 樓）"
+    );
+    assert_eq!(
+        f.c.patch(&path, json!({"deliveryAddressId":a["id"]}))
+            .await
+            .1["deliveryAddress"],
+        "新教室（新地址 5 樓）"
+    );
+    assert_eq!(
+        f.c.send("DELETE", &address_path, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.c.get(&path).await.1["deliveryAddress"],
+        "新教室（新地址 5 樓）"
+    );
+    assert!(
+        f.c.patch(&path, json!({"deliveryAddressId":null})).await.1["deliveryAddress"].is_null()
+    );
+}
+
 fn lines(f: &Fixture, items: &[(&str, u32)]) -> Value {
     Value::Array(
         items

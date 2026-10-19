@@ -13,6 +13,7 @@ use super::{AgentInput, AgentOutcome, AiError, ImportAgent, ImportToolContext};
 /// One scripted tool invocation.
 #[derive(Debug, Clone)]
 pub enum FakeToolCall {
+    ProposeDeliveryAddress(tools::ProposeDeliveryAddressArgs),
     ListRosters,
     GetRoster(GetRosterArgs),
     ListVendors,
@@ -26,6 +27,7 @@ impl FakeToolCall {
     /// tools of the chosen mode).
     fn mode(&self) -> ImportMode {
         match self {
+            Self::ProposeDeliveryAddress(_) => ImportMode::DeliveryAddress,
             Self::ListRosters | Self::GetRoster(_) | Self::ProposeRosterMembers(_) => {
                 ImportMode::Roster
             }
@@ -80,6 +82,9 @@ impl ImportAgent for FakeImportAgent {
                 });
             }
             let r = match call {
+                FakeToolCall::ProposeDeliveryAddress(a) => {
+                    tools::propose_delivery_address(&ctx, a).await.map(drop)
+                }
                 FakeToolCall::ListRosters => tools::list_rosters(&ctx).await.map(drop),
                 FakeToolCall::GetRoster(a) => tools::get_roster(&ctx, a).await.map(drop),
                 FakeToolCall::ListVendors => tools::list_vendors(&ctx).await.map(drop),

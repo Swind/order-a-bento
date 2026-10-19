@@ -23,6 +23,7 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateGroupOrderRequest {
+    pub delivery_address_id: Option<String>,
     pub title: String,
     pub roster_id: String,
     pub vendor_id: String,
@@ -63,6 +64,7 @@ pub struct OfferedItemDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupOrderDetail {
+    pub delivery_address: Option<String>,
     pub id: String,
     pub title: String,
     /// `open`, `closed` or `archived`.
@@ -83,6 +85,7 @@ pub struct GroupOrderDetail {
 
 pub(crate) fn detail(g: &GroupOrder, share_url: String) -> GroupOrderDetail {
     GroupOrderDetail {
+        delivery_address: g.delivery_address().map(str::to_owned),
         id: g.id().to_string(),
         title: g.title().to_string(),
         status: g.status().as_str().into(),
@@ -150,6 +153,11 @@ pub async fn create_group_order(
         .open_group(
             o.id,
             OpenGroupCmd {
+                delivery_address_id: req
+                    .delivery_address_id
+                    .as_deref()
+                    .map(parse_id)
+                    .transpose()?,
                 title: req.title,
                 roster_id: parse_id(&req.roster_id)?,
                 vendor_id: parse_id(&req.vendor_id)?,
@@ -263,6 +271,10 @@ impl From<GroupListItem> for GroupListItemDto {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchGroupOrderRequest {
+    /// Absent = keep the snapshot; null = clear; id = snapshot this saved address.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schema(value_type = Option<String>)]
+    pub delivery_address_id: Option<Option<String>>,
     pub title: Option<String>,
     /// Absent = keep, `null` = clear, RFC 3339 = set (must be in the future).
     #[serde(default, deserialize_with = "double_option")]
@@ -594,6 +606,11 @@ pub async fn patch_group_order(
             o.id,
             parse_id(&id)?,
             UpdateGroupCmd {
+                delivery_address_id: match req.delivery_address_id {
+                    None => Patch::Keep,
+                    Some(None) => Patch::Clear,
+                    Some(Some(id)) => Patch::Set(parse_id(&id)?),
+                },
                 title: req.title,
                 deadline_at,
                 note: Patch::from_option(req.note),

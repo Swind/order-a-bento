@@ -75,12 +75,29 @@ pub struct NewVendor {
 }
 
 pub struct DirectoryService {
+    pub delivery_addresses: Arc<dyn crate::ports::DeliveryAddressRepo>,
     pub rosters: Arc<dyn RosterRepo>,
     pub vendors: Arc<dyn VendorRepo>,
     pub clock: Arc<dyn Clock>,
 }
 
 impl DirectoryService {
+    pub async fn save_delivery_address(
+        &self,
+        org: OrganizerId,
+        id: Option<domain::directory::DeliveryAddressId>,
+        name: &str,
+        address: &str,
+    ) -> Result<Stored<domain::directory::DeliveryAddress>, DirectoryError> {
+        let mut value = domain::directory::DeliveryAddress::new(org, name, address)?;
+        if let Some(id) = id {
+            value.id = id;
+        }
+        Ok(self
+            .delivery_addresses
+            .save(value, self.clock.now(), id.is_none())
+            .await?)
+    }
     // ----- rosters ---------------------------------------------------------
 
     pub async fn list_rosters(

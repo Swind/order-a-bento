@@ -143,14 +143,26 @@ pub struct VendorTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProposalTarget {
+    DeliveryAddress(ProposedDeliveryAddress),
     Roster(RosterTarget),
     Vendor(VendorTarget),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposedDeliveryAddress {
+    pub name: String,
+    pub address: String,
+    pub confidence: Confidence,
 }
 
 impl ProposalTarget {
     /// Whether both proposals address the same roster / vendor.
     pub fn same_target(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::DeliveryAddress(a), Self::DeliveryAddress(b)) => {
+                NameKey::from(a.name.as_str()) == NameKey::from(b.name.as_str())
+            }
             (Self::Roster(a), Self::Roster(b)) => a.roster.same_as(&b.roster),
             (Self::Vendor(a), Self::Vendor(b)) => a.vendor.same_as(&b.vendor),
             _ => false,

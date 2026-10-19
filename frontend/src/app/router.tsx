@@ -24,6 +24,7 @@ export const routes: RouteObject[] = [
     children: [
       { path: "/", lazy: page(() => import("@/features/group-orders/DashboardPage"), "DashboardPage") },
       { path: "/rosters", lazy: page(() => import("@/features/rosters/RostersPage"), "RostersPage") },
+      { path: "/delivery-addresses", lazy: page(() => import("@/features/delivery-addresses/DeliveryAddressesPage"), "DeliveryAddressesPage") },
       { path: "/rosters/:id", lazy: page(() => import("@/features/rosters/RosterDetailPage"), "RosterDetailPage") },
       { path: "/vendors", lazy: page(() => import("@/features/vendors/VendorsPage"), "VendorsPage") },
       { path: "/vendors/:id", lazy: page(() => import("@/features/vendors/VendorDetailPage"), "VendorDetailPage") },

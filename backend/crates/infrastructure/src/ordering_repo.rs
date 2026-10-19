@@ -72,6 +72,7 @@ struct GroupRow {
     status: String,
     deadline_at: Option<String>,
     note: Option<String>,
+    delivery_address: Option<String>,
     source_roster_id: Option<String>,
     source_vendor_id: Option<String>,
     vendor_name: String,
@@ -83,7 +84,7 @@ struct GroupRow {
 
 const GROUP_COLUMNS: &str = "id, organizer_id, title, share_token, status, deadline_at, note, \
      source_roster_id, source_vendor_id, vendor_name, vendor_phone, vendor_address, \
-     created_at, closed_at";
+     created_at, closed_at, delivery_address";
 
 async fn assemble_group(conn: &mut SqliteConnection, row: GroupRow) -> PortResult<GroupOrder> {
     let participants = sqlx::query_as::<_, (String, String, i32)>(
@@ -145,6 +146,7 @@ async fn assemble_group(conn: &mut SqliteConnection, row: GroupRow) -> PortResul
         status: GroupOrderStatus::parse(&row.status).map_err(port)?,
         deadline_at: row.deadline_at.as_deref().map(ts).transpose()?,
         note: row.note,
+        delivery_address: row.delivery_address,
         source_roster_id: row
             .source_roster_id
             .as_deref()
@@ -216,7 +218,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
             .map_err(port)?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO group_orders ({GROUP_COLUMNS}) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )))
         .bind(g.id().to_string())
         .bind(g.organizer_id().to_string())
@@ -232,6 +234,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         .bind(&g.vendor().address)
         .bind(to_text(g.created_at()))
         .bind(g.closed_at().map(to_text))
+        .bind(g.delivery_address())
         .execute(&mut *tx)
         .await
         .map_err(repo)?;
@@ -307,7 +310,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         }
         sqlx::query(
             "UPDATE group_orders SET title = ?, share_token = ?, status = ?, deadline_at = ?, \
-               note = ?, closed_at = ? WHERE id = ? AND organizer_id = ?",
+               note = ?, closed_at = ?, delivery_address = ? WHERE id = ? AND organizer_id = ?",
         )
         .bind(after.title().as_str())
         .bind(after.share_token().as_str())
@@ -315,6 +318,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         .bind(after.deadline_at().map(to_text))
         .bind(after.note())
         .bind(after.closed_at().map(to_text))
+        .bind(after.delivery_address())
         .bind(id.to_string())
         .bind(org.to_string())
         .execute(&mut *tx)
@@ -1198,6 +1202,9 @@ mod tests {
 
     fn service(db: &Db, clock: Arc<dyn Clock>) -> OrderingService {
         OrderingService {
+            delivery_addresses: Arc::new(
+                crate::delivery_address_repo::SqliteDeliveryAddressRepo::new(db.clone()),
+            ),
             groups: Arc::new(SqliteGroupOrderRepo::new(db.clone())),
             submissions: Arc::new(SqliteSubmissionRepo::new(db.clone())),
             read_model: Arc::new(SqliteOrderReadModel::new(db.clone())),
@@ -1213,6 +1220,7 @@ mod tests {
 
     fn cmd(e: &Env, deadline: Option<SystemTime>) -> OpenGroupCmd {
         OpenGroupCmd {
+            delivery_address_id: None,
             title: "午餐".into(),
             roster_id: e.roster,
             vendor_id: e.vendor,

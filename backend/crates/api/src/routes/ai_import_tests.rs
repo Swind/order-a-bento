@@ -136,6 +136,65 @@ async fn client() -> Client {
     client_with(test_app_ai(fake_vendor_agent(), 30, None, false).await).await
 }
 
+#[tokio::test]
+async fn delivery_address_import_is_reviewed_before_atomic_apply() {
+    let agent = Arc::new(FakeImportAgent::new(
+        vec![FakeToolCall::ProposeDeliveryAddress(
+            application::ai_import::tools::ProposeDeliveryAddressArgs {
+                name: "辨識教室".into(),
+                address: "模糊地址".into(),
+                confidence: ConfidenceArg::Low,
+                warnings: vec!["請核對樓層".into()],
+            },
+        )],
+        "已辨識地址，請確認。",
+    ));
+    let c = client_with(test_app_ai(agent, 30, None, false).await).await;
+    let (s, run) = upload_exact(&c, JPEG, &[("mode", "deliveryAddress")]).await;
+    assert_eq!(s, StatusCode::CREATED, "{run}");
+    assert_eq!(run["mode"], "deliveryAddress");
+    assert_eq!(run["proposal"]["targets"][0]["type"], "deliveryAddress");
+    assert!(
+        c.get("/delivery-addresses")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let path = format!("/ai/import-runs/{}/apply", run["id"].as_str().unwrap());
+    assert_eq!(
+        c.other().await.post(&path, json!({"accepted":[]})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let invalid = json!({"accepted":[
+        {"type":"deliveryAddress", "name":"有效教室", "address":"有效地址"},
+        {"type":"deliveryAddress", "name":"教室", "address":""}
+    ]});
+    assert_eq!(
+        c.post(&path, invalid).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert!(
+        c.get("/delivery-addresses")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let confirmed = json!({"accepted":[{"type":"deliveryAddress", "name":"台北教室", "address":"確認地址 3 樓"}]});
+    let (s, result) = c.post(&path, confirmed.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{result}");
+    assert_eq!(result["deliveryAddressIds"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        c.get("/delivery-addresses").await.1[0]["address"],
+        "確認地址 3 樓"
+    );
+    assert_eq!(c.post(&path, confirmed).await.0, StatusCode::CONFLICT);
+    assert!(c.get("/vendors").await.1.as_array().unwrap().is_empty());
+}
+
 fn accepted_vendor() -> Value {
     json!({ "accepted": [{
         "type": "vendor",
@@ -565,6 +624,11 @@ fn dtos_match_domain_json() {
     };
     let proposal = Proposal {
         targets: vec![
+            ProposalTarget::DeliveryAddress(ProposedDeliveryAddress {
+                name: "教室".into(),
+                address: "送餐地址 3 樓".into(),
+                confidence: Confidence::Medium,
+            }),
             ProposalTarget::Roster(RosterTarget {
                 roster: TargetRef::New { name: "R".into() },
                 members: vec![ProposedMember {
@@ -609,6 +673,10 @@ fn dtos_match_domain_json() {
     assert_eq!(serde_json::to_value(&dto).unwrap(), v);
 
     let accepted = vec![
+        AcceptedChange::DeliveryAddress(application::ai_import::AcceptedDeliveryAddress {
+            name: "教室".into(),
+            address: "送餐地址 3 樓".into(),
+        }),
         AcceptedChange::Roster(AcceptedRoster {
             roster: TargetRef::New { name: "R".into() },
             members: vec![AcceptedMember {

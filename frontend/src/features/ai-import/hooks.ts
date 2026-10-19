@@ -64,6 +64,7 @@ export function useApplyImport(runId: string) {
       qc.invalidateQueries({ queryKey: ["roster"] });
       qc.invalidateQueries({ queryKey: ["vendors"] });
       qc.invalidateQueries({ queryKey: ["vendor"] });
+      qc.invalidateQueries({ queryKey: ["delivery-addresses"] });
     },
   });
 }

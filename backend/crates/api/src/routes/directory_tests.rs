@@ -113,6 +113,83 @@ fn id(v: &Value) -> String {
 }
 
 #[tokio::test]
+async fn delivery_address_crud_validation_and_ownership() {
+    let c = Client::new().await;
+    let other = c.other().await;
+    let (s, a) = c
+        .post(
+            "/delivery-addresses",
+            json!({"name": " 台北教室 ", "address": " 台北市中正區 3 樓 "}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{a}");
+    assert_eq!(a["name"], "台北教室");
+    let path = format!("/delivery-addresses/{}", id(&a));
+    assert_eq!(
+        c.get("/delivery-addresses")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        other
+            .get("/delivery-addresses")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        other
+            .put(&path, json!({"name":"改名", "address":"外人的地址"}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        other.send("DELETE", &path, None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        c.put(&path, json!({"name":"台北教室", "address":"新地址 5 樓"}))
+            .await
+            .1["address"],
+        "新地址 5 樓"
+    );
+    for address in [" ".to_owned(), "字".repeat(201)] {
+        assert_eq!(
+            c.post(
+                "/delivery-addresses",
+                json!({"name":"教室", "address":address})
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    assert_eq!(
+        c.send("DELETE", &path, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        c.get("/delivery-addresses")
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let req = Request::get("/api/v1/delivery-addresses")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(raw(&c.app, req).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn unauthenticated_requests_get_401() {
     let t = test_app(true, false).await;
     let app = router(t.state.clone());

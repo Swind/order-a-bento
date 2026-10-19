@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useRosters } from "@/features/rosters/hooks";
 import { useVendors } from "@/features/vendors/hooks";
+import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage, fieldError } from "@/shared/api/errors";
 import { FieldError } from "@/shared/components/FieldError";
@@ -135,6 +136,7 @@ export function NewGroupOrderPage() {
   const [titleOverride, setTitleOverride] = useState<string | null>(null);
   const [deadline, setDeadline] = useState("");
   const [note, setNote] = useState("");
+  const [deliveryAddressId, setDeliveryAddressId] = useState("");
   const [errors, setErrors] = useState<{ title?: string; deadlineAt?: string }>({});
 
   const vendor = vendors.data?.find((v) => v.id === vendorId);
@@ -173,6 +175,7 @@ export function NewGroupOrderPage() {
         title: trimmed,
         rosterId,
         vendorId,
+        ...(deliveryAddressId ? { deliveryAddressId } : {}),
         ...(deadlineAt ? { deadlineAt } : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       },
@@ -186,9 +189,10 @@ export function NewGroupOrderPage() {
           if (f) {
             setErrors({ [f.field]: f.message });
           } else if (err instanceof ApiError && err.status === 404) {
-            toast.error("名單或店家已不存在，請重新選擇");
+            toast.error("名單、店家或送餐地址已不存在，請重新選擇");
             setRosterId(null);
             setVendorId(null);
+            setDeliveryAddressId("");
             setStep(0);
             rosters.refetch();
             vendors.refetch();
@@ -258,6 +262,7 @@ export function NewGroupOrderPage() {
       {step === 2 && (
         <form onSubmit={submit} className="space-y-4" aria-label="設定">
           <h2 className="text-lg font-semibold">設定</h2>
+          <DeliveryAddressSelect value={deliveryAddressId} onChange={setDeliveryAddressId} />
           <div className="space-y-1.5">
             <Label htmlFor="go-title">標題</Label>
             <Input

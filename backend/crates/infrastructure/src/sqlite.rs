@@ -115,6 +115,38 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn delivery_address_migration_preserves_import_runs() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("before-addresses.db"))
+            .await
+            .unwrap();
+        MIGRATOR.run_to(2, &db.write).await.unwrap();
+        sqlx::query("INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at) VALUES ('o1', 'g1', 'a@b.c', 'A', 't', 't')").execute(&db.write).await.unwrap();
+        sqlx::query("INSERT INTO ai_import_runs (id, organizer_id, mode_hint, status, proposal_json, model, input_tokens, created_at) VALUES ('run1', 'o1', 'vendor', 'proposed', '{\"targets\":[],\"warnings\":[]}', 'test-model', 123, 't')").execute(&db.write).await.unwrap();
+        db.migrate().await.unwrap();
+        let row: (String, String, String, i64) = sqlx::query_as("SELECT mode_hint, proposal_json, model, input_tokens FROM ai_import_runs WHERE id = 'run1'").fetch_one(&db.read).await.unwrap();
+        assert_eq!(
+            row,
+            (
+                "vendor".into(),
+                "{\"targets\":[],\"warnings\":[]}".into(),
+                "test-model".into(),
+                123
+            )
+        );
+        sqlx::query("INSERT INTO ai_import_runs (id, organizer_id, mode_hint, status, model, created_at) VALUES ('run2', 'o1', 'deliveryAddress', 'running', 'test', 't')").execute(&db.write).await.unwrap();
+        sqlx::query("DELETE FROM organizers WHERE id = 'o1'")
+            .execute(&db.write)
+            .await
+            .unwrap();
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_import_runs")
+            .fetch_one(&db.read)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
     async fn migrations_apply_and_view_exists() {
         let (db, _dir) = Db::open_temp().await.unwrap();
         let (n,): (i64,) = sqlx::query_as(

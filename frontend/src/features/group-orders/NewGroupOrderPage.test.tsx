@@ -22,6 +22,7 @@ const detail = {
 beforeEach(() =>
   server.use(
     http.get("*/api/v1/me", () => HttpResponse.json(ME)),
+    http.get("*/api/v1/delivery-addresses", () => HttpResponse.json([{ id: "a1", name: "台北教室", address: "台北市 3 樓", updatedAt: "2026-01-01T00:00:00Z" }])),
     http.get("*/api/v1/rosters", () =>
       HttpResponse.json([
         { id: "r0", name: "空名單", memberCount: 0, updatedAt: "2026-01-01T00:00:00Z" },
@@ -62,6 +63,8 @@ describe("NewGroupOrderPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: /好吃便當/ }));
     await userEvent.click(screen.getByRole("button", { name: "下一步" }));
     const title = await screen.findByLabelText("標題");
+    await screen.findByRole("option", { name: "台北教室 — 台北市 3 樓" });
+    await userEvent.selectOptions(screen.getByLabelText("送餐地址（選填）"), "a1");
     expect((title as HTMLInputElement).value).toMatch(/^\d+\/\d+ 午餐 · 好吃便當$/);
     await userEvent.clear(title);
     await userEvent.type(title, "週五午餐");
@@ -69,7 +72,7 @@ describe("NewGroupOrderPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "開團" }));
     expect(await screen.findByText("分享連結")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/group-orders/g1");
-    expect(posted).toMatchObject({ title: "週五午餐", rosterId: "r1", vendorId: "v1" });
+    expect(posted).toMatchObject({ title: "週五午餐", rosterId: "r1", vendorId: "v1", deliveryAddressId: "a1" });
     const delta = new Date(posted!.deadlineAt as string).getTime() - Date.now();
     expect(delta).toBeGreaterThan(55 * 60_000);
     expect(delta).toBeLessThan(65 * 60_000);

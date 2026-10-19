@@ -442,10 +442,38 @@ fn tool_schemas_are_strict_compatible() {
         }
     }
     let tools = import_tools_parameters();
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 7);
     for (name, schema) in &tools {
         check(name, schema);
     }
+}
+
+#[tokio::test]
+async fn delivery_address_upload_has_only_its_own_tool_and_prompt() {
+    let e = env().await;
+    let (url, mock) = start(vec![
+        Reply::Message(tool_turn(vec![tool_use("address_1", "propose_delivery_address", json!({
+            "name": "台北教室", "address": "台北市中正區示範路 1 號 3 樓", "confidence": "high", "warnings": []
+        }))])),
+        Reply::Message(end_turn("已辨識送餐地點，請確認。")),
+    ]).await;
+    let mut inp = input();
+    inp.mode = ImportMode::DeliveryAddress;
+    inp.instruction = None;
+    agent(&url, false).run(e.ctx.clone(), inp).await.unwrap();
+    let body = first_body(&mock);
+    let names: Vec<_> = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["propose_delivery_address"]);
+    assert!(body["system"].to_string().contains("delivery destination"));
+    let proposal = e.ctx.snapshot().await;
+    assert!(
+        matches!(&proposal.targets[0], ProposalTarget::DeliveryAddress(a) if a.name == "台北教室")
+    );
 }
 
 #[tokio::test]

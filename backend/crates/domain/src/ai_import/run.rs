@@ -44,6 +44,7 @@ impl ImportRunStatus {
 /// from before the mode was required).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportMode {
+    DeliveryAddress,
     Roster,
     Vendor,
 }
@@ -51,15 +52,20 @@ pub enum ImportMode {
 impl ImportMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::DeliveryAddress => "deliveryAddress",
             Self::Roster => "roster",
             Self::Vendor => "vendor",
         }
     }
     pub fn parse(s: &str) -> Result<Self, DomainError> {
         match s {
+            "deliveryAddress" => Ok(Self::DeliveryAddress),
             "roster" => Ok(Self::Roster),
             "vendor" => Ok(Self::Vendor),
-            _ => Err(DomainError::invalid("mode", "必須是 roster 或 vendor")),
+            _ => Err(DomainError::invalid(
+                "mode",
+                "必須是 roster、vendor 或 deliveryAddress",
+            )),
         }
     }
 }

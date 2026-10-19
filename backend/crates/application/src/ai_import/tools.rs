@@ -29,6 +29,33 @@ use serde::{Deserialize, Serialize};
 use super::ImportToolContext;
 use crate::ports::PortError;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProposeDeliveryAddressArgs {
+    pub name: String,
+    /// Full delivery address, including floor/room when visible. Never invent missing parts.
+    pub address: String,
+    pub confidence: ConfidenceArg,
+    pub warnings: Vec<String>,
+}
+
+pub async fn propose_delivery_address(
+    ctx: &ImportToolContext,
+    args: ProposeDeliveryAddressArgs,
+) -> Result<serde_json::Value, ToolError> {
+    // Record only a proposal: the user must review and explicitly apply it.
+    let mut proposal = ctx.proposal.lock().await;
+    proposal.replace_target(ProposalTarget::DeliveryAddress(
+        domain::ai_import::ProposedDeliveryAddress {
+            name: args.name.trim().chars().take(500).collect(),
+            address: args.address.trim().chars().take(1000).collect(),
+            confidence: args.confidence.into(),
+        },
+    ));
+    proposal.add_warnings(args.warnings);
+    Ok(serde_json::json!({"proposed": true}))
+}
+
 /// Infrastructure failure inside a tool (database...). Not shown to the model.
 #[derive(Debug, thiserror::Error)]
 #[error("tool failed: {0}")]

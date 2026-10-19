@@ -4,6 +4,7 @@ type S = components["schemas"];
 export type Me = S["MeResponse"];
 export type AuthConfig = S["AuthConfigResponse"];
 export type RosterSummary = S["RosterSummaryDto"];
+export type DeliveryAddress = S["DeliveryAddressDto"];
 export type RosterDetail = S["RosterDetail"];
 export type Member = S["MemberDto"];
 export type MemberInput = S["MemberInputDto"];

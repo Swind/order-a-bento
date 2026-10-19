@@ -472,6 +472,11 @@ impl ImportAgent for RigImportAgent {
         }
         let run = match input.mode {
             ImportMode::Roster => prompt!(add_roster_tools!(builder, ctx).build()),
+            ImportMode::DeliveryAddress => prompt!(
+                builder
+                    .tool(super::tools::ProposeDeliveryAddress { ctx: ctx.clone() })
+                    .build()
+            ),
             ImportMode::Vendor => prompt!(add_vendor_tools!(builder, ctx).build()),
         };
 

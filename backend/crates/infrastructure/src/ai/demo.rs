@@ -61,7 +61,22 @@ impl ImportAgent for DemoImportAgent {
     ) -> Result<AgentOutcome, AiError> {
         tokio::time::sleep(self.delay).await;
         let roster = input.mode == ImportMode::Roster;
-        let summary = if roster {
+        let summary = if input.mode == ImportMode::DeliveryAddress {
+            let args = tools::ProposeDeliveryAddressArgs {
+                name: "示範教室".into(),
+                address: "台北市中正區示範路 1 號 3 樓".into(),
+                confidence: ConfidenceArg::Medium,
+                warnings: vec!["這是示範地址，請勿直接作為實際送餐地址。".into()],
+            };
+            ctx.record_tool_call(
+                "propose_delivery_address",
+                serde_json::to_value(&args).unwrap_or_default(),
+            );
+            tools::propose_delivery_address(&ctx, args)
+                .await
+                .map_err(fail)?;
+            "（示範資料）已提出 1 個送餐地址，請確認後再儲存。"
+        } else if roster {
             let target = match input.target_roster_id {
                 Some(id) => RosterTargetArg::Existing(ExistingRosterRef {
                     roster_id: id.to_string(),

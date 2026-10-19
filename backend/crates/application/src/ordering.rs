@@ -60,6 +60,7 @@ impl From<RepoError> for OrderingError {
 
 #[derive(Debug, Clone)]
 pub struct OpenGroupCmd {
+    pub delivery_address_id: Option<domain::directory::DeliveryAddressId>,
     pub title: String,
     pub roster_id: RosterId,
     pub vendor_id: VendorId,
@@ -93,6 +94,7 @@ pub struct OrganizerSubmitCmd {
 /// Merge-patch of a group order; every part defaults to "keep".
 #[derive(Debug, Clone, Default)]
 pub struct UpdateGroupCmd {
+    pub delivery_address_id: Patch<domain::directory::DeliveryAddressId>,
     pub title: Option<String>,
     pub deadline_at: Patch<SystemTime>,
     pub note: Patch<String>,
@@ -129,6 +131,7 @@ pub struct PublicGroupView {
 }
 
 pub struct OrderingService {
+    pub delivery_addresses: Arc<dyn crate::ports::DeliveryAddressRepo>,
     pub groups: Arc<dyn GroupOrderRepo>,
     pub submissions: Arc<dyn SubmissionRepo>,
     pub read_model: Arc<dyn OrderReadModel>,
@@ -168,7 +171,7 @@ impl OrderingService {
             .await?
             .ok_or(OrderingError::NotFound)?;
         let token = ShareToken::parse(&self.tokens.generate())?;
-        let group = GroupOrder::open(
+        let mut group = GroupOrder::open(
             org,
             &cmd.title,
             &roster.value,
@@ -178,6 +181,14 @@ impl OrderingService {
             token,
             self.clock.now(),
         )?;
+        if let Some(id) = cmd.delivery_address_id {
+            let address = self
+                .delivery_addresses
+                .find(org, id)
+                .await?
+                .ok_or(OrderingError::NotFound)?;
+            group.set_delivery_address(Patch::Set(address.value.snapshot()))?;
+        }
         self.groups.create(&group).await?;
         Ok(group)
     }
@@ -304,6 +315,18 @@ impl OrderingService {
         cmd: UpdateGroupCmd,
     ) -> Result<GroupOrder, OrderingError> {
         let now = self.clock.now();
+        let delivery_address = match cmd.delivery_address_id {
+            Patch::Keep => Patch::Keep,
+            Patch::Clear => Patch::Clear,
+            Patch::Set(id) => Patch::Set(
+                self.delivery_addresses
+                    .find(org, id)
+                    .await?
+                    .ok_or(OrderingError::NotFound)?
+                    .value
+                    .snapshot(),
+            ),
+        };
         Ok(self
             .groups
             .modify(
@@ -315,6 +338,7 @@ impl OrderingService {
                     }
                     g.set_deadline(cmd.deadline_at, now)?;
                     g.set_note(cmd.note)?;
+                    g.set_delivery_address(delivery_address)?;
                     match cmd.status {
                         Some(target) if target != g.status() => match target {
                             GroupOrderStatus::Open => g.reopen(now)?,

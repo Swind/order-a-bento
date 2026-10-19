@@ -93,6 +93,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/delivery-addresses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list"];
+        put?: never;
+        post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-addresses/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["update"];
+        post?: never;
+        delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/group-orders": {
         parameters: {
             query?: never;
@@ -578,13 +610,20 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /** @description A confirmed (possibly edited) change sent to `apply`. */
-        AcceptedChangeDto: (components["schemas"]["AcceptedRosterDto"] & {
+        AcceptedChangeDto: (components["schemas"]["AcceptedDeliveryAddressDto"] & {
+            /** @enum {string} */
+            type: "deliveryAddress";
+        }) | (components["schemas"]["AcceptedRosterDto"] & {
             /** @enum {string} */
             type: "roster";
         }) | (components["schemas"]["AcceptedVendorDto"] & {
             /** @enum {string} */
             type: "vendor";
         });
+        AcceptedDeliveryAddressDto: {
+            address: string;
+            name: string;
+        };
         AcceptedMemberDto: {
             name: string;
             note?: string | null;
@@ -622,6 +661,7 @@ export interface components {
             accepted: components["schemas"]["AcceptedChangeDto"][];
         };
         ApplyResponse: {
+            deliveryAddressIds?: string[];
             rosterIds: string[];
             vendorIds: string[];
         };
@@ -666,6 +706,7 @@ export interface components {
              * @description RFC 3339 timestamp; must be in the future.
              */
             deadlineAt?: string | null;
+            deliveryAddressId?: string | null;
             note?: string | null;
             rosterId: string;
             title: string;
@@ -687,6 +728,12 @@ export interface components {
         };
         CreatedVendor: components["schemas"]["VendorDetail"] & {
             report?: components["schemas"]["ItemUpsertReport"] | null;
+        };
+        DeliveryAddressDto: {
+            address: string;
+            id: string;
+            name: string;
+            updatedAt: string;
         };
         DevLoginRequest: {
             displayName?: string | null;
@@ -737,6 +784,7 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             deadlineAt?: string | null;
+            deliveryAddress?: string | null;
             id: string;
             note?: string | null;
             offeredItems: components["schemas"]["OfferedItemDto"][];
@@ -785,7 +833,7 @@ export interface components {
             unitPrice: number;
         };
         /** @enum {string} */
-        ImportModeDto: "roster" | "vendor";
+        ImportModeDto: "deliveryAddress" | "roster" | "vendor";
         ImportRunDto: {
             appliedAt?: string | null;
             createdAt: string;
@@ -988,6 +1036,8 @@ export interface components {
              * @description Absent = keep, `null` = clear, RFC 3339 = set (must be in the future).
              */
             deadlineAt?: string | null;
+            /** @description Absent = keep the snapshot; null = clear; id = snapshot this saved address. */
+            deliveryAddressId?: string | null;
             /** @description Absent = keep, `null` or blank = clear. */
             note?: string | null;
             status?: components["schemas"]["GroupStatusDto"] | null;
@@ -1056,13 +1106,21 @@ export interface components {
             targets: components["schemas"]["ProposalTargetDto"][];
             warnings: string[];
         };
-        ProposalTargetDto: (components["schemas"]["RosterTargetDto"] & {
+        ProposalTargetDto: (components["schemas"]["ProposedDeliveryAddressDto"] & {
+            /** @enum {string} */
+            type: "deliveryAddress";
+        }) | (components["schemas"]["RosterTargetDto"] & {
             /** @enum {string} */
             type: "roster";
         }) | (components["schemas"]["VendorTargetDto"] & {
             /** @enum {string} */
             type: "vendor";
         });
+        ProposedDeliveryAddressDto: {
+            address: string;
+            confidence: components["schemas"]["ConfidenceDto"];
+            name: string;
+        };
         ProposedMemberDto: {
             action: components["schemas"]["ChangeActionDto"];
             beforeNote?: string | null;
@@ -1143,6 +1201,10 @@ export interface components {
             report: components["schemas"]["MemberUpsertReport"];
             roster: components["schemas"]["RosterDetail"];
         };
+        SaveDeliveryAddressRequest: {
+            address: string;
+            name: string;
+        };
         SetSoldOutRequest: {
             soldOut: boolean;
         };
@@ -1152,7 +1214,7 @@ export interface components {
         };
         /**
          * @description Multipart body of `POST /ai/import-runs` (documentation only). `mode` is
-         *     required: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.
+         *     required: `roster` for people, `vendor` for menus, `deliveryAddress` for delivery locations.
          */
         StartImportForm: {
             /**
@@ -1163,7 +1225,7 @@ export interface components {
             /** @description Free-text hint, at most 200 characters. */
             instruction?: string | null;
             /** @enum {string} */
-            mode: "roster" | "vendor";
+            mode: "deliveryAddress" | "roster" | "vendor";
             /** @description Existing roster to add the members to. */
             targetRosterId?: string | null;
             /** @description Existing vendor to update. */
@@ -1606,6 +1668,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthConfigResponse"];
+                };
+            };
+        };
+    };
+    list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryAddressDto"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveDeliveryAddressRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryAddressDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveDeliveryAddressRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryAddressDto"];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

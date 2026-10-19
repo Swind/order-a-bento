@@ -94,11 +94,15 @@ pub async fn test_app_with(
         config: AuthConfig::from_days(14),
     };
     let directory = DirectoryService {
+        delivery_addresses: Arc::new(
+            infrastructure::delivery_address_repo::SqliteDeliveryAddressRepo::new(db.clone()),
+        ),
         rosters: Arc::new(SqliteRosterRepo::new(db.clone())),
         vendors: Arc::new(SqliteVendorRepo::new(db.clone())),
         clock: Arc::new(SystemClock),
     };
     let ordering = OrderingService {
+        delivery_addresses: directory.delivery_addresses.clone(),
         groups: Arc::new(SqliteGroupOrderRepo::new(db.clone())),
         submissions: Arc::new(SqliteSubmissionRepo::new(db.clone())),
         read_model: Arc::new(SqliteOrderReadModel::new(db.clone())),

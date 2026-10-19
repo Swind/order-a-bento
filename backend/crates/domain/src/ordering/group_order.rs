@@ -104,6 +104,7 @@ pub struct VendorSnapshot {
 /// Storage-shaped input for [`GroupOrder::from_parts`].
 #[derive(Debug, Clone)]
 pub struct GroupOrderParts {
+    pub delivery_address: Option<String>,
     pub id: GroupOrderId,
     pub organizer_id: OrganizerId,
     pub title: GroupTitle,
@@ -122,6 +123,7 @@ pub struct GroupOrderParts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupOrder {
+    delivery_address: Option<String>,
     id: GroupOrderId,
     organizer_id: OrganizerId,
     title: GroupTitle,
@@ -192,6 +194,7 @@ impl GroupOrder {
             .collect();
         Ok(Self {
             id: GroupOrderId::new(),
+            delivery_address: None,
             organizer_id,
             title,
             share_token,
@@ -225,6 +228,7 @@ impl GroupOrder {
         }
         Ok(Self {
             id: p.id,
+            delivery_address: p.delivery_address,
             organizer_id: p.organizer_id,
             title: p.title,
             share_token: p.share_token,
@@ -261,6 +265,17 @@ impl GroupOrder {
     }
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+    pub fn delivery_address(&self) -> Option<&str> {
+        self.delivery_address.as_deref()
+    }
+
+    pub fn set_delivery_address(&mut self, address: Patch<String>) -> Result<(), DomainError> {
+        self.ensure_not_archived()?;
+        address
+            .resolve("deliveryAddress", 252)?
+            .apply(&mut self.delivery_address);
+        Ok(())
     }
     pub fn source_roster_id(&self) -> Option<RosterId> {
         self.source_roster_id

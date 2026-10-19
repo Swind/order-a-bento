@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAuthConfig } from "@/features/auth/hooks";
 import { useRoster } from "@/features/rosters/hooks";
+import { DeliveryAddressImportConfirmation } from "@/features/delivery-addresses/ImportConfirmation";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import type { ImportRun } from "@/shared/api/types";
@@ -40,6 +41,7 @@ import {
 
 /** Where 「重新上傳」 / 「放棄」 should send the user. */
 function originPath(run: ImportRun): string {
+  if (run.mode === "deliveryAddress") return "/delivery-addresses";
   if (run.targetRosterId) return `/rosters/${run.targetRosterId}`;
   if (run.targetVendorId) return `/vendors/${run.targetVendorId}`;
   return run.mode === "vendor" ? "/vendors" : "/rosters";
@@ -286,7 +288,7 @@ function Finished({ run }: { run: ImportRun }) {
   }
   if (links.length === 0 && run.status === "applied") {
     const t = run.proposal.targets[0];
-    links.push(t?.type === "vendor" ? { to: "/vendors", label: "前往店家" } : { to: "/rosters", label: "前往名單" });
+    links.push(run.mode === "deliveryAddress" ? { to: "/delivery-addresses", label: "前往送餐地址" } : t?.type === "vendor" ? { to: "/vendors", label: "前往店家" } : { to: "/rosters", label: "前往名單" });
   }
   return (
     <div className="space-y-3">
@@ -338,6 +340,7 @@ export function AiImportPage() {
   const demo = !!config.data?.aiDemo || /demo|fake/i.test(r.model);
   switch (r.status) {
     case "proposed":
+      if (r.mode === "deliveryAddress") return <DeliveryAddressImportConfirmation key={r.id} run={r} demo={demo} />;
       return <ConfirmView run={r} demo={demo} />;
     case "applied":
     case "discarded":

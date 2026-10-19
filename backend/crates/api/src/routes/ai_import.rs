@@ -145,8 +145,16 @@ pub struct VendorTargetDto {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProposalTargetDto {
+    DeliveryAddress(ProposedDeliveryAddressDto),
     Roster(RosterTargetDto),
     Vendor(VendorTargetDto),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ProposedDeliveryAddressDto {
+    pub name: String,
+    pub address: String,
+    pub confidence: ConfidenceDto,
 }
 
 /// Pending changes proposed by the AI; nothing is written until applied.
@@ -161,8 +169,15 @@ pub struct ProposalDto {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AcceptedChangeDto {
+    DeliveryAddress(AcceptedDeliveryAddressDto),
     Roster(AcceptedRosterDto),
     Vendor(AcceptedVendorDto),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AcceptedDeliveryAddressDto {
+    pub name: String,
+    pub address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -231,6 +246,8 @@ pub enum ImportRunStatusDto {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ImportModeDto {
+    #[serde(rename = "deliveryAddress")]
+    DeliveryAddress,
     Roster,
     Vendor,
 }
@@ -278,6 +295,7 @@ impl From<&ImportRunView> for ImportRunDto {
                 ImportRunStatus::Failed => ImportRunStatusDto::Failed,
             },
             mode: r.mode.map(|m| match m {
+                ImportMode::DeliveryAddress => ImportModeDto::DeliveryAddress,
                 ImportMode::Roster => ImportModeDto::Roster,
                 ImportMode::Vendor => ImportModeDto::Vendor,
             }),
@@ -300,7 +318,7 @@ impl From<&ImportRunView> for ImportRunDto {
 }
 
 /// Multipart body of `POST /ai/import-runs` (documentation only). `mode` is
-/// required: `roster` for a people roster photo, `vendor` for a vendor flyer / menu.
+/// required: `roster` for people, `vendor` for menus, `deliveryAddress` for delivery locations.
 #[derive(Debug, ToSchema)]
 #[allow(dead_code)]
 #[schema(rename_all = "camelCase")]
@@ -328,6 +346,8 @@ pub struct ApplyRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyResponse {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub delivery_address_ids: Vec<String>,
     pub roster_ids: Vec<String>,
     pub vendor_ids: Vec<String>,
 }
@@ -562,11 +582,16 @@ pub async fn start_import(
         invalid_field(
             "mode",
             "invalid_mode",
-            "mode is required (roster or vendor).",
+            "mode is required (roster, vendor or deliveryAddress).",
         )
     })?;
-    let mode = ImportMode::parse(&mode)
-        .map_err(|_| invalid_field("mode", "invalid_mode", "mode must be roster or vendor."))?;
+    let mode = ImportMode::parse(&mode).map_err(|_| {
+        invalid_field(
+            "mode",
+            "invalid_mode",
+            "mode must be roster, vendor or deliveryAddress.",
+        )
+    })?;
     let target_roster_id = target_roster.map(|s| parse_id(&s)).transpose()?;
     let target_vendor_id = target_vendor.map(|s| parse_id(&s)).transpose()?;
 
@@ -667,6 +692,11 @@ pub async fn apply_import(
         .await
         .map_err(ai_error)?;
     Ok(Json(ApplyResponse {
+        delivery_address_ids: r
+            .delivery_address_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
         roster_ids: r.roster_ids.iter().map(ToString::to_string).collect(),
         vendor_ids: r.vendor_ids.iter().map(ToString::to_string).collect(),
     }))

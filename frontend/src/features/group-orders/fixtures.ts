@@ -3,6 +3,7 @@ import type { GroupOrderDetail, ParticipantRow } from "@/shared/api/types";
 export const GROUP: GroupOrderDetail = {
   id: "g1",
   title: "週五午餐",
+  deliveryAddress: "台北教室（台北市中正區 3 樓）",
   status: "open",
   deadlineAt: null,
   note: null,

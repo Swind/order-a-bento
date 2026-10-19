@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { toast } from "sonner";
 import { errorMessage } from "@/shared/api/errors";
 import type { GroupOrderDetail } from "@/shared/api/types";
@@ -14,7 +14,6 @@ import { buildOrderText } from "./lib";
 export function StatsTab({ group }: { group: GroupOrderDetail }) {
   const query = useSummary(group.id, group.status === "open");
   const soldOut = useSetSoldOut(group.id);
-  const [fallbackText, setFallbackText] = useState<string | null>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const archived = group.status === "archived";
 
@@ -31,29 +30,28 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
       </div>
     );
   const s = query.data;
+  const orderedItems = s.items.filter((i) => i.quantity > 0);
   const soldOutById = new Map(group.offeredItems.map((i) => [i.id, i.soldOut]));
+  const text = buildOrderText({
+    vendorName: group.vendor.name,
+    deliveryAddress: group.deliveryAddress,
+    items: orderedItems,
+    totalQuantity: s.totalQuantity,
+  });
 
   async function copy() {
-    const text = buildOrderText({
-      title: group.title,
-      vendorName: group.vendor.name,
-      items: s.items,
-      totalQuantity: s.totalQuantity,
-      totalAmount: s.totalAmount,
-    });
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(text);
-      setFallbackText(null);
       toast.success("已複製訂單文字");
     } catch {
-      setFallbackText(text);
-      setTimeout(() => areaRef.current?.select(), 0);
+      areaRef.current?.focus();
+      areaRef.current?.select();
       toast.message("無法自動複製，已選取文字，請手動複製");
     }
   }
 
-  if (s.items.length === 0)
+  if (orderedItems.length === 0)
     return (
       <EmptyState title="還沒有人下單" hint="把訂購頁連結分享給大家，下單後這裡會自動統計品項與金額。" />
     );
@@ -61,7 +59,7 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
   return (
     <div className="space-y-4">
       <ul className="divide-y rounded-xl border" aria-label="品項統計">
-        {s.items.map((i) => {
+        {orderedItems.map((i) => {
           const isSoldOut = soldOutById.get(i.itemId) ?? false;
           return (
             <li key={i.itemId} className="flex items-center gap-3 px-4 py-2">
@@ -102,19 +100,28 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
         </p>
       </div>
 
-      <Button type="button" className="h-11" onClick={copy}>
-        複製訂單文字
-      </Button>
-      {fallbackText && (
+      <section className="space-y-2" aria-labelledby="order-text-preview">
+        <h2 id="order-text-preview" className="font-semibold">
+          店家訂單文字預覽
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          自動帶入店家與送餐地址，只列已訂品項及數量，不含人名與金額。
+        </p>
+        {!group.deliveryAddress && (
+          <p className="text-sm text-muted-foreground">此團尚未設定送餐地址，可在上方設定後再複製。</p>
+        )}
         <Textarea
           ref={areaRef}
           readOnly
-          rows={Math.min(10, fallbackText.split("\n").length)}
+          rows={Math.min(12, text.split("\n").length)}
+          className="max-h-80 leading-relaxed"
           aria-label="訂單文字"
-          value={fallbackText}
-          onFocus={(e) => e.currentTarget.select()}
+          value={text}
         />
-      )}
+        <Button type="button" className="h-11" onClick={copy}>
+          複製訂單文字
+        </Button>
+      </section>
     </div>
   );
 }

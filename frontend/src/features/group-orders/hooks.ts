@@ -3,6 +3,7 @@ import { api, unwrap } from "@/shared/api/client";
 import type { ParticipantRow, PatchGroupOrderBody } from "@/shared/api/types";
 
 export interface CreateGroupOrderInput {
+  deliveryAddressId?: string;
   title: string;
   rosterId: string;
   vendorId: string;

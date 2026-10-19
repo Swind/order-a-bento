@@ -7,8 +7,8 @@ mod proposal;
 mod run;
 
 pub use proposal::{
-    ChangeAction, Confidence, Issue, MenuItemSnapshot, Proposal, ProposalTarget, ProposedMember,
-    ProposedMenuItem, ProposedVendorInfo, RosterTarget, TargetRef, VendorInfoSnapshot,
-    VendorTarget,
+    ChangeAction, Confidence, Issue, MenuItemSnapshot, Proposal, ProposalTarget,
+    ProposedDeliveryAddress, ProposedMember, ProposedMenuItem, ProposedVendorInfo, RosterTarget,
+    TargetRef, VendorInfoSnapshot, VendorTarget,
 };
 pub use run::{ImportMode, ImportRun, ImportRunId, ImportRunMarker, ImportRunStatus, Usage};

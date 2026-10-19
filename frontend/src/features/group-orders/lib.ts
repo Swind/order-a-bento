@@ -9,17 +9,23 @@ export const STATUS_LABEL: Record<string, string> = {
 
 /** Plain-text order for phoning / messaging the shop. Items with quantity 0 are left out. */
 export function buildOrderText(input: {
-  title: string;
   vendorName: string;
+  deliveryAddress?: string | null;
   items: Pick<SummaryItem, "name" | "quantity">[];
   totalQuantity: number;
-  totalAmount: number;
 }): string {
   const lines = input.items.filter((i) => i.quantity > 0).map((i) => `${i.name} ×${i.quantity}`);
   return [
-    `${input.title}（${input.vendorName}）`,
+    `您好，${input.vendorName}！`,
+    ...(input.deliveryAddress?.trim() ? [`我們這邊是 ${input.deliveryAddress.trim()}。`] : []),
+    "想向您訂購以下便當：",
+    "",
     ...lines,
-    `共 ${input.totalQuantity} 個，${formatMoney(input.totalAmount)}`,
+    "",
+    `共 ${input.totalQuantity} 個`,
+    "",
+    ...(input.deliveryAddress?.trim() ? ["再麻煩您協助安排外送，"] : []),
+    "請問方便接單嗎？謝謝您！",
   ].join("\n");
 }
 

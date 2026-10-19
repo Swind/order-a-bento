@@ -22,7 +22,11 @@ const IMPORTANT: &str = include_str!("prompts/important.md");
 /// limits replaced by the domain constants, so the rules the model sees always
 /// match the validation.
 pub fn import_agent_system_prompt(mode: ImportMode) -> String {
+    if mode == ImportMode::DeliveryAddress {
+        return include_str!("prompts/delivery_address.md").into();
+    }
     let (template, wording): (&str, [(&str, &str); 5]) = match mode {
+        ImportMode::DeliveryAddress => unreachable!(),
         ImportMode::Roster => (
             ROSTER,
             [

@@ -1,7 +1,7 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test/render";
 import { ME, problem, server } from "@/test/server";
 import { GROUP, row } from "./fixtures";
@@ -12,6 +12,7 @@ const SUMMARY = {
   items: [
     { itemId: "i1", name: "排骨飯", price: 100, quantity: 7, subtotal: 700 },
     { itemId: "i2", name: "雞腿飯", price: 110, quantity: 4, subtotal: 440 },
+    { itemId: "i3", name: "素食", price: 90, quantity: 0, subtotal: 0 },
   ],
   totalQuantity: 11,
   totalAmount: 1140,
@@ -97,6 +98,34 @@ describe("StatsTab", () => {
     expect(await screen.findByText("共 11 個 · $1,140")).toBeInTheDocument();
     expect(screen.getByText("已訂 2 / 未訂 1")).toBeInTheDocument();
     expect(screen.getByText("×7")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("list", { name: "品項統計" })).queryByText("素食"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("previews and copies the same shop-facing quantities without names or zero-quantity items", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderApp("/group-orders/g1");
+    const preview = await screen.findByRole("textbox", { name: "訂單文字" });
+    const expected = "您好，好吃便當！\n我們這邊是 台北教室（台北市中正區 3 樓）。\n想向您訂購以下便當：\n\n排骨飯 ×7\n雞腿飯 ×4\n\n共 11 個\n\n再麻煩您協助安排外送，\n請問方便接單嗎？謝謝您！";
+    expect(preview).toHaveValue(expected);
+    expect(preview).toHaveAttribute("readonly");
+    await user.click(screen.getByRole("button", { name: "複製訂單文字" }));
+    expect(writeText).toHaveBeenCalledWith(expected);
+    expect(await screen.findByText("已複製訂單文字")).toBeInTheDocument();
+  });
+
+  it("selects the preview for manual copying when clipboard access fails", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    renderApp("/group-orders/g1");
+    const preview = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "訂單文字" });
+    await user.click(screen.getByRole("button", { name: "複製訂單文字" }));
+    expect(await screen.findByText("無法自動複製，已選取文字，請手動複製")).toBeInTheDocument();
+    expect(preview).toHaveFocus();
+    expect(preview.selectionStart).toBe(0);
+    expect(preview.selectionEnd).toBe(preview.value.length);
   });
 
   it("shows an empty state when nobody has ordered", async () => {
@@ -104,7 +133,7 @@ describe("StatsTab", () => {
       http.get("*/api/v1/group-orders/g1/summary", () =>
         HttpResponse.json({
           ...SUMMARY,
-          items: [],
+          items: SUMMARY.items.map((i) => ({ ...i, quantity: 0, subtotal: 0 })),
           totalQuantity: 0,
           totalAmount: 0,
           participants: { ordered: 0, notOrdered: 3 },
@@ -114,6 +143,7 @@ describe("StatsTab", () => {
     renderApp("/group-orders/g1");
     expect(await screen.findByText("還沒有人下單")).toBeInTheDocument();
     expect(screen.getByText(/把訂購頁連結分享給大家/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "複製訂單文字" })).not.toBeInTheDocument();
   });
 
   it("marks an item sold out", async () => {
@@ -128,6 +158,24 @@ describe("StatsTab", () => {
     await userEvent.click(await screen.findByRole("switch", { name: "排骨飯 售完" }));
     await screen.findByText("共 11 個 · $1,140");
     expect(body).toEqual({ soldOut: true });
+  });
+
+  it("sets a saved delivery address and updates the message preview", async () => {
+    server.use(
+      http.get("*/api/v1/delivery-addresses", () => HttpResponse.json([{ id: "a2", name: "新教室", address: "新地址 5 樓", updatedAt: "2026-01-01T00:00:00Z" }])),
+      http.patch("*/api/v1/group-orders/g1", async ({ request }) => {
+        expect(await request.json()).toEqual({ deliveryAddressId: "a2" });
+        group = { ...group, deliveryAddress: "新教室（新地址 5 樓）" };
+        return HttpResponse.json(group);
+      }),
+    );
+    renderApp("/group-orders/g1");
+    await userEvent.click(await screen.findByRole("button", { name: "設定送餐地址" }));
+    await screen.findByRole("option", { name: "新教室 — 新地址 5 樓" });
+    await userEvent.selectOptions(screen.getByLabelText("送餐地址（選填）"), "a2");
+    await userEvent.click(screen.getByRole("button", { name: "儲存送餐地址" }));
+    expect(await screen.findByText("送餐地址：新教室（新地址 5 樓）")).toBeInTheDocument();
+    expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "訂單文字" }).value).toContain("我們這邊是 新教室（新地址 5 樓）");
   });
 });
 

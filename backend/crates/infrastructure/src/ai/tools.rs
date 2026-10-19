@@ -52,7 +52,7 @@ fn make_strict(v: &mut Value) {
     }
 }
 
-/// `(name, parameters)` of all six tools (both modes together), for tests and diagnostics.
+/// `(name, parameters)` of all import tools, for tests and diagnostics.
 pub fn import_tools_parameters() -> Vec<(&'static str, Value)> {
     vec![
         (ListRosters::NAME, strict_schema::<NoArgs>()),
@@ -64,6 +64,10 @@ pub fn import_tools_parameters() -> Vec<(&'static str, Value)> {
             strict_schema::<ProposeRosterMembersArgs>(),
         ),
         (ProposeVendor::NAME, strict_schema::<ProposeVendorArgs>()),
+        (
+            ProposeDeliveryAddress::NAME,
+            strict_schema::<tools::ProposeDeliveryAddressArgs>(),
+        ),
     ]
 }
 
@@ -117,6 +121,14 @@ tool!(
     Vec<RosterListItem>,
     "List all of the organizer's rosters (id, name, member count).",
     |ctx, _a| tools::list_rosters(ctx)
+);
+tool!(
+    ProposeDeliveryAddress,
+    "propose_delivery_address",
+    tools::ProposeDeliveryAddressArgs,
+    Value,
+    "Propose a delivery location name and address read from the photo. Nothing is saved until the user confirms.",
+    |ctx, a| tools::propose_delivery_address(ctx, a)
 );
 tool!(
     GetRoster,
