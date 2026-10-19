@@ -46,13 +46,12 @@ pub fn validate_password(password: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-/// A logged-in organizer (group-order owner). Either identified by a Google
-/// `sub` (Google and dev logins) or a *local account* (`google_sub` is `None`)
-/// that signs in with email and password.
+/// A data owner identified by (OIDC issuer, subject), or a local backup account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Organizer {
     pub id: OrganizerId,
-    pub google_sub: Option<String>,
+    pub oidc_issuer: Option<String>,
+    pub oidc_sub: Option<String>,
     pub email: String,
     pub display_name: String,
     pub avatar_url: Option<String>,
@@ -61,16 +60,16 @@ pub struct Organizer {
 impl Organizer {
     /// Create a new organizer with a fresh id; email and display name must be non-empty.
     pub fn new(
-        google_sub: &str,
+        issuer: &str,
+        sub: &str,
         email: &str,
         display_name: &str,
         avatar_url: Option<String>,
     ) -> Result<Self, DomainError> {
-        let google_sub = google_sub.trim();
         let email = email.trim();
         let display_name = display_name.trim();
-        if google_sub.is_empty() {
-            return Err(DomainError::invalid("googleSub", "不可為空"));
+        if issuer.is_empty() || sub.is_empty() {
+            return Err(DomainError::invalid("identity", "issuer 與 sub 不可為空"));
         }
         if email.is_empty() {
             return Err(DomainError::invalid("email", "不可為空"));
@@ -80,7 +79,8 @@ impl Organizer {
         }
         Ok(Self {
             id: OrganizerId::new(),
-            google_sub: Some(google_sub.to_owned()),
+            oidc_issuer: Some(issuer.to_owned()),
+            oidc_sub: Some(sub.to_owned()),
             email: email.to_owned(),
             display_name: display_name.to_owned(),
             avatar_url: avatar_url.filter(|u| !u.trim().is_empty()),
@@ -96,16 +96,17 @@ impl Organizer {
         }
         Ok(Self {
             id: OrganizerId::new(),
-            google_sub: None,
+            oidc_issuer: None,
+            oidc_sub: None,
             email,
             display_name: display_name.to_owned(),
             avatar_url: None,
         })
     }
 
-    /// True for accounts without a Google/dev identity.
+    /// True for accounts without an external identity.
     pub fn is_local(&self) -> bool {
-        self.google_sub.is_none()
+        self.oidc_sub.is_none()
     }
 }
 
@@ -115,11 +116,12 @@ mod tests {
 
     #[test]
     fn validates_fields() {
-        assert!(Organizer::new("s", "a@b.c", "A", None).is_ok());
-        assert!(Organizer::new("s", " ", "A", None).is_err());
-        assert!(Organizer::new("s", "a@b.c", "", None).is_err());
-        assert!(Organizer::new("", "a@b.c", "A", None).is_err());
-        let o = Organizer::new("s", "a@b.c", "A", Some("".into())).unwrap();
+        assert!(Organizer::new("https://id.example", "s", "a@b.c", "A", None).is_ok());
+        assert!(Organizer::new("https://id.example", "s", " ", "A", None).is_err());
+        assert!(Organizer::new("https://id.example", "s", "a@b.c", "", None).is_err());
+        assert!(Organizer::new("https://id.example", "", "a@b.c", "A", None).is_err());
+        assert!(Organizer::new("", "s", "a@b.c", "A", None).is_err());
+        let o = Organizer::new("https://id.example", "s", "a@b.c", "A", Some("".into())).unwrap();
         assert!(o.avatar_url.is_none());
     }
 

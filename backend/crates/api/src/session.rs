@@ -62,10 +62,10 @@ pub fn session_token(headers: &HeaderMap) -> Option<String> {
 
 pub fn auth_error(e: AuthError) -> AppError {
     match e {
-        AuthError::GoogleNotConfigured => AppError::Coded {
+        AuthError::OidcNotConfigured => AppError::Coded {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "google_not_configured",
-            detail: "Google login is not configured on this server.".into(),
+            code: "oidc_not_configured",
+            detail: "OIDC login is not configured on this server.".into(),
         },
         AuthError::Unauthenticated => AppError::Unauthorized("login required".into()),
         AuthError::InvalidCredentials => AppError::Coded {
@@ -90,7 +90,7 @@ pub fn auth_error(e: AuthError) -> AppError {
         AuthError::EmailNotVerified => AppError::Coded {
             status: StatusCode::FORBIDDEN,
             code: "email_not_verified",
-            detail: "The Google account email is not verified.".into(),
+            detail: "The identity provider account email is not verified.".into(),
         },
         AuthError::Internal(d) => AppError::Internal(d),
     }

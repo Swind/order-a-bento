@@ -10,14 +10,14 @@ describe("AdminLayout auth gating", () => {
       http.get("*/api/v1/me", () => problem(401, "unauthorized")),
       http.get("*/api/v1/auth/config", () =>
         HttpResponse.json({
-          googleEnabled: true,
+          oidcEnabled: true,
           passwordLoginEnabled: false,
           devLoginEnabled: false,
         }),
       ),
     );
     const { router } = renderApp("/rosters?x=1");
-    await screen.findByRole("button", { name: "使用 Google 登入" });
+    await screen.findByRole("button", { name: "使用單一登入（OIDC）" });
     expect(router.state.location.pathname).toBe("/login");
     expect(router.state.location.search).toBe("?returnTo=%2Frosters%3Fx%3D1");
   });

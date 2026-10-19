@@ -2,7 +2,7 @@
 
 團體訂便當系統：開團者建立名單和店家，開一團後把連結貼到 LINE 群組。大家不用登入就能點餐，開團者在同一頁看叫貨單、勾選領取和繳費。
 
-- **開團者**：Google 登入或本機帳號（email + 密碼），管理名單、店家、團。
+- **開團者**：通用 OIDC 單一登入；本機帳密僅供指定管理員備援。管理名單、店家、團。
 - **點餐者**：打開分享連結，選自己的名字點餐，不需要帳號。同一個名字再送一次會覆蓋前一筆，歷史紀錄保留。
 - **AI 匯入**（選用）：拍名單、菜單或送餐地點照片，由模型讀出內容。AI 只會產生「待確認的提案」，開團者檢查、修改後確認才寫入。
 
@@ -26,7 +26,7 @@
 ```
 ┌────────────── server (single binary) ──────────────┐
 │  axum HTTP  ─ /api/*  JSON API (OpenAPI via utoipa) │
-│             ─ /auth/* Google OIDC / password login  │
+│             ─ /auth/* OIDC / backup admin login    │
 │             ─ /*      embedded React SPA            │
 │                                                     │
 │  application use cases ─ domain                     │
@@ -49,7 +49,7 @@
 backend/                 Cargo workspace（DDD + Clean Architecture）
   crates/domain/         實體、值物件、業務規則，不依賴任何框架
   crates/application/    use case、port（repository、clock、AI agent…）、AI 匯入的 prompt 和 tool
-  crates/infrastructure/ port 的實作：SQLite repository、Argon2id、Google OIDC、rig AI agent
+  crates/infrastructure/ port 的實作：SQLite repository、Argon2id、OIDC、rig AI agent
   crates/api/            axum 路由、DTO、驗證、CSRF、限流、OpenAPI
   crates/server/         設定、組裝（wiring）、main、CLI（server admin …）、ai_eval
   migrations/            SQLite migration（啟動時自動套用）
@@ -96,7 +96,7 @@ make admin EMAIL=you@example.com NAME="你的名字"   # 互動輸入密碼
 
 ## 部署
 
-完整說明（Google OAuth 申請、所有環境變數、反向代理、備份還原、安全檢查清單）見 [docs/deploy.md](docs/deploy.md)。以下是最短路徑。
+完整說明（OIDC 設定、所有環境變數、反向代理、備份還原、安全檢查清單）見 [docs/deploy.md](docs/deploy.md)。以下是最短路徑。
 
 **限制**：SQLite 只有一個寫入者，**只能跑單一實例**。
 
@@ -129,15 +129,17 @@ docker run -d --name bento --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -v bento-data:/data \
   -e APP_BASE_URL=https://bento.example.com \
+  -e OIDC_ISSUER_URL=https://auth.example.com -e OIDC_CLIENT_ID=your-client-id \
+  -e ADMIN_EMAIL=you@example.com \
   -e TRUSTED_PROXIES=172.17.0.1 \
   order-a-bento:latest
 ```
 
-也可以用 `--env-file .env`。完整的環境變數說明見下方 [環境變數](#環境變數)；最少只需 `APP_BASE_URL`（對外網址，必設）與 `TRUSTED_PROXIES`。
+也可以用 `--env-file .env`。完整的環境變數說明見下方 [環境變數](#環境變數)；請設定 OIDC，或建立指定的本機備援管理員。
 
 ### 3. 建立管理員
 
-不用 Google 也能登入。用同一個執行檔的 CLI 建立帳號，密碼不會留在環境變數或 shell 歷史：
+本機登入只允許 `ADMIN_EMAIL` 指定的帳號，不開放一般使用者註冊。用同一個執行檔的 CLI 建立備援管理員，密碼不會留在環境變數或 shell 歷史：
 
 ```sh
 docker exec -it bento server admin create --email you@example.com --name "你的名字"
@@ -221,7 +223,7 @@ docker start bento
 |---|---|---|---|---|---|
 | `APP_ENV` | 否 | `development`／映像內 `production` | `development`、`production`（不分大小寫） | `production` 隱藏 `/api/docs`，並拒絕啟動若 `DEV_LOGIN=true` 或 `AI_DEMO=true` | no |
 | `PORT` | 否 | `3000`／`3000` | 整數 | 容器內監聽埠 | no |
-| `APP_BASE_URL` | **是（正式環境）** | `http://localhost:3000` | 完整 URL，無結尾路徑，例 `https://bento.example.com` | 公開網址：分享連結、OAuth 回呼（`/auth/google/callback`）、OG 預覽。`https://` 開頭時 session cookie 才帶 `Secure`。其 origin 自動列入 CSRF 允許清單 | no |
+| `APP_BASE_URL` | **是（正式環境）** | `http://localhost:3000` | 完整 URL，無結尾路徑，例 `https://bento.example.com` | 公開網址：分享連結、OIDC 回呼（`/auth/oidc/callback`）、OG 預覽。`https://` 開頭時 session cookie 才帶 `Secure`。其 origin 自動列入 CSRF 允許清單 | no |
 | `ALLOWED_ORIGINS` | 否 | 開發：`http://localhost:5173`；production：空 | 逗號分隔的 origin | 額外允許送出狀態變更請求的 Origin（CSRF 檢查）。通常不需設定 | no |
 | `TRUSTED_PROXIES` | 建議 | 空（不信任任何來源） | 逗號分隔的 IP／CIDR，例 `172.17.0.1` | 只有來自這些位址的連線，其 `X-Forwarded-For` 才被採信（影響速率限制與記錄的 client IP）。不要填 `0.0.0.0/0` | no |
 | `DEV_LOGIN` | 否 | `false` | 布林 | 開發用登入捷徑。**`APP_ENV=production` 時設為 true 會拒絕啟動** | no |
@@ -234,16 +236,16 @@ docker start bento
 |---|---|---|---|---|---|
 | `DATABASE_URL` | 否 | `sqlite://data/bento.db`／映像內 `sqlite:///data/bento.db` | `sqlite://<路徑>`（絕對路徑用三個斜線） | SQLite 檔。映像內為 `/data/bento.db`，請掛載 volume 到 `/data`，不要改動 | no |
 
-### 登入：Google 與本機帳號
+### 登入：OIDC 與本機備援管理員
 
 | 變數 | 必填 | 預設值（開發／映像內） | 可用值／格式 | 說明 | 機密 |
 |---|---|---|---|---|---|
-| `GOOGLE_CLIENT_ID` | 否 | 空 | Google OAuth client id | 與下一項需同時設定才會啟用 Google 登入；回呼網址 `APP_BASE_URL/auth/google/callback` | no |
-| `GOOGLE_CLIENT_SECRET` | 否 | 空 | 字串 | 同上 | **yes** |
-| `GOOGLE_OAUTH_ENABLED` | 否 | 空（自動） | 布林 | 空＝兩個憑證都設才啟用；`false`＝即使有憑證也停用（`/auth/google/*` 回 503、登入頁隱藏按鈕）；`true`＝必須兩個憑證都有，否則拒絕啟動 | no |
-| `PASSWORD_LOGIN_ENABLED` | 否 | `true` | 布林 | 本機帳號（email + 密碼）登入；`false` 時 `POST /auth/password-login` 回 404 | no |
-| `ADMIN_EMAIL` | 否 | 空 | email | 啟動時的管理員 bootstrap。**必須與 `ADMIN_PASSWORD` 同時設定或同時不設**，否則拒絕啟動。該 email 尚無帳號時才建立；已存在的帳號與密碼絕不覆寫 | no |
-| `ADMIN_PASSWORD` | 否 | 空 | 10 到 256 字元 | 同上。建立後建議移除；偏好改用 CLI 建立（見下方重點）。`PASSWORD_LOGIN_ENABLED=false` 時設定它會被警告且無人可用 | **yes** |
+| `OIDC_ISSUER_URL` | 否 | 空 | HTTPS issuer URL（可含 realm 路徑） | 與 client id 一起設定，自動 Discovery；回呼網址 `APP_BASE_URL/auth/oidc/callback` | no |
+| `OIDC_CLIENT_ID` | 否 | 空 | OIDC client id | Authorization Code + PKCE S256，範圍 `openid email profile` | no |
+| `OIDC_CLIENT_SECRET` | 否 | 空 | 字串 | Public Client／PKCE／驗證方式 `none` 留空；機密用戶端可用 `client_secret_basic` | **yes** |
+| `PASSWORD_LOGIN_ENABLED` | 否 | 有 `ADMIN_EMAIL` 時開啟 | 布林 | 僅指定管理員可用；`true` 必須設定 `ADMIN_EMAIL`；`false` 時端點回 404 | no |
+| `ADMIN_EMAIL` | 否 | 空 | email | 唯一可使用本機帳密登入的帳號。CLI 建立帳號後仍需保留此設定。不授予跨使用者資料存取權 | no |
+| `ADMIN_PASSWORD` | 否 | 空 | 10 到 256 字元 | 選填 bootstrap，需有 `ADMIN_EMAIL`；只建立尚不存在的本機帳號，從不覆寫密碼。建立後建議移除 | **yes** |
 
 ### AI 匯入
 

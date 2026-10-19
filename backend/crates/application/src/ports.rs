@@ -35,9 +35,9 @@ pub type PortResult<T> = Result<T, PortError>;
 
 #[async_trait]
 pub trait OrganizerRepo: Send + Sync {
-    async fn find_by_google_sub(&self, google_sub: &str) -> PortResult<Option<Organizer>>;
+    async fn find_by_identity(&self, issuer: &str, sub: &str) -> PortResult<Option<Organizer>>;
     async fn find_by_id(&self, id: OrganizerId) -> PortResult<Option<Organizer>>;
-    /// Insert `candidate`, or when its `google_sub` exists update email/name/avatar
+    /// Insert `candidate`, or when its (issuer, sub) exists update email/name/avatar
     /// and `last_login_at`. Returns the stored organizer (with the existing id on update).
     async fn upsert_from_identity(
         &self,
@@ -48,7 +48,7 @@ pub trait OrganizerRepo: Send + Sync {
 
     /// The local (password) account with this normalised email, with its PHC hash.
     async fn find_local_by_email(&self, email: &str) -> PortResult<Option<LocalAccount>>;
-    /// Whether any organizer (Google, dev or local) has this email, ignoring case.
+    /// Whether any organizer (OIDC, dev or local) has this email, ignoring case.
     async fn exists_by_email(&self, email: &str) -> PortResult<bool>;
     /// Insert a local account. `EmailTaken` when another local account has the email.
     async fn create_local(
@@ -81,8 +81,8 @@ pub enum CreateLocalOutcome {
 pub struct AccountSummary {
     pub email: String,
     pub display_name: String,
-    /// `google_sub` is set (Google or dev login).
-    pub has_google: bool,
+    /// An external identity is set (OIDC or development login).
+    pub has_oidc: bool,
     pub has_password: bool,
     pub created_at: SystemTime,
 }
@@ -143,6 +143,7 @@ pub trait OAuthStateRepo: Send + Sync {
 /// Claims of a verified ID token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedIdentity {
+    pub issuer: String,
     pub sub: String,
     pub email: String,
     pub email_verified: bool,

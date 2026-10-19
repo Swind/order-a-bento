@@ -147,6 +147,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oidc_migration_preserves_local_passwords_and_owned_data() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("before-oidc.db"))
+            .await
+            .unwrap();
+        MIGRATOR.run_to(3, &db.write).await.unwrap();
+        for sql in [
+            "INSERT INTO organizers (id, email, display_name, created_at, last_login_at, password_hash) VALUES ('admin', 'admin@example.com', 'Admin', 't', 't', '$existing-hash')",
+            "INSERT INTO sessions VALUES (x'0102', 'admin', 't', '2099-01-01T00:00:00Z', NULL)",
+            "INSERT INTO delivery_addresses VALUES ('a1', 'admin', '教室', '地址', 't')",
+            "INSERT INTO ai_import_runs (id, organizer_id, mode_hint, status, model, created_at) VALUES ('run1', 'admin', 'deliveryAddress', 'proposed', 'test', 't')",
+        ] {
+            sqlx::query(sql).execute(&db.write).await.unwrap();
+        }
+        db.migrate().await.unwrap();
+        let row: (Option<String>, Option<String>, String) = sqlx::query_as(
+            "SELECT oidc_issuer, oidc_sub, password_hash FROM organizers WHERE id = 'admin'",
+        )
+        .fetch_one(&db.read)
+        .await
+        .unwrap();
+        assert_eq!(row, (None, None, "$existing-hash".into()));
+        for table in ["sessions", "delivery_addresses", "ai_import_runs"] {
+            let (count,): (i64,) =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&db.read)
+                    .await
+                    .unwrap();
+            assert_eq!(count, 1);
+        }
+        assert!(
+            sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&db.write)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn migrations_apply_and_view_exists() {
         let (db, _dir) = Db::open_temp().await.unwrap();
         let (n,): (i64,) = sqlx::query_as(
@@ -228,7 +268,7 @@ mod tests {
             String,
         );
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT id, google_sub, email, avatar_url, password_hash, last_login_at \
+            "SELECT id, oidc_sub, email, avatar_url, password_hash, last_login_at \
                  FROM organizers ORDER BY id",
         )
         .fetch_all(&db.read)
@@ -254,6 +294,15 @@ mod tests {
                     "2024-02-02T00:00:00Z".into()
                 ),
             ]
+        );
+        let issuers: Vec<String> =
+            sqlx::query_scalar("SELECT oidc_issuer FROM organizers ORDER BY id")
+                .fetch_all(&db.read)
+                .await
+                .unwrap();
+        assert_eq!(
+            issuers,
+            ["https://accounts.google.com", "urn:order-a-bento:dev"]
         );
         // Child rows survived the rebuild, the schema is consistent and enforcement is back on.
         for (table, n) in [("sessions", 1), ("rosters", 1), ("vendors", 1)] {
@@ -308,16 +357,16 @@ mod tests {
             .unwrap();
         assert_eq!(c, 1);
 
-        // New shape: NULL google_sub with a password is accepted; indexes exist.
+        // Local passwords and their uniqueness survive both migrations.
         sqlx::query(
-            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at, password_hash) \
+            "INSERT INTO organizers (id, oidc_sub, email, display_name, created_at, last_login_at, password_hash) \
              VALUES ('o3', NULL, 'l@b.c', 'L', 't', 't', '$h')",
         )
         .execute(&db.write)
         .await
         .unwrap();
         let dup = sqlx::query(
-            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at, password_hash) \
+            "INSERT INTO organizers (id, oidc_sub, email, display_name, created_at, last_login_at, password_hash) \
              VALUES ('o4', NULL, 'l@b.c', 'L', 't', 't', '$h')",
         )
         .execute(&db.write)

@@ -4,7 +4,7 @@ export const AUTH_CONFIG = {
   aiDemo: false,
   aiImportEnabled: true,
   devLoginEnabled: false,
-  googleEnabled: true,
+  oidcEnabled: true,
 };
 
 const base = {

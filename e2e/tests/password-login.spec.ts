@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { E2E_ADMIN_EMAIL, E2E_ADMIN_NAME, E2E_ADMIN_PASSWORD } from "../admin-account";
 import { expectNoHorizontalOverflow } from "../helpers";
 
-// The server runs with GOOGLE_OAUTH_ENABLED=false; the admin account was created with
+// The server runs without OIDC; the admin account was created with
 // `server admin create --password-stdin` against the same database before startup.
 
 test("CLI-created admin logs in with email and password, without Google", async ({ page }) => {
@@ -11,13 +11,13 @@ test("CLI-created admin logs in with email and password, without Google", async 
 
   // Only the enabled methods are offered: no Google button, password form present.
   await expect(page.getByLabel("密碼")).toBeVisible();
-  await expect(page.getByRole("button", { name: "使用 Google 登入" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "使用單一登入（OIDC）" })).toHaveCount(0);
   await expect(page.getByLabel("密碼")).toHaveAttribute("autocomplete", "current-password");
   await expectNoHorizontalOverflow(page);
 
   const cfg = await (await page.request.get("/api/v1/auth/config")).json();
-  expect(cfg).toMatchObject({ googleEnabled: false, passwordLoginEnabled: true });
-  const google = await page.request.get("/auth/google/login", { maxRedirects: 0 });
+  expect(cfg).toMatchObject({ oidcEnabled: false, passwordLoginEnabled: true });
+  const google = await page.request.get("/auth/oidc/login", { maxRedirects: 0 });
   expect(google.status()).toBe(503);
 
   // Wrong password: the generic message, still logged out.

@@ -120,16 +120,16 @@ function PasswordLoginForm({ returnTo }: { returnTo: string }) {
   );
 }
 
-function GoogleLoginButton({ returnTo }: { returnTo: string }) {
+function OidcLoginButton({ returnTo }: { returnTo: string }) {
   return (
     <Button
       variant="outline"
       className="w-full"
       onClick={() => {
-        window.location.assign(`/auth/google/login?returnTo=${encodeURIComponent(returnTo)}`);
+        window.location.assign(`/auth/oidc/login?returnTo=${encodeURIComponent(returnTo)}`);
       }}
     >
-      使用 Google 登入
+      使用單一登入（OIDC）
     </Button>
   );
 }
@@ -138,17 +138,22 @@ function GoogleLoginButton({ returnTo }: { returnTo: string }) {
 function LoginMethods({
   returnTo,
   password,
-  google,
+  oidc,
   dev,
 }: {
   returnTo: string;
   password: boolean;
-  google: boolean;
+  oidc: boolean;
   dev: boolean;
 }) {
   const sections = [
-    password && <PasswordLoginForm key="password" returnTo={returnTo} />,
-    google && <GoogleLoginButton key="google" returnTo={returnTo} />,
+    oidc && <OidcLoginButton key="oidc" returnTo={returnTo} />,
+    password && (
+      <div key="password" className="space-y-3">
+        <h2 className="text-sm font-semibold">管理員備援登入</h2>
+        <PasswordLoginForm returnTo={returnTo} />
+      </div>
+    ),
     dev && <DevLoginForm key="dev" returnTo={returnTo} />,
   ].filter(Boolean);
   if (sections.length === 0) {
@@ -205,7 +210,7 @@ export function LoginPage() {
           <LoginMethods
             returnTo={returnTo}
             password={config.data.passwordLoginEnabled}
-            google={config.data.googleEnabled}
+            oidc={config.data.oidcEnabled}
             dev={config.data.devLoginEnabled}
           />
         )}

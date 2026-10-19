@@ -1,4 +1,4 @@
-//! Authentication use cases: Google login, password login, dev login, session
+//! Authentication use cases: OIDC login, backup admin login, dev login, session
 //! resolution, logout, and local account management.
 
 pub mod accounts;
@@ -19,26 +19,29 @@ use crate::token::{TokenHash, pkce_challenge};
 pub const OAUTH_STATE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_RETURN_TO_LEN: usize = 2048;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub session_ttl: Duration,
+    /// Only this local account may use password login. None disables it.
+    pub admin_email: Option<String>,
 }
 
 impl AuthConfig {
     pub fn from_days(days: u32) -> Self {
         Self {
             session_ttl: Duration::from_secs(u64::from(days) * 86_400),
+            admin_email: None,
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    #[error("google login is not configured")]
-    GoogleNotConfigured,
+    #[error("OIDC login is not configured")]
+    OidcNotConfigured,
     #[error("unknown, used or expired login state")]
     InvalidState,
-    #[error("google account email is not verified")]
+    #[error("identity provider account email is not verified")]
     EmailNotVerified,
     #[error("identity provider failed: {0}")]
     Provider(String),
@@ -63,7 +66,7 @@ impl AuthError {
     /// Stable code used in `/login?error=<code>` redirects.
     pub fn login_error_code(&self) -> &'static str {
         match self {
-            Self::GoogleNotConfigured => "google_not_configured",
+            Self::OidcNotConfigured => "oidc_not_configured",
             Self::InvalidState => "invalid_state",
             Self::EmailNotVerified => "email_not_verified",
             Self::Provider(_) => "provider_error",
@@ -119,7 +122,7 @@ pub struct AuthService {
     pub organizers: Arc<dyn OrganizerRepo>,
     pub sessions: Arc<dyn SessionRepo>,
     pub oauth_states: Arc<dyn OAuthStateRepo>,
-    /// Absent when Google credentials are not configured.
+    /// Absent when OIDC issuer/client are not configured.
     pub identity: Option<Arc<dyn IdentityProvider>>,
     pub hasher: Arc<dyn PasswordHasher>,
     pub tokens: Arc<dyn TokenGenerator>,
@@ -129,11 +132,11 @@ pub struct AuthService {
 
 impl AuthService {
     fn provider(&self) -> Result<&Arc<dyn IdentityProvider>, AuthError> {
-        self.identity.as_ref().ok_or(AuthError::GoogleNotConfigured)
+        self.identity.as_ref().ok_or(AuthError::OidcNotConfigured)
     }
 
-    /// Start a Google login; returns the URL to redirect the browser to.
-    pub async fn begin_google_login(&self, return_to: Option<&str>) -> Result<String, AuthError> {
+    /// Start an OIDC login; returns the URL to redirect the browser to.
+    pub async fn begin_oidc_login(&self, return_to: Option<&str>) -> Result<String, AuthError> {
         let provider = self.provider()?;
         let now = self.clock.now();
         let state = self.tokens.generate();
@@ -155,8 +158,8 @@ impl AuthService {
             .map_err(|e| AuthError::Provider(e.to_string()))
     }
 
-    /// Finish the Google login started by [`Self::begin_google_login`].
-    pub async fn complete_google_login(
+    /// Finish the OIDC login started by [`Self::begin_oidc_login`].
+    pub async fn complete_oidc_login(
         &self,
         state: &str,
         code: &str,
@@ -182,6 +185,7 @@ impl AuthService {
             .filter(|n| !n.trim().is_empty())
             .unwrap_or(identity.email.as_str());
         let candidate = Organizer::new(
+            &identity.issuer,
             &identity.sub,
             &identity.email,
             display_name,
@@ -195,7 +199,7 @@ impl AuthService {
         })
     }
 
-    /// Dev-only shortcut: log in as `dev:<email>` without Google. The caller
+    /// Dev-only shortcut: log in as `dev:<email>` without OIDC. The caller
     /// (composition root) must only expose this when `DEV_LOGIN=true`.
     pub async fn dev_login(
         &self,
@@ -212,7 +216,13 @@ impl AuthService {
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| email.split('@').next().unwrap_or(email));
-        let candidate = Organizer::new(&format!("dev:{email}"), email, name, None)?;
+        let candidate = Organizer::new(
+            "urn:order-a-bento:dev",
+            &format!("dev:{email}"),
+            email,
+            name,
+            None,
+        )?;
         let organizer = self.organizers.upsert_from_identity(candidate, now).await?;
         self.create_session(&organizer, user_agent, now).await
     }
@@ -232,10 +242,12 @@ impl AuthService {
         if password.chars().count() > PASSWORD_MAX_LEN {
             return Err(AuthError::InvalidCredentials);
         }
-        let account = self
-            .organizers
-            .find_local_by_email(&normalize_email(email))
-            .await?;
+        let email = normalize_email(email);
+        if self.config.admin_email.as_deref() != Some(email.as_str()) {
+            self.hasher.verify_dummy(password).await;
+            return Err(AuthError::InvalidCredentials);
+        }
+        let account = self.organizers.find_local_by_email(&email).await?;
         let organizer = match account {
             Some(a) => match &a.password_hash {
                 Some(hash) if self.hasher.verify(password, hash).await? => Some(a.organizer),
@@ -291,6 +303,11 @@ impl AuthService {
             .find_by_id(organizer_id)
             .await?
             .ok_or(AuthError::Unauthenticated)?;
+        if organizer.is_local()
+            && self.config.admin_email.as_deref() != Some(organizer.email.as_str())
+        {
+            return Err(AuthError::Unauthenticated);
+        }
         let remaining = expires_at.duration_since(now).unwrap_or_default();
         let extended = remaining < self.config.session_ttl / 2;
         if extended {

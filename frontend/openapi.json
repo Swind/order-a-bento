@@ -2655,7 +2655,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "Development-only login without Google. Registered only when `DEV_LOGIN=true`.",
+        "summary": "Development-only login without OIDC. Registered only when `DEV_LOGIN=true`.",
         "operationId": "dev_login",
         "requestBody": {
           "content": {
@@ -2684,13 +2684,27 @@
         }
       }
     },
-    "/auth/google/callback": {
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Log out: deletes the session and clears the cookie.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Logged out (idempotent)"
+          }
+        }
+      }
+    },
+    "/auth/oidc/callback": {
       "get": {
         "tags": [
           "auth"
         ],
         "summary": "OAuth callback: verifies the login, sets the session cookie and redirects.\nAny failure redirects to `/login?error=<code>`.",
-        "operationId": "google_callback",
+        "operationId": "oidc_callback",
         "parameters": [
           {
             "name": "code",
@@ -2711,7 +2725,7 @@
           {
             "name": "error",
             "in": "query",
-            "description": "Set by Google when the user denied access.",
+            "description": "Set by the provider when the user denied access.",
             "required": false,
             "schema": {
               "type": "string"
@@ -2725,13 +2739,13 @@
         }
       }
     },
-    "/auth/google/login": {
+    "/auth/oidc/login": {
       "get": {
         "tags": [
           "auth"
         ],
-        "summary": "Start the Google login: redirects to Google (PKCE + state + nonce).",
-        "operationId": "google_login",
+        "summary": "Start OIDC login: redirects to the provider (PKCE + state + nonce).",
+        "operationId": "oidc_login",
         "parameters": [
           {
             "name": "returnTo",
@@ -2745,7 +2759,7 @@
         ],
         "responses": {
           "302": {
-            "description": "Redirect to Google's authorization endpoint"
+            "description": "Redirect to OIDC authorization endpoint"
           },
           "502": {
             "description": "Identity provider unreachable",
@@ -2758,7 +2772,7 @@
             }
           },
           "503": {
-            "description": "Google login is not configured (code google_not_configured)",
+            "description": "OIDC login is not configured (code oidc_not_configured)",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2766,20 +2780,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/auth/logout": {
-      "post": {
-        "tags": [
-          "auth"
-        ],
-        "summary": "Log out: deletes the session and clears the cookie.",
-        "operationId": "logout",
-        "responses": {
-          "204": {
-            "description": "Logged out (idempotent)"
           }
         }
       }
@@ -3124,7 +3124,7 @@
       "AuthConfigResponse": {
         "type": "object",
         "required": [
-          "googleEnabled",
+          "oidcEnabled",
           "passwordLoginEnabled",
           "devLoginEnabled",
           "aiImportEnabled",
@@ -3143,13 +3143,13 @@
             "type": "boolean",
             "description": "Whether the development-only login form is available."
           },
-          "googleEnabled": {
+          "oidcEnabled": {
             "type": "boolean",
-            "description": "Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured."
+            "description": "Whether the OIDC issuer and client are configured."
           },
           "passwordLoginEnabled": {
             "type": "boolean",
-            "description": "Whether email + password login for local accounts is available."
+            "description": "Whether password login for the designated backup admin is available."
           }
         }
       },

@@ -14,9 +14,9 @@ use domain::shared::SystemClock;
 use infrastructure::ai::{DemoImportAgent, ExtraHeader, RigAgentConfig, RigImportAgent};
 use infrastructure::ai_import_repo::SqliteImportRunRepo;
 use infrastructure::directory_repo::{SqliteRosterRepo, SqliteVendorRepo};
-use infrastructure::google::GoogleOidcProvider;
 use infrastructure::identity_repo::{SqliteOAuthStateRepo, SqliteOrganizerRepo, SqliteSessionRepo};
 use infrastructure::maintenance_repo::SqliteMaintenanceRepo;
+use infrastructure::oidc::OidcProvider;
 use infrastructure::ordering_repo::{
     SqliteGroupOrderRepo, SqliteOrderReadModel, SqliteSettlementRepo, SqliteSubmissionRepo,
 };
@@ -26,22 +26,26 @@ use infrastructure::tokens::OsRngTokenGenerator;
 
 use crate::config::{AiMode, Config};
 
-/// Google provider when Google login is enabled (`GOOGLE_OAUTH_ENABLED`, by default
-/// whenever `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are both set).
+/// OIDC provider when issuer and client id are configured; secret is optional.
 /// No network access happens here (discovery is lazy).
-pub fn google_provider(config: &Config) -> anyhow::Result<Option<Arc<dyn IdentityProvider>>> {
-    if !config.google_oauth_enabled {
+pub fn oidc_provider(config: &Config) -> anyhow::Result<Option<Arc<dyn IdentityProvider>>> {
+    if !config.oidc_enabled {
         return Ok(None);
     }
-    match (&config.google_client_id, &config.google_client_secret) {
-        (Some(id), Some(secret)) => {
+    match (&config.oidc_client_id, &config.oidc_issuer_url) {
+        (Some(id), Some(issuer)) => {
             let redirect = format!(
-                "{}/auth/google/callback",
+                "{}/auth/oidc/callback",
                 config.app_base_url.trim_end_matches('/')
             );
-            let p = GoogleOidcProvider::new(id, secret, &redirect)
-                .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("configuring Google OIDC")?;
+            let p = OidcProvider::new(
+                id,
+                config.oidc_client_secret.as_ref().map(|s| s.expose()),
+                &redirect,
+                issuer,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("configuring OIDC")?;
             Ok(Some(Arc::new(p)))
         }
         _ => Ok(None),
@@ -109,11 +113,14 @@ pub fn build_state(config: &Config, db: Db) -> anyhow::Result<AppState> {
         organizers: Arc::new(SqliteOrganizerRepo::new(db.clone())),
         sessions: Arc::new(SqliteSessionRepo::new(db.clone())),
         oauth_states: Arc::new(SqliteOAuthStateRepo::new(db.clone())),
-        identity: google_provider(config)?,
+        identity: oidc_provider(config)?,
         hasher: Arc::new(Argon2PasswordHasher::new()),
         tokens: Arc::new(OsRngTokenGenerator),
         clock: Arc::new(SystemClock),
-        config: AuthConfig::from_days(config.session_ttl_days),
+        config: AuthConfig {
+            admin_email: config.admin_email.clone(),
+            ..AuthConfig::from_days(config.session_ttl_days)
+        },
     };
     let directory = DirectoryService {
         delivery_addresses: Arc::new(
@@ -170,7 +177,7 @@ pub fn account_service(db: &Db) -> AccountService {
 }
 
 /// `ADMIN_EMAIL` / `ADMIN_PASSWORD` bootstrap: creates the local admin unless an
-/// organizer with that email exists. `None` when the variables are not set.
+/// local account with that email exists. `None` when bootstrap password is not set.
 /// Never overwrites an existing account and never logs the password.
 pub async fn bootstrap_admin(
     config: &Config,

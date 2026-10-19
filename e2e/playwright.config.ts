@@ -67,7 +67,11 @@ export default defineConfig({
       PORT: String(PORT),
       APP_ENV: "development",
       DEV_LOGIN: "true",
-      GOOGLE_OAUTH_ENABLED: "false",
+      OIDC_ISSUER_URL: "",
+      OIDC_CLIENT_ID: "",
+      OIDC_CLIENT_SECRET: "",
+      ADMIN_EMAIL: E2E_ADMIN_EMAIL,
+      ADMIN_PASSWORD: "",
       PASSWORD_LOGIN_ENABLED: "true",
       AI_DEMO: "true",
       // A real key would win over AI_DEMO; blank them so neither the shell nor

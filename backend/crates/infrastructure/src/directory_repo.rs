@@ -649,7 +649,8 @@ mod tests {
     async fn organizer(db: &Db, n: &str) -> OrganizerId {
         let o = Organizer {
             id: OrganizerId::new(),
-            google_sub: Some(format!("sub-{n}")),
+            oidc_issuer: Some("https://id.example".into()),
+            oidc_sub: Some(format!("sub-{n}")),
             email: format!("{n}@x.test"),
             display_name: n.into(),
             avatar_url: None,

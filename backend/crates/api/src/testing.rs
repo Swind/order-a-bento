@@ -43,6 +43,7 @@ impl IdentityProvider for FakeIdp {
     ) -> Result<VerifiedIdentity, IdentityError> {
         match code {
             "good" => Ok(VerifiedIdentity {
+                issuer: "https://id.example".into(),
                 sub: "g-123".into(),
                 email: "google@user.test".into(),
                 email_verified: true,
@@ -50,6 +51,7 @@ impl IdentityProvider for FakeIdp {
                 picture: Some("https://pics.test/g.png".into()),
             }),
             "unverified" => Ok(VerifiedIdentity {
+                issuer: "https://id.example".into(),
                 sub: "g-456".into(),
                 email: "u@user.test".into(),
                 email_verified: false,
@@ -91,7 +93,10 @@ pub async fn test_app_with(
         hasher: Arc::new(Argon2PasswordHasher::new()),
         tokens: Arc::new(OsRngTokenGenerator),
         clock: Arc::new(SystemClock),
-        config: AuthConfig::from_days(14),
+        config: AuthConfig {
+            admin_email: Some("admin@example.com".into()),
+            ..AuthConfig::from_days(14)
+        },
     };
     let directory = DirectoryService {
         delivery_addresses: Arc::new(

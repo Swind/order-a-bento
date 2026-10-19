@@ -1,4 +1,4 @@
-//! `/auth/*`: Google OIDC login, password login, logout and the dev-only login shortcut.
+//! `/auth/*`: OIDC login, backup admin login, logout and the dev-only shortcut.
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -29,7 +29,7 @@ pub struct LoginQuery {
 pub struct CallbackQuery {
     pub code: Option<String>,
     pub state: Option<String>,
-    /// Set by Google when the user denied access.
+    /// Set by the provider when the user denied access.
     pub error: Option<String>,
 }
 
@@ -62,27 +62,27 @@ fn user_agent(headers: &HeaderMap) -> Option<&str> {
         .and_then(|v| v.to_str().ok())
 }
 
-/// Start the Google login: redirects to Google (PKCE + state + nonce).
+/// Start OIDC login: redirects to the provider (PKCE + state + nonce).
 #[utoipa::path(
     get,
-    path = "/auth/google/login",
+    path = "/auth/oidc/login",
     tag = TAG_AUTH,
     params(LoginQuery),
     responses(
-        (status = 302, description = "Redirect to Google's authorization endpoint"),
-        (status = 503, description = "Google login is not configured (code google_not_configured)",
+        (status = 302, description = "Redirect to OIDC authorization endpoint"),
+        (status = 503, description = "OIDC login is not configured (code oidc_not_configured)",
          body = ProblemDetails, content_type = "application/problem+json"),
         (status = 502, description = "Identity provider unreachable", body = ProblemDetails,
          content_type = "application/problem+json"),
     )
 )]
-pub async fn google_login(
+pub async fn oidc_login(
     State(state): State<AppState>,
     Query(q): Query<LoginQuery>,
 ) -> Result<Response, AppError> {
     let url = state
         .auth
-        .begin_google_login(q.return_to.as_deref())
+        .begin_oidc_login(q.return_to.as_deref())
         .await
         .map_err(auth_error)?;
     Ok(redirect(&url))
@@ -92,14 +92,14 @@ pub async fn google_login(
 /// Any failure redirects to `/login?error=<code>`.
 #[utoipa::path(
     get,
-    path = "/auth/google/callback",
+    path = "/auth/oidc/callback",
     tag = TAG_AUTH,
     params(CallbackQuery),
     responses(
         (status = 302, description = "Redirect to the original page with a session cookie, or to /login?error=<code>"),
     )
 )]
-pub async fn google_callback(
+pub async fn oidc_callback(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<CallbackQuery>,
@@ -114,7 +114,7 @@ pub async fn google_callback(
     };
     match state
         .auth
-        .complete_google_login(st, code, user_agent(&headers))
+        .complete_oidc_login(st, code, user_agent(&headers))
         .await
     {
         Ok(done) => {
@@ -131,7 +131,7 @@ pub async fn google_callback(
             res
         }
         Err(e) => {
-            tracing::warn!(error = %e, "google login failed");
+            tracing::warn!(error = %e, "OIDC login failed");
             fail(e.login_error_code())
         }
     }
@@ -157,7 +157,7 @@ pub async fn logout(
     Ok(res)
 }
 
-/// Development-only login without Google. Registered only when `DEV_LOGIN=true`.
+/// Development-only login without OIDC. Registered only when `DEV_LOGIN=true`.
 #[utoipa::path(
     post,
     path = "/auth/dev-login",
@@ -231,9 +231,9 @@ pub async fn password_login(
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthConfigResponse {
-    /// Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured.
-    pub google_enabled: bool,
-    /// Whether email + password login for local accounts is available.
+    /// Whether the OIDC issuer and client are configured.
+    pub oidc_enabled: bool,
+    /// Whether password login for the designated backup admin is available.
     pub password_login_enabled: bool,
     /// Whether the development-only login form is available.
     pub dev_login_enabled: bool,
@@ -252,7 +252,7 @@ pub struct AuthConfigResponse {
 )]
 pub async fn auth_config(State(state): State<AppState>) -> Json<AuthConfigResponse> {
     Json(AuthConfigResponse {
-        google_enabled: state.auth.identity.is_some(),
+        oidc_enabled: state.auth.identity.is_some(),
         password_login_enabled: state.web.password_login,
         dev_login_enabled: state.web.dev_login,
         ai_import_enabled: state.ai_import.is_some(),
@@ -268,8 +268,8 @@ pub fn v1_router() -> OpenApiRouter<AppState> {
 /// `dev_login` and `password_login` are only included when their flag is true.
 pub fn router(with_dev_login: bool, with_password_login: bool) -> OpenApiRouter<AppState> {
     let mut r = OpenApiRouter::new()
-        .routes(routes!(google_login))
-        .routes(routes!(google_callback))
+        .routes(routes!(oidc_login))
+        .routes(routes!(oidc_callback))
         .routes(routes!(logout));
     if with_dev_login {
         r = r.routes(routes!(dev_login));
@@ -410,7 +410,7 @@ mod tests {
             assert_eq!(res.status(), StatusCode::OK);
             let v = json(res).await;
             assert_eq!(v["devLoginEnabled"], dev);
-            assert_eq!(v["googleEnabled"], google);
+            assert_eq!(v["oidcEnabled"], google);
             assert_eq!(v["passwordLoginEnabled"], true);
         }
     }
@@ -461,10 +461,12 @@ mod tests {
     async fn password_login_failures_are_identical() {
         let (app, t) = app(false, false).await;
         make_admin(&t, "admin@example.com", "correct horse").await;
+        make_admin(&t, "old-user@example.com", "correct horse").await;
         let mut bodies = Vec::new();
         for body in [
             r#"{"email":"admin@example.com","password":"wrong wrong wrong"}"#,
             r#"{"email":"nobody@example.com","password":"correct horse"}"#,
+            r#"{"email":"old-user@example.com","password":"correct horse"}"#,
             r#"{"email":"","password":""}"#,
         ] {
             let res = send(&app, post_json("/auth/password-login", body)).await;
@@ -479,6 +481,7 @@ mod tests {
         assert_eq!(bodies[0]["code"], "invalid_credentials");
         assert_eq!(bodies[0], bodies[1]);
         assert_eq!(bodies[0], bodies[2]);
+        assert_eq!(bodies[0], bodies[3]);
     }
 
     #[tokio::test]
@@ -562,7 +565,7 @@ mod tests {
         let (app, _t) = app(false, false).await;
         let res = send(
             &app,
-            Request::get("/auth/google/callback?code=good&state=x")
+            Request::get("/auth/oidc/callback?code=good&state=x")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -571,7 +574,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::FOUND);
         assert_eq!(
             header_str(&res, header::LOCATION),
-            "/login?error=google_not_configured"
+            "/login?error=oidc_not_configured"
         );
         let cfg = json(
             send(
@@ -583,7 +586,7 @@ mod tests {
             .await,
         )
         .await;
-        assert_eq!(cfg["googleEnabled"], false);
+        assert_eq!(cfg["oidcEnabled"], false);
     }
 
     #[tokio::test]
@@ -605,7 +608,7 @@ mod tests {
         let (app, _t) = app(false, true).await;
         let res = send(
             &app,
-            Request::get("/auth/google/login?returnTo=/admin/orders")
+            Request::get("/auth/oidc/login?returnTo=/admin/orders")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -626,7 +629,7 @@ mod tests {
 
         let cb = send(
             &app,
-            Request::get(format!("/auth/google/callback?code=good&state={state}"))
+            Request::get(format!("/auth/oidc/callback?code=good&state={state}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -643,7 +646,7 @@ mod tests {
         // The state is single-use.
         let again = send(
             &app,
-            Request::get(format!("/auth/google/callback?code=good&state={state}"))
+            Request::get(format!("/auth/oidc/callback?code=good&state={state}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -660,7 +663,7 @@ mod tests {
         let (app, _t) = app(false, true).await;
         let res = send(
             &app,
-            Request::get("/auth/google/login?returnTo=//evil.com")
+            Request::get("/auth/oidc/login?returnTo=//evil.com")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -675,7 +678,7 @@ mod tests {
             .unwrap();
         let cb = send(
             &app,
-            Request::get(format!("/auth/google/callback?code=good&state={state}"))
+            Request::get(format!("/auth/oidc/callback?code=good&state={state}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -690,7 +693,7 @@ mod tests {
 
         let res = send(
             &app,
-            Request::get("/auth/google/callback?code=good&state=bogus")
+            Request::get("/auth/oidc/callback?code=good&state=bogus")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -700,7 +703,7 @@ mod tests {
 
         let res = send(
             &app,
-            Request::get("/auth/google/callback")
+            Request::get("/auth/oidc/callback")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -709,7 +712,7 @@ mod tests {
 
         let res = send(
             &app,
-            Request::get("/auth/google/callback?error=access_denied")
+            Request::get("/auth/oidc/callback?error=access_denied")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -718,7 +721,7 @@ mod tests {
 
         let res = send(
             &app,
-            Request::get("/auth/google/callback?error=%3Cscript%3E")
+            Request::get("/auth/oidc/callback?error=%3Cscript%3E")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -732,7 +735,7 @@ mod tests {
         ] {
             let res = send(
                 &app,
-                Request::get("/auth/google/login")
+                Request::get("/auth/oidc/login")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -741,7 +744,7 @@ mod tests {
             let state = l.split("state=").nth(1).unwrap().split('&').next().unwrap();
             let res = send(
                 &app,
-                Request::get(format!("/auth/google/callback?code={code}&state={state}"))
+                Request::get(format!("/auth/oidc/callback?code={code}&state={state}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -752,17 +755,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn google_not_configured_is_503() {
+    async fn oidc_not_configured_is_503() {
         let (app, _t) = app(false, false).await;
         let res = send(
             &app,
-            Request::get("/auth/google/login")
+            Request::get("/auth/oidc/login")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await;
         assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(json(res).await["code"], "google_not_configured");
+        assert_eq!(json(res).await["code"], "oidc_not_configured");
     }
 
     #[tokio::test]
@@ -834,8 +837,8 @@ mod tests {
     fn openapi_documents_auth_routes() {
         let doc = serde_json::to_value(crate::openapi()).unwrap();
         for (p, m) in [
-            ("/auth/google/login", "get"),
-            ("/auth/google/callback", "get"),
+            ("/auth/oidc/login", "get"),
+            ("/auth/oidc/callback", "get"),
             ("/auth/logout", "post"),
             ("/auth/dev-login", "post"),
             ("/auth/password-login", "post"),

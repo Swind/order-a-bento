@@ -16,13 +16,15 @@ struct FakeOrganizers(Mutex<Vec<(Organizer, Option<String>)>>);
 
 #[async_trait]
 impl OrganizerRepo for FakeOrganizers {
-    async fn find_by_google_sub(&self, sub: &str) -> PortResult<Option<Organizer>> {
+    async fn find_by_identity(&self, issuer: &str, sub: &str) -> PortResult<Option<Organizer>> {
         Ok(self
             .0
             .lock()
             .unwrap()
             .iter()
-            .find(|(o, _)| o.google_sub.as_deref() == Some(sub))
+            .find(|(o, _)| {
+                o.oidc_issuer.as_deref() == Some(issuer) && o.oidc_sub.as_deref() == Some(sub)
+            })
             .map(|(o, _)| o.clone()))
     }
     async fn find_by_id(&self, id: OrganizerId) -> PortResult<Option<Organizer>> {
@@ -36,7 +38,10 @@ impl OrganizerRepo for FakeOrganizers {
     }
     async fn upsert_from_identity(&self, c: Organizer, _: SystemTime) -> PortResult<Organizer> {
         let mut m = self.0.lock().unwrap();
-        if let Some((o, _)) = m.iter_mut().find(|(o, _)| o.google_sub == c.google_sub) {
+        if let Some((o, _)) = m
+            .iter_mut()
+            .find(|(o, _)| o.oidc_issuer == c.oidc_issuer && o.oidc_sub == c.oidc_sub)
+        {
             *o = Organizer { id: o.id, ..c };
             return Ok(o.clone());
         }
@@ -98,7 +103,7 @@ impl OrganizerRepo for FakeOrganizers {
             .map(|(o, h)| AccountSummary {
                 email: o.email.clone(),
                 display_name: o.display_name.clone(),
-                has_google: o.google_sub.is_some(),
+                has_oidc: o.oidc_sub.is_some(),
                 has_password: h.is_some(),
                 created_at: SystemTime::UNIX_EPOCH,
             })
@@ -250,6 +255,7 @@ fn fixture() -> Fixture {
     let clock = Arc::new(TestClock(Mutex::new(SystemTime::UNIX_EPOCH + 1000 * DAY)));
     let sessions = Arc::new(FakeSessions::default());
     let idp = Arc::new(FakeIdp(Mutex::new(VerifiedIdentity {
+        issuer: "https://id.example".into(),
         sub: "g-1".into(),
         email: "a@b.c".into(),
         email_verified: true,
@@ -266,7 +272,10 @@ fn fixture() -> Fixture {
         hasher: hasher.clone(),
         tokens: Arc::new(Counter(AtomicU64::new(0))),
         clock: clock.clone(),
-        config: AuthConfig::from_days(14),
+        config: AuthConfig {
+            admin_email: Some("a@b.c".into()),
+            ..AuthConfig::from_days(14)
+        },
     };
     Fixture {
         svc,
@@ -319,11 +328,11 @@ fn return_to_validation() {
 #[tokio::test]
 async fn begin_and_complete_flow() {
     let f = fixture();
-    let url = f.svc.begin_google_login(Some("/admin")).await.unwrap();
+    let url = f.svc.begin_oidc_login(Some("/admin")).await.unwrap();
     let state = state_of(&url);
     let done = f
         .svc
-        .complete_google_login(&state, "code", Some("UA"))
+        .complete_oidc_login(&state, "code", Some("UA"))
         .await
         .unwrap();
     assert_eq!(done.return_to, "/admin");
@@ -337,10 +346,10 @@ async fn begin_and_complete_flow() {
 async fn open_redirect_return_to_defaults() {
     let f = fixture();
     for bad in ["//evil.com", "https://evil.com", "/\\evil"] {
-        let url = f.svc.begin_google_login(Some(bad)).await.unwrap();
+        let url = f.svc.begin_oidc_login(Some(bad)).await.unwrap();
         let done = f
             .svc
-            .complete_google_login(&state_of(&url), "c", None)
+            .complete_oidc_login(&state_of(&url), "c", None)
             .await
             .unwrap();
         assert_eq!(done.return_to, "/");
@@ -350,23 +359,20 @@ async fn open_redirect_return_to_defaults() {
 #[tokio::test]
 async fn state_is_one_time() {
     let f = fixture();
-    let state = state_of(&f.svc.begin_google_login(None).await.unwrap());
-    f.svc
-        .complete_google_login(&state, "c", None)
-        .await
-        .unwrap();
-    let again = f.svc.complete_google_login(&state, "c", None).await;
+    let state = state_of(&f.svc.begin_oidc_login(None).await.unwrap());
+    f.svc.complete_oidc_login(&state, "c", None).await.unwrap();
+    let again = f.svc.complete_oidc_login(&state, "c", None).await;
     assert!(matches!(again, Err(AuthError::InvalidState)));
-    let unknown = f.svc.complete_google_login("nope", "c", None).await;
+    let unknown = f.svc.complete_oidc_login("nope", "c", None).await;
     assert!(matches!(unknown, Err(AuthError::InvalidState)));
 }
 
 #[tokio::test]
 async fn expired_state_rejected() {
     let f = fixture();
-    let state = state_of(&f.svc.begin_google_login(None).await.unwrap());
+    let state = state_of(&f.svc.begin_oidc_login(None).await.unwrap());
     *f.clock.0.lock().unwrap() += OAUTH_STATE_TTL + Duration::from_secs(1);
-    let r = f.svc.complete_google_login(&state, "c", None).await;
+    let r = f.svc.complete_oidc_login(&state, "c", None).await;
     assert!(matches!(r, Err(AuthError::InvalidState)));
 }
 
@@ -374,23 +380,23 @@ async fn expired_state_rejected() {
 async fn unverified_email_rejected() {
     let f = fixture();
     f.idp.0.lock().unwrap().email_verified = false;
-    let state = state_of(&f.svc.begin_google_login(None).await.unwrap());
-    let r = f.svc.complete_google_login(&state, "c", None).await;
+    let state = state_of(&f.svc.begin_oidc_login(None).await.unwrap());
+    let r = f.svc.complete_oidc_login(&state, "c", None).await;
     assert!(matches!(r, Err(AuthError::EmailNotVerified)));
 }
 
 #[tokio::test]
 async fn provider_failure_and_missing_provider() {
     let f = fixture();
-    let state = state_of(&f.svc.begin_google_login(None).await.unwrap());
-    let r = f.svc.complete_google_login(&state, "bad", None).await;
+    let state = state_of(&f.svc.begin_oidc_login(None).await.unwrap());
+    let r = f.svc.complete_oidc_login(&state, "bad", None).await;
     assert!(matches!(r, Err(AuthError::Provider(_))));
 
     let mut svc = f.svc.clone();
     svc.identity = None;
     assert!(matches!(
-        svc.begin_google_login(None).await,
-        Err(AuthError::GoogleNotConfigured)
+        svc.begin_oidc_login(None).await,
+        Err(AuthError::OidcNotConfigured)
     ));
 }
 
@@ -399,7 +405,7 @@ async fn dev_login_creates_dev_organizer() {
     let f = fixture();
     let s = f.svc.dev_login("x@y.z", None, None).await.unwrap();
     let r = f.svc.resolve_session(&s.token).await.unwrap();
-    assert_eq!(r.organizer.google_sub.as_deref(), Some("dev:x@y.z"));
+    assert_eq!(r.organizer.oidc_sub.as_deref(), Some("dev:x@y.z"));
     assert_eq!(r.organizer.display_name, "x");
     // Logging in again keeps the same organizer.
     let s2 = f
@@ -452,7 +458,8 @@ async fn expired_session_and_logout() {
 
 #[tokio::test]
 async fn password_login_success_and_uniform_failures() {
-    let f = fixture();
+    let mut f = fixture();
+    f.svc.config.admin_email = Some("admin@example.com".into());
     accounts(&f)
         .create(" Admin@Example.com ", "Root", "correct horse")
         .await
@@ -480,6 +487,39 @@ async fn password_login_success_and_uniform_failures() {
     }
     // The unknown account paid for a dummy verification (timing equalised).
     assert_eq!(f.hasher.dummy_verifies.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn only_configured_backup_admin_can_use_passwords_and_sessions() {
+    let mut f = fixture();
+    accounts(&f)
+        .create("a@b.c", "Admin", "correct horse")
+        .await
+        .unwrap();
+    accounts(&f)
+        .create("other@example.com", "Old local user", "correct horse")
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.svc
+            .password_login("other@example.com", "correct horse", None)
+            .await,
+        Err(AuthError::InvalidCredentials)
+    ));
+    let s = f
+        .svc
+        .password_login("a@b.c", "correct horse", None)
+        .await
+        .unwrap();
+    f.svc.config.admin_email = None;
+    assert!(matches!(
+        f.svc.password_login("a@b.c", "correct horse", None).await,
+        Err(AuthError::InvalidCredentials)
+    ));
+    assert!(matches!(
+        f.svc.resolve_session(&s.token).await,
+        Err(AuthError::Unauthenticated)
+    ));
 }
 
 #[tokio::test]
@@ -553,13 +593,14 @@ async fn account_create_set_password_and_list() {
     assert_eq!(list.len(), 2);
     assert!(
         list.iter()
-            .any(|s| s.email == "a@b.c" && s.has_password && !s.has_google)
+            .any(|s| s.email == "a@b.c" && s.has_password && !s.has_oidc)
     );
 }
 
 #[tokio::test]
 async fn bootstrap_admin_is_idempotent_and_never_overwrites() {
-    let f = fixture();
+    let mut f = fixture();
+    f.svc.config.admin_email = Some("root@x.io".into());
     let a = accounts(&f);
     assert_eq!(
         a.bootstrap_admin("Root@X.io", "first password")
@@ -584,11 +625,11 @@ async fn bootstrap_admin_is_idempotent_and_never_overwrites() {
             .await
             .is_err()
     );
-    // Any existing organizer with the email (here a dev/Google one) blocks creation.
+    // An external identity with the same email is never linked to the backup admin.
     f.svc.dev_login("g@x.io", None, None).await.unwrap();
     assert_eq!(
         a.bootstrap_admin("g@x.io", "some password").await.unwrap(),
-        BootstrapOutcome::AlreadyExists
+        BootstrapOutcome::Created
     );
     assert!(matches!(
         a.bootstrap_admin("root2@x.io", "short").await,

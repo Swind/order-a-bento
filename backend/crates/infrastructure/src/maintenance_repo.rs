@@ -170,7 +170,10 @@ mod tests {
     async fn maintenance_purges_clears_and_fails_stuck_runs() {
         let (db, _dir) = Db::open_temp().await.unwrap();
         let org = SqliteOrganizerRepo::new(db.clone())
-            .upsert_from_identity(Organizer::new("sub", "a@b.c", "A", None).unwrap(), t(0))
+            .upsert_from_identity(
+                Organizer::new("https://id.example", "sub", "a@b.c", "A", None).unwrap(),
+                t(0),
+            )
             .await
             .unwrap();
         let org_id = org.id.to_string();

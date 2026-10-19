@@ -1144,7 +1144,8 @@ mod tests {
             .upsert_from_identity(
                 Organizer {
                     id: OrganizerId::new(),
-                    google_sub: Some("sub".into()),
+                    oidc_issuer: Some("https://id.example".into()),
+                    oidc_sub: Some("sub".into()),
                     email: "a@x.test".into(),
                     display_name: "A".into(),
                     avatar_url: None,

@@ -34,7 +34,7 @@ struct Env {
 
 async fn env() -> Env {
     let (db, dir) = Db::open_temp().await.unwrap();
-    let o = Organizer::new("sub-a", "a@x.com", "a", None).unwrap();
+    let o = Organizer::new("https://id.example", "sub-a", "a@x.com", "a", None).unwrap();
     let org: OrganizerId = SqliteOrganizerRepo::new(db.clone())
         .upsert_from_identity(o, SystemTime::now())
         .await

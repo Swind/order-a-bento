@@ -40,7 +40,14 @@ struct Env {
 }
 
 async fn organizer(db: &Db, n: &str) -> OrganizerId {
-    let o = Organizer::new(&format!("sub-{n}"), &format!("{n}@x.com"), n, None).unwrap();
+    let o = Organizer::new(
+        "https://id.example",
+        &format!("sub-{n}"),
+        &format!("{n}@x.com"),
+        n,
+        None,
+    )
+    .unwrap();
     SqliteOrganizerRepo::new(db.clone())
         .upsert_from_identity(o, SystemTime::now())
         .await

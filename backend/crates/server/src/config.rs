@@ -51,13 +51,13 @@ pub struct Config {
     pub dev_login: bool,
     pub app_base_url: String,
     pub database_url: String,
-    pub google_client_id: Option<String>,
-    pub google_client_secret: Option<String>,
-    /// Resolved `GOOGLE_OAUTH_ENABLED`: Google login is available. Always implies both credentials.
-    pub google_oauth_enabled: bool,
-    /// `PASSWORD_LOGIN_ENABLED` (default true): local-account password login endpoint.
+    pub oidc_issuer_url: Option<String>,
+    pub oidc_client_id: Option<String>,
+    pub oidc_client_secret: Option<Secret>,
+    pub oidc_enabled: bool,
+    /// `PASSWORD_LOGIN_ENABLED` (defaults to ADMIN_EMAIL being set): backup admin login.
     pub password_login_enabled: bool,
-    /// `ADMIN_EMAIL` / `ADMIN_PASSWORD` (both or neither): local admin created at startup if missing.
+    /// Designated backup admin; optional password bootstraps it when missing.
     pub admin_email: Option<String>,
     pub admin_password: Option<Secret>,
     /// Resolved API key: `AI_API_KEY`, else (Anthropic providers only) `ANTHROPIC_API_KEY`.
@@ -158,23 +158,38 @@ impl Config {
             Ok(tri_state(key)?.unwrap_or(false))
         };
         let dev_login = boolean("DEV_LOGIN")?;
-        let google_client_id = opt("GOOGLE_CLIENT_ID");
-        let google_client_secret = opt("GOOGLE_CLIENT_SECRET");
-        let has_google_credentials = google_client_id.is_some() && google_client_secret.is_some();
-        // Unset = auto (on iff both credentials are set); false = off even with credentials.
-        let google_oauth_enabled = match tri_state("GOOGLE_OAUTH_ENABLED")? {
-            None => has_google_credentials,
-            Some(false) => false,
-            Some(true) if has_google_credentials => true,
-            Some(true) => {
+        let oidc_issuer_url = opt("OIDC_ISSUER_URL");
+        let oidc_client_id = opt("OIDC_CLIENT_ID");
+        let oidc_client_secret = opt("OIDC_CLIENT_SECRET").map(Secret);
+        let oidc_enabled = oidc_issuer_url.is_some() && oidc_client_id.is_some();
+        if !oidc_enabled
+            && (oidc_issuer_url.is_some()
+                || oidc_client_id.is_some()
+                || oidc_client_secret.is_some())
+        {
+            return Err(ConfigError::Invalid {
+                key: "OIDC_ISSUER_URL",
+                value: String::new(),
+                reason: "OIDC requires both OIDC_ISSUER_URL and OIDC_CLIENT_ID; secret is optional",
+            });
+        }
+        if let Some(issuer) = &oidc_issuer_url {
+            let valid = url::Url::parse(issuer).is_ok_and(|u| {
+                u.scheme() == "https"
+                    && u.host_str().is_some()
+                    && u.username().is_empty()
+                    && u.password().is_none()
+                    && u.query().is_none()
+                    && u.fragment().is_none()
+            });
+            if !valid {
                 return Err(ConfigError::Invalid {
-                    key: "GOOGLE_OAUTH_ENABLED",
-                    value: "true".into(),
-                    reason: "requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET",
+                    key: "OIDC_ISSUER_URL",
+                    value: issuer.clone(),
+                    reason: "expected an HTTPS issuer URL without credentials, query or fragment",
                 });
             }
-        };
-        let password_login_enabled = tri_state("PASSWORD_LOGIN_ENABLED")?.unwrap_or(true);
+        }
         let (admin_email, admin_password) = match (opt("ADMIN_EMAIL"), opt("ADMIN_PASSWORD")) {
             (None, None) => (None, None),
             (Some(email), Some(password)) => {
@@ -194,13 +209,16 @@ impl Config {
                 })?;
                 (Some(email), Some(Secret(password)))
             }
-            (Some(_), None) => {
-                return Err(ConfigError::Invalid {
-                    key: "ADMIN_PASSWORD",
-                    value: String::new(),
-                    reason: "required when ADMIN_EMAIL is set",
-                });
-            }
+            (Some(email), None) => (
+                Some(domain::identity::parse_local_email(&email).map_err(|_| {
+                    ConfigError::Invalid {
+                        key: "ADMIN_EMAIL",
+                        value: email,
+                        reason: "expected an email address",
+                    }
+                })?),
+                None,
+            ),
             (None, Some(_)) => {
                 return Err(ConfigError::Invalid {
                     key: "ADMIN_EMAIL",
@@ -209,6 +227,15 @@ impl Config {
                 });
             }
         };
+        let password_login_enabled =
+            tri_state("PASSWORD_LOGIN_ENABLED")?.unwrap_or(admin_email.is_some());
+        if password_login_enabled && admin_email.is_none() {
+            return Err(ConfigError::Invalid {
+                key: "ADMIN_EMAIL",
+                value: String::new(),
+                reason: "required when PASSWORD_LOGIN_ENABLED=true",
+            });
+        }
         let ai_demo = boolean("AI_DEMO")?;
         let ai_provider = match get("AI_PROVIDER").map(str::to_ascii_lowercase).as_deref() {
             None | Some("anthropic") => AiProvider::Anthropic,
@@ -409,9 +436,10 @@ impl Config {
             dev_login,
             app_base_url: string("APP_BASE_URL", "http://localhost:3000"),
             database_url: string("DATABASE_URL", "sqlite://data/bento.db"),
-            google_client_id,
-            google_client_secret,
-            google_oauth_enabled,
+            oidc_issuer_url,
+            oidc_client_id,
+            oidc_client_secret,
+            oidc_enabled,
             password_login_enabled,
             admin_email,
             admin_password,
@@ -526,7 +554,7 @@ mod tests {
         assert_eq!(c.port, 3000);
         assert_eq!(c.app_env, AppEnv::Development);
         assert!(!c.dev_login);
-        assert!(c.google_client_id.is_none() && c.ai_api_key.is_none());
+        assert!(c.oidc_client_id.is_none() && c.ai_api_key.is_none());
         assert!(c.trusted_proxies.is_empty());
         assert_eq!(c.public_rate_limit_burst, 30);
         assert_eq!(
@@ -663,56 +691,66 @@ mod tests {
     }
 
     #[test]
-    fn google_oauth_enabled_auto_true_false() {
-        const CREDS: [(&str, &str); 2] =
-            [("GOOGLE_CLIENT_ID", "id"), ("GOOGLE_CLIENT_SECRET", "s")];
+    fn oidc_configuration_supports_public_and_confidential_clients() {
+        const CREDS: [(&str, &str); 2] = [
+            ("OIDC_CLIENT_ID", "id"),
+            ("OIDC_ISSUER_URL", "https://id.example"),
+        ];
         let with = |extra: &[(&str, &str)]| {
             let mut kv = CREDS.to_vec();
             kv.extend_from_slice(extra);
             Config::from_map(&env(&kv))
         };
-        // auto: on iff both credentials are set
-        assert!(!Config::from_map(&env(&[])).unwrap().google_oauth_enabled);
-        assert!(with(&[]).unwrap().google_oauth_enabled);
-        let only_id = Config::from_map(&env(&[("GOOGLE_CLIENT_ID", "id")])).unwrap();
-        assert!(!only_id.google_oauth_enabled);
-        // explicit false wins over credentials
-        assert!(
-            !with(&[("GOOGLE_OAUTH_ENABLED", "false")])
-                .unwrap()
-                .google_oauth_enabled
-        );
-        assert!(
-            with(&[("GOOGLE_OAUTH_ENABLED", "TRUE")])
-                .unwrap()
-                .google_oauth_enabled
-        );
-        // explicit true needs both credentials
+        assert!(!Config::from_map(&env(&[])).unwrap().oidc_enabled);
+        let public = with(&[]).unwrap();
+        assert!(public.oidc_enabled && public.oidc_client_secret.is_none());
+        let confidential = with(&[("OIDC_CLIENT_SECRET", "secret-value")]).unwrap();
+        assert!(confidential.oidc_enabled);
+        assert!(!format!("{confidential:?}").contains("secret-value"));
         for kv in [
-            vec![("GOOGLE_OAUTH_ENABLED", "true")],
-            vec![("GOOGLE_OAUTH_ENABLED", "true"), ("GOOGLE_CLIENT_ID", "id")],
+            vec![("OIDC_CLIENT_SECRET", "secret")],
+            vec![("OIDC_CLIENT_ID", "id")],
+            vec![("OIDC_ISSUER_URL", "https://id.example")],
         ] {
             let err = Config::from_map(&env(&kv)).unwrap_err();
             assert!(matches!(
                 err,
                 ConfigError::Invalid {
-                    key: "GOOGLE_OAUTH_ENABLED",
+                    key: "OIDC_ISSUER_URL",
                     ..
                 }
             ));
         }
-        assert!(Config::from_map(&env(&[("GOOGLE_OAUTH_ENABLED", "maybe")])).is_err());
-        // empty = unset
+        for issuer in [
+            "http://id.example",
+            "https://user:pass@id.example",
+            "https://id.example?x=1",
+            "https://id.example/#x",
+            "not-a-url",
+        ] {
+            assert!(with(&[("OIDC_ISSUER_URL", issuer)]).is_err());
+        }
+        assert!(with(&[("OIDC_ISSUER_URL", "https://id.example/realm/team")]).is_ok());
+        // Removed Google variables do not enable login.
         assert!(
-            !Config::from_map(&env(&[("GOOGLE_OAUTH_ENABLED", "")]))
-                .unwrap()
-                .google_oauth_enabled
+            !Config::from_map(&env(&[
+                ("GOOGLE_CLIENT_ID", "old"),
+                ("GOOGLE_CLIENT_SECRET", "old")
+            ]))
+            .unwrap()
+            .oidc_enabled
         );
     }
 
     #[test]
-    fn password_login_defaults_on() {
-        assert!(Config::from_map(&env(&[])).unwrap().password_login_enabled);
+    fn password_login_requires_designated_admin() {
+        assert!(!Config::from_map(&env(&[])).unwrap().password_login_enabled);
+        assert!(
+            Config::from_map(&env(&[("ADMIN_EMAIL", "root@example.com")]))
+                .unwrap()
+                .password_login_enabled
+        );
+        assert!(Config::from_map(&env(&[("PASSWORD_LOGIN_ENABLED", "true")])).is_err());
         let c = Config::from_map(&env(&[("PASSWORD_LOGIN_ENABLED", "false")])).unwrap();
         assert!(!c.password_login_enabled);
         assert!(Config::from_map(&env(&[("PASSWORD_LOGIN_ENABLED", "x")])).is_err());
@@ -736,7 +774,6 @@ mod tests {
         assert!(!format!("{c:?}").contains("long enough pw"));
 
         for kv in [
-            vec![("ADMIN_EMAIL", "root@example.com")],
             vec![("ADMIN_PASSWORD", "long enough pw")],
             vec![
                 ("ADMIN_EMAIL", "not-an-email"),

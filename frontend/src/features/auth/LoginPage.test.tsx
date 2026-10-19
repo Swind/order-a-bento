@@ -5,10 +5,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ME, problem, server } from "@/test/server";
 import { renderApp } from "@/test/render";
 
-function mockConfig(devLoginEnabled: boolean, googleEnabled = true, passwordLoginEnabled = false) {
+function mockConfig(devLoginEnabled: boolean, oidcEnabled = true, passwordLoginEnabled = false) {
   server.use(
     http.get("*/api/v1/auth/config", () =>
-      HttpResponse.json({ googleEnabled, devLoginEnabled, passwordLoginEnabled }),
+      HttpResponse.json({ oidcEnabled, devLoginEnabled, passwordLoginEnabled }),
     ),
   );
 }
@@ -19,7 +19,7 @@ describe("LoginPage", () => {
   it("shows the dev form only when devLoginEnabled", async () => {
     mockConfig(false);
     const { unmount } = renderApp("/login");
-    await screen.findByRole("button", { name: "使用 Google 登入" });
+    await screen.findByRole("button", { name: "使用單一登入（OIDC）" });
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
     unmount();
 
@@ -28,11 +28,11 @@ describe("LoginPage", () => {
     expect(await screen.findByLabelText("Email")).toBeInTheDocument();
   });
 
-  it("hides the Google button when Google login is disabled", async () => {
+  it("hides the OIDC button when OIDC login is disabled", async () => {
     mockConfig(true, false);
     renderApp("/login");
     await screen.findByRole("button", { name: "開發用登入" });
-    expect(screen.queryByRole("button", { name: "使用 Google 登入" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "使用單一登入（OIDC）" })).not.toBeInTheDocument();
   });
 
   it("shows an explanation when no login method is enabled", async () => {
@@ -48,15 +48,16 @@ describe("LoginPage", () => {
     const email = await screen.findByLabelText("Email");
     expect(email).toHaveAttribute("autocomplete", "username");
     expect(screen.getByLabelText("密碼")).toHaveAttribute("autocomplete", "current-password");
-    expect(screen.queryByRole("button", { name: "使用 Google 登入" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "使用單一登入（OIDC）" })).not.toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "開發用登入" })).not.toBeInTheDocument();
   });
 
-  it("shows password and Google together, without the dev form", async () => {
+  it("shows OIDC and admin backup together, without the dev form", async () => {
     mockConfig(false, true, true);
     renderApp("/login");
     await screen.findByLabelText("密碼");
-    expect(screen.getByRole("button", { name: "使用 Google 登入" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "使用單一登入（OIDC）" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "管理員備援登入" })).toBeInTheDocument();
   });
 
   it("password login posts credentials and navigates to returnTo", async () => {

@@ -143,9 +143,9 @@ pub fn password_source(stdin: bool) -> Box<dyn PasswordSource> {
 }
 
 fn methods(a: &AccountSummary) -> String {
-    match (a.has_google, a.has_password) {
-        (true, true) => "google,password",
-        (true, false) => "google",
+    match (a.has_oidc, a.has_password) {
+        (true, true) => "oidc,password",
+        (true, false) => "oidc",
         (false, true) => "password",
         (false, false) => "-",
     }

@@ -20,7 +20,8 @@ fn err(e: impl std::fmt::Display) -> PortError {
 #[derive(sqlx::FromRow)]
 struct OrganizerRow {
     id: String,
-    google_sub: Option<String>,
+    oidc_issuer: Option<String>,
+    oidc_sub: Option<String>,
     email: String,
     display_name: String,
     avatar_url: Option<String>,
@@ -30,7 +31,8 @@ impl OrganizerRow {
     fn into_domain(self) -> PortResult<Organizer> {
         Ok(Organizer {
             id: self.id.parse().map_err(err)?,
-            google_sub: self.google_sub,
+            oidc_issuer: self.oidc_issuer,
+            oidc_sub: self.oidc_sub,
             email: self.email,
             display_name: self.display_name,
             avatar_url: self.avatar_url,
@@ -51,11 +53,12 @@ impl SqliteOrganizerRepo {
 
 #[async_trait]
 impl OrganizerRepo for SqliteOrganizerRepo {
-    async fn find_by_google_sub(&self, google_sub: &str) -> PortResult<Option<Organizer>> {
+    async fn find_by_identity(&self, issuer: &str, sub: &str) -> PortResult<Option<Organizer>> {
         sqlx::query_as::<_, OrganizerRow>(
-            "SELECT id, google_sub, email, display_name, avatar_url FROM organizers WHERE google_sub = ?",
+            "SELECT id, oidc_issuer, oidc_sub, email, display_name, avatar_url FROM organizers WHERE oidc_issuer = ? AND oidc_sub = ?",
         )
-        .bind(google_sub)
+        .bind(issuer)
+        .bind(sub)
         .fetch_optional(&self.db.read)
         .await
         .map_err(err)?
@@ -65,7 +68,7 @@ impl OrganizerRepo for SqliteOrganizerRepo {
 
     async fn find_by_id(&self, id: OrganizerId) -> PortResult<Option<Organizer>> {
         sqlx::query_as::<_, OrganizerRow>(
-            "SELECT id, google_sub, email, display_name, avatar_url FROM organizers WHERE id = ?",
+            "SELECT id, oidc_issuer, oidc_sub, email, display_name, avatar_url FROM organizers WHERE id = ?",
         )
         .bind(id.to_string())
         .fetch_optional(&self.db.read)
@@ -78,15 +81,16 @@ impl OrganizerRepo for SqliteOrganizerRepo {
     async fn upsert_from_identity(&self, c: Organizer, now: SystemTime) -> PortResult<Organizer> {
         let now = to_text(now);
         sqlx::query_as::<_, OrganizerRow>(
-            "INSERT INTO organizers (id, google_sub, email, display_name, avatar_url, created_at, last_login_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(google_sub) DO UPDATE SET \
+            "INSERT INTO organizers (id, oidc_issuer, oidc_sub, email, display_name, avatar_url, created_at, last_login_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(oidc_issuer, oidc_sub) DO UPDATE SET \
                email = excluded.email, display_name = excluded.display_name, \
                avatar_url = excluded.avatar_url, last_login_at = excluded.last_login_at \
-             RETURNING id, google_sub, email, display_name, avatar_url",
+             RETURNING id, oidc_issuer, oidc_sub, email, display_name, avatar_url",
         )
         .bind(c.id.to_string())
-        .bind(&c.google_sub)
+        .bind(&c.oidc_issuer)
+        .bind(&c.oidc_sub)
         .bind(&c.email)
         .bind(&c.display_name)
         .bind(&c.avatar_url)
@@ -112,24 +116,26 @@ impl OrganizerRepo for SqliteOrganizerRepo {
         let row: Option<(
             String,
             Option<String>,
+            Option<String>,
             String,
             String,
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, google_sub, email, display_name, avatar_url, password_hash \
-                 FROM organizers WHERE google_sub IS NULL AND email = ?",
+            "SELECT id, oidc_issuer, oidc_sub, email, display_name, avatar_url, password_hash \
+                 FROM organizers WHERE oidc_sub IS NULL AND email = ?",
         )
         .bind(email)
         .fetch_optional(&self.db.read)
         .await
         .map_err(err)?;
         row.map(
-            |(id, google_sub, email, display_name, avatar_url, password_hash)| {
+            |(id, oidc_issuer, oidc_sub, email, display_name, avatar_url, password_hash)| {
                 Ok(LocalAccount {
                     organizer: OrganizerRow {
                         id,
-                        google_sub,
+                        oidc_issuer,
+                        oidc_sub,
                         email,
                         display_name,
                         avatar_url,
@@ -162,9 +168,9 @@ impl OrganizerRepo for SqliteOrganizerRepo {
         // The partial unique index decides races; DO NOTHING reports them as 0 rows.
         let res = sqlx::query(
             "INSERT INTO organizers \
-               (id, google_sub, email, display_name, avatar_url, created_at, last_login_at, password_hash) \
+               (id, oidc_sub, email, display_name, avatar_url, created_at, last_login_at, password_hash) \
              VALUES (?, NULL, ?, ?, NULL, ?, ?, ?) \
-             ON CONFLICT(email) WHERE google_sub IS NULL DO NOTHING",
+              ON CONFLICT(email) WHERE oidc_sub IS NULL DO NOTHING",
         )
         .bind(o.id.to_string())
         .bind(&o.email)
@@ -184,7 +190,7 @@ impl OrganizerRepo for SqliteOrganizerRepo {
 
     async fn set_password_hash(&self, id: OrganizerId, password_hash: String) -> PortResult<bool> {
         let res = sqlx::query(
-            "UPDATE organizers SET password_hash = ? WHERE id = ? AND google_sub IS NULL",
+            "UPDATE organizers SET password_hash = ? WHERE id = ? AND oidc_sub IS NULL",
         )
         .bind(password_hash)
         .bind(id.to_string())
@@ -196,7 +202,7 @@ impl OrganizerRepo for SqliteOrganizerRepo {
 
     async fn list_accounts(&self) -> PortResult<Vec<AccountSummary>> {
         let rows: Vec<(String, String, bool, bool, String)> = sqlx::query_as(
-            "SELECT email, display_name, google_sub IS NOT NULL, password_hash IS NOT NULL, created_at \
+            "SELECT email, display_name, oidc_sub IS NOT NULL, password_hash IS NOT NULL, created_at \
              FROM organizers ORDER BY created_at, id",
         )
         .fetch_all(&self.db.read)
@@ -204,11 +210,11 @@ impl OrganizerRepo for SqliteOrganizerRepo {
         .map_err(err)?;
         rows.into_iter()
             .map(
-                |(email, display_name, has_google, has_password, created_at)| {
+                |(email, display_name, has_oidc, has_password, created_at)| {
                     Ok(AccountSummary {
                         email,
                         display_name,
-                        has_google,
+                        has_oidc,
                         has_password,
                         created_at: from_text(&created_at).map_err(err)?,
                     })
@@ -378,7 +384,10 @@ mod tests {
     async fn setup() -> (Db, crate::sqlite::TempDir, Organizer) {
         let (db, dir) = Db::open_temp().await.unwrap();
         let o = SqliteOrganizerRepo::new(db.clone())
-            .upsert_from_identity(Organizer::new("sub1", "a@b.c", "A", None).unwrap(), t(0))
+            .upsert_from_identity(
+                Organizer::new("https://id.example", "sub1", "a@b.c", "A", None).unwrap(),
+                t(0),
+            )
             .await
             .unwrap();
         (db, dir, o)
@@ -390,7 +399,14 @@ mod tests {
         let repo = SqliteOrganizerRepo::new(db);
         let second = repo
             .upsert_from_identity(
-                Organizer::new("sub1", "new@b.c", "New", Some("http://p/x.png".into())).unwrap(),
+                Organizer::new(
+                    "https://id.example",
+                    "sub1",
+                    "new@b.c",
+                    "New",
+                    Some("http://p/x.png".into()),
+                )
+                .unwrap(),
                 t(10),
             )
             .await
@@ -400,10 +416,18 @@ mod tests {
         assert_eq!(second.avatar_url.as_deref(), Some("http://p/x.png"));
         assert_eq!(repo.find_by_id(first.id).await.unwrap().unwrap(), second);
         assert_eq!(
-            repo.find_by_google_sub("sub1").await.unwrap().unwrap(),
+            repo.find_by_identity("https://id.example", "sub1")
+                .await
+                .unwrap()
+                .unwrap(),
             second
         );
-        assert!(repo.find_by_google_sub("zzz").await.unwrap().is_none());
+        assert!(
+            repo.find_by_identity("https://id.example", "zzz")
+                .await
+                .unwrap()
+                .is_none()
+        );
         repo.touch_last_login(first.id, t(20)).await.unwrap();
         let (ll,): (String,) = sqlx::query_as("SELECT last_login_at FROM organizers WHERE id = ?")
             .bind(first.id.to_string())
@@ -411,6 +435,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ll, to_text(t(20)));
+    }
+
+    #[tokio::test]
+    async fn identities_are_keyed_by_issuer_and_subject_never_email() {
+        let (db, _d, first) = setup().await;
+        let repo = SqliteOrganizerRepo::new(db);
+        for (issuer, sub) in [
+            ("https://other.example", "sub1"),
+            ("https://id.example", "sub2"),
+        ] {
+            let other = repo
+                .upsert_from_identity(
+                    Organizer::new(issuer, sub, &first.email, "Other", None).unwrap(),
+                    t(1),
+                )
+                .await
+                .unwrap();
+            assert_ne!(first.id, other.id);
+            assert_eq!(
+                repo.find_by_identity(issuer, sub)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                other.id
+            );
+        }
+        assert_eq!(repo.find_by_id(first.id).await.unwrap().unwrap(), first);
     }
 
     #[tokio::test]
@@ -465,8 +517,8 @@ mod tests {
 
         let list = repo.list_accounts().await.unwrap();
         assert_eq!(list.len(), 2);
-        assert!(list[0].has_google && !list[0].has_password);
-        assert!(!list[1].has_google && list[1].has_password);
+        assert!(list[0].has_oidc && !list[0].has_password);
+        assert!(!list[1].has_oidc && list[1].has_password);
         assert_eq!(list[1].created_at, t(1));
     }
 
@@ -474,7 +526,7 @@ mod tests {
     async fn account_needs_some_login_method() {
         let (db, _d, _o) = setup().await;
         let r = sqlx::query(
-            "INSERT INTO organizers (id, google_sub, email, display_name, created_at, last_login_at) \
+            "INSERT INTO organizers (id, oidc_sub, email, display_name, created_at, last_login_at) \
              VALUES ('x', NULL, 'n@b.c', 'N', 't', 't')",
         )
         .execute(&db.write)

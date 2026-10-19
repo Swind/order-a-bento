@@ -506,45 +506,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Development-only login without Google. Registered only when `DEV_LOGIN=true`. */
+        /** Development-only login without OIDC. Registered only when `DEV_LOGIN=true`. */
         post: operations["dev_login"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/auth/google/callback": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * OAuth callback: verifies the login, sets the session cookie and redirects.
-         *     Any failure redirects to `/login?error=<code>`.
-         */
-        get: operations["google_callback"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/auth/google/login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Start the Google login: redirects to Google (PKCE + state + nonce). */
-        get: operations["google_login"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -562,6 +525,43 @@ export interface paths {
         put?: never;
         /** Log out: deletes the session and clears the cookie. */
         post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * OAuth callback: verifies the login, sets the session cookie and redirects.
+         *     Any failure redirects to `/login?error=<code>`.
+         */
+        get: operations["oidc_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/oidc/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Start OIDC login: redirects to the provider (PKCE + state + nonce). */
+        get: operations["oidc_login"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -672,9 +672,9 @@ export interface components {
             aiImportEnabled: boolean;
             /** @description Whether the development-only login form is available. */
             devLoginEnabled: boolean;
-            /** @description Whether Google login is enabled (`GOOGLE_OAUTH_ENABLED`) and configured. */
-            googleEnabled: boolean;
-            /** @description Whether email + password login for local accounts is available. */
+            /** @description Whether the OIDC issuer and client are configured. */
+            oidcEnabled: boolean;
+            /** @description Whether password login for the designated backup admin is available. */
             passwordLoginEnabled: boolean;
         };
         /** @enum {string} */
@@ -3337,12 +3337,30 @@ export interface operations {
             };
         };
     };
-    google_callback: {
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logged out (idempotent) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    oidc_callback: {
         parameters: {
             query?: {
                 code?: string;
                 state?: string;
-                /** @description Set by Google when the user denied access. */
+                /** @description Set by the provider when the user denied access. */
                 error?: string;
             };
             header?: never;
@@ -3360,7 +3378,7 @@ export interface operations {
             };
         };
     };
-    google_login: {
+    oidc_login: {
         parameters: {
             query?: {
                 /** @description Same-origin path to return to after login (default `/`). */
@@ -3372,7 +3390,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Redirect to Google's authorization endpoint */
+            /** @description Redirect to OIDC authorization endpoint */
             302: {
                 headers: {
                     [name: string]: unknown;
@@ -3388,7 +3406,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Google login is not configured (code google_not_configured) */
+            /** @description OIDC login is not configured (code oidc_not_configured) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3396,24 +3414,6 @@ export interface operations {
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
-            };
-        };
-    };
-    logout: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Logged out (idempotent) */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };

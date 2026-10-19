@@ -5,7 +5,7 @@
 ## 1. 前置需求
 
 - Docker（或可執行 Linux 容器的環境）、一個對外的 HTTPS 網域（例：`https://bento.example.com`）。
-- 選用：Google OAuth 用戶端（見 §3；不設定也能用本機帳號登入）、Anthropic API key（AI 匯入）。
+- 通用 OIDC 用戶端（§3），或指定的本機備援管理員；選用 AI API key（照片匯入）。
 
 ## 2. 建置映像
 
@@ -17,21 +17,29 @@ CI 也會把雙架構（amd64 / arm64，arm64 為交叉編譯）映像推到 `gh
 
 映像以非 root 使用者 `bento`（uid 10001）執行，資料目錄為 `/data`（`VOLUME`），監聽 `3000`。
 
-## 3. Google 登入設定
+## 3. 通用 OIDC 登入設定
 
-1. 開啟 Google Cloud Console，建立（或選擇）專案。
-2. 「API 與服務 → OAuth 同意畫面」：User Type 選「外部」（或內部，若使用 Workspace），填應用程式名稱、支援信箱；範圍只需 `openid email profile`。測試階段需把使用者加入「測試使用者」，正式使用請發布應用程式。
-3. 「憑證 → 建立憑證 → OAuth 用戶端 ID」，類型選「網頁應用程式」。
-4. 「已授權的重新導向 URI」填入 `APP_BASE_URL/auth/google/callback`，例如 `https://bento.example.com/auth/google/callback`（必須與 `APP_BASE_URL` 完全一致，含 scheme）。
-5. 把 Client ID／Client secret 設為 `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET`。未設定時 `/auth/google/*` 回 503。
+1. 在 OIDC 服務（例如 Zitadel、Keycloak、Authentik）建立 Authorization Code 用戶端，啟用 PKCE S256。應用程式不需直接連 Google；上游登入交由你的身分服務管理。
+2. Redirect URI 設為 `APP_BASE_URL/auth/oidc/callback`，例如 `https://bento.example.com/auth/oidc/callback`，必須完全一致。
+3. 設定 `OIDC_ISSUER_URL`（Discovery 文件中的 `issuer`，不是 authorize URL）與 `OIDC_CLIENT_ID`。程式自動取得 authorization、token、JWKS 及 UserInfo 端點。
+4. Public Client／驗證方式 `none`：不設定 `OIDC_CLIENT_SECRET`；機密用戶端可設定 secret（`client_secret_basic`）。兩種模式都使用 PKCE。範圍為 `openid email profile`；需提供 `sub`、`email`、`email_verified=true`，email/profile 可來自 ID token 或 UserInfo。
+5. Post Logout URIs 可留空：目前只清除本站 session，尚未實作 OIDC 全域登出。若身分服務仍登入，再按登入可直接回站，這是預期行為。
 
-### 3.1 不使用 Google：本機帳號（email + 密碼）
+例如 Public Client：
 
-測試、內網或尚未申請 Google OAuth 時，可以完全不設定 Google，改用本機帳號登入管理區：
+```env
+OIDC_ISSUER_URL=https://auth.code-life.info
+OIDC_CLIENT_ID=395790351723397130
+# 不設定 OIDC_CLIENT_SECRET
+```
 
-- `GOOGLE_OAUTH_ENABLED`：留空＝自動（`GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET` 都有才啟用）；`false`＝即使有憑證也停用；`true` 但缺任一憑證會拒絕啟動。停用時 `/auth/google/*` 回 503，登入頁不顯示 Google 按鈕。
-- `PASSWORD_LOGIN_ENABLED`（預設 `true`）：開放 `POST /auth/password-login`；設為 `false` 時該端點回 404。登入嘗試每個 client IP 限速（burst 10，之後約每 5 秒 1 次），失敗一律回相同的 401 `invalid_credentials`。
-- 帳號只能用 CLI（或下面的環境變數 bootstrap）建立，網頁上沒有註冊功能。Google 登入不會依 email 自動綁定本機帳號：本機帳號的 email 只在本機帳號間唯一，同 email 的 Google 帳號是另一個開團者。
+**升級注意**：不再讀取 `GOOGLE_*`，也不再提供 `/auth/google/*`。帳號以 `(issuer, sub)` 識別，絕不依 email 自動合併。Migration 保留舊使用者 ID、名單、訂單及本機密碼；舊 Google 身分保留原 issuer，因此換到新 issuer 的使用者會建立獨立帳號。需沿用舊資料時，應另外安排經驗證的帳號移轉。
+
+### 3.1 本機備援管理員（email + 密碼）
+
+- 保留 `ADMIN_EMAIL` 指定唯一可用本機帳密登入的帳號；其他舊本機帳號及其資料不刪除，但不能再登入，舊 session 也不再接受。不新增角色權限：備援管理員仍只能操作自己擁有的資料。
+- `PASSWORD_LOGIN_ENABLED` 未設定時，有 `ADMIN_EMAIL` 才開啟；明確設 `true` 卻沒有 `ADMIN_EMAIL` 會拒絕啟動。設為 `false` 時端點回 404。每個 IP 限速，失敗一律回相同的 401 `invalid_credentials`。
+- 不開放註冊；OIDC 與本機帳號即使 email 相同也完全獨立。
 
 **建議用 CLI 建立帳號**（密碼不會出現在環境變數或 shell 歷史）。CLI 是同一個 `server` 執行檔，讀取相同的設定／`.env`，連到 `DATABASE_URL` 並先套用 migration：
 
@@ -39,7 +47,7 @@ CI 也會把雙架構（amd64 / arm64，arm64 為交叉編譯）映像推到 `gh
 # Docker（映像內 server 位於 /usr/local/bin/server；docker exec 會沿用容器的環境變數與使用者 bento）
 docker exec -it bento server admin create --email you@example.com --name "你的名字"   # 互動輸入密碼兩次（不顯示）
 docker exec -it bento server admin set-password --email you@example.com
-docker exec bento server admin list    # email、名稱、登入方式（google/password）、建立時間；不含 hash
+docker exec bento server admin list    # email、名稱、登入方式（oidc/password）、建立時間；不含 hash
 
 # 非互動（密碼由 stdin 讀一行；腳本／CI）
 printf '%s\n' "$PASSWORD" | docker exec -i bento server admin create --email you@example.com --name "你的名字" --password-stdin
@@ -50,7 +58,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 
 密碼長度 10～256 字元，以 Argon2id 雜湊儲存。結束碼：`0` 成功、`1` 內部錯誤、`2` 參數錯誤、`3` 輸入不合法（email 格式、密碼太短…）、`4` 帳號已存在、`5` 找不到帳號。`create` 對已存在的 email 會失敗，請改用 `set-password`。
 
-**容器用的環境變數 bootstrap**：設定 `ADMIN_EMAIL` 與 `ADMIN_PASSWORD`（必須同時設定）時，啟動後若資料庫裡沒有任何該 email 的開團者，就會建立本機管理員；已存在則只記一行 info 日誌，**不會**變更既有帳號或覆寫密碼。密碼不會寫進日誌。因為密碼放在環境變數，建議首次啟動後移除 `ADMIN_PASSWORD`，並優先使用上面的 CLI。
+**容器用的環境變數 bootstrap**：設定 `ADMIN_EMAIL` 與選填的 `ADMIN_PASSWORD`，啟動時只建立尚不存在的本機管理員；既有 OIDC 帳號不會被綁定，本機密碼永不覆寫。首次啟動後移除 `ADMIN_PASSWORD`，但**保留 `ADMIN_EMAIL`**；也可只設 email 並用 CLI 建立密碼。
 
 ## 4. 環境變數
 
@@ -61,10 +69,10 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `APP_BASE_URL` | `http://localhost:3000` | **必設**。公開網址，用於 OAuth 回呼、分享連結；`https://` 開頭時 cookie 才帶 `Secure` |
 | `ALLOWED_ORIGINS` | production 為空 | 額外允許送出狀態變更請求的 Origin（逗號分隔，CSRF 檢查）；`APP_BASE_URL` 的 origin 一律允許，通常不需設定 |
 | `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑 |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 空 | Google OAuth（§3） |
-| `GOOGLE_OAUTH_ENABLED` | 空（自動） | 空＝有 Google 憑證才啟用；`false`＝停用；`true`＝必須有憑證，否則拒絕啟動（§3.1） |
-| `PASSWORD_LOGIN_ENABLED` | `true` | 本機帳號 email + 密碼登入；`false` 時 `/auth/password-login` 回 404 |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | 成對設定；啟動時若無該 email 的帳號就建立本機管理員，不覆寫既有帳號（§3.1，優先用 CLI） |
+| `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` | 空 | 同時設定啟用通用 OIDC，issuer 必須 HTTPS；兩者空白則停用（§3） |
+| `OIDC_CLIENT_SECRET` | 空 | Public Client 不填；機密用戶端可用 `client_secret_basic` |
+| `PASSWORD_LOGIN_ENABLED` | 有 `ADMIN_EMAIL` 時開啟 | 僅管理員備援；`false` 時 `/auth/password-login` 回 404 |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | email 指定唯一備援帳號，password 選填且只供初次建立，不覆寫既有密碼（§3.1） |
 | `DEV_LOGIN` | `false` | 開發用登入捷徑。**正式環境不可開**（production 下設為 true 會拒絕啟動） |
 | `AI_API_KEY` | 空 | 設定後啟用 AI 匯入；未設定則隱藏 AI 匯入按鈕。所有 `AI_PROVIDER` 通用 |
 | `AI_BASE_URL` | 空 | API 位址（gateway／測試）。`openai-compatible`／`openai-responses` 必填；`anthropic` 空＝官方位址 |
@@ -151,7 +159,7 @@ docker run -d --name bento --restart unless-stopped \
   -p 127.0.0.1:3000:3000 \
   -v bento-data:/data \
   -e APP_BASE_URL=https://bento.example.com \
-  -e GOOGLE_CLIENT_ID=... -e GOOGLE_CLIENT_SECRET=... \
+  -e OIDC_ISSUER_URL=https://auth.example.com -e OIDC_CLIENT_ID=... \
   -e AI_API_KEY=... \
   -e TRUSTED_PROXIES=172.17.0.1 \
   order-a-bento:latest
@@ -223,7 +231,7 @@ docker run ...                           # 同樣的 volume 與參數
 - [ ] 對外只經 HTTPS；`APP_BASE_URL` 以 `https://` 開頭，session cookie 才會帶 `Secure`。容器埠只綁 `127.0.0.1`，由反向代理對外。
 - [ ] `TRUSTED_PROXIES` 只包含自己的反向代理；不要填 `0.0.0.0/0`。
 - [ ] 本機管理員密碼夠長且不重複使用；用 CLI 建立，或首次啟動後移除 `ADMIN_PASSWORD`。不需要密碼登入時設 `PASSWORD_LOGIN_ENABLED=false`。
-- [ ] Google 重新導向 URI 與 `APP_BASE_URL` 一致；OAuth 用戶端 secret 不進版控。
+- [ ] OIDC Redirect URI 為 `APP_BASE_URL/auth/oidc/callback`；用戶端 secret 不進版控。
 - [ ] 使用非 Claude 的模型時 `AI_PROVIDER=anthropic-compatible`／`openai-compatible`／`openai-responses`（並設 `AI_BASE_URL`、`AI_MODEL`），且已跑過 `make ai-eval`。
 - [ ] `AI_API_KEY` 以 env／secret 管理。
 - [ ] 已啟用並演練備份還原；`CLIENT_INFO_RETENTION_DAYS` 符合隱私承諾（預設 90 天）。

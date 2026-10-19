@@ -44,7 +44,7 @@ pub struct AccountService {
 
 impl AccountService {
     /// Create a local account. Emails are unique among local accounts only: a
-    /// Google account with the same address is a separate organizer (Google
+    /// OIDC account with the same address is a separate organizer (OIDC
     /// login never links to a local account).
     pub async fn create(
         &self,
@@ -90,7 +90,7 @@ impl AccountService {
         Ok(self.organizers.list_accounts().await?)
     }
 
-    /// Env bootstrap: create the local admin unless an organizer with that
+    /// Env bootstrap: create the local admin unless a local account with that
     /// email already exists. Never touches an existing account or password.
     pub async fn bootstrap_admin(
         &self,
@@ -98,7 +98,7 @@ impl AccountService {
         password: &str,
     ) -> Result<BootstrapOutcome, AccountError> {
         let email = parse_local_email(email)?;
-        if self.organizers.exists_by_email(&email).await? {
+        if self.organizers.find_local_by_email(&email).await?.is_some() {
             return Ok(BootstrapOutcome::AlreadyExists);
         }
         let name = email.split('@').next().unwrap_or(&email);

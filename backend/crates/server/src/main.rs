@@ -42,9 +42,9 @@ async fn main() -> anyhow::Result<()> {
             "DEV_LOGIN is enabled: POST /auth/dev-login is available (development only)"
         );
     }
-    if !config.google_oauth_enabled {
+    if !config.oidc_enabled {
         tracing::warn!(
-            "Google login is disabled (GOOGLE_OAUTH_ENABLED=false or no credentials); /auth/google/* will return 503"
+            "OIDC login is disabled (no OIDC_ISSUER_URL/OIDC_CLIENT_ID); /auth/oidc/* will return 503"
         );
     }
     if config.admin_email.is_some() && !config.password_login_enabled {

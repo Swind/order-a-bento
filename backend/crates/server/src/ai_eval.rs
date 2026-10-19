@@ -490,7 +490,14 @@ pub async fn run_case(
     let (db, _dir) = Db::open_temp().await.map_err(|e| e.to_string())?;
     let organizer = SqliteOrganizerRepo::new(db.clone())
         .upsert_from_identity(
-            Organizer::new("eval", "eval@example.com", "eval", None).map_err(|e| e.to_string())?,
+            Organizer::new(
+                "urn:order-a-bento:eval",
+                "eval",
+                "eval@example.com",
+                "eval",
+                None,
+            )
+            .map_err(|e| e.to_string())?,
             SystemTime::now(),
         )
         .await
