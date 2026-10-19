@@ -25,6 +25,8 @@ CI 也會把雙架構（amd64 / arm64，arm64 為交叉編譯）映像推到 `gh
 4. Public Client／驗證方式 `none`：不設定 `OIDC_CLIENT_SECRET`；機密用戶端可設定 secret（`client_secret_basic`）。兩種模式都使用 PKCE。範圍為 `openid email profile`；需提供 `sub`、`email`、`email_verified=true`，email/profile 可來自 ID token 或 UserInfo。
 5. Post Logout URIs 可留空：目前只清除本站 session，尚未實作 OIDC 全域登出。若身分服務仍登入，再按登入可直接回站，這是預期行為。
 
+未登入時直接開啟本站或管理頁，會透過 `/auth/login` 自動前往 OIDC 登入，登入後回到原頁面。`/login` 保留為管理員備援入口，不會自動跳轉；未設定 OIDC 或初始化登入失敗時也會回到此頁。登出後會停在 `/login`，避免立即被單一登入重新登入。
+
 例如 Public Client：
 
 ```env

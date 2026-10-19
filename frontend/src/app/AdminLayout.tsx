@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Menu } from "lucide-react";
-import { useState } from "react";
-import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useLogout, useMe } from "@/features/auth/hooks";
 import { ApiError } from "@/shared/api/client";
@@ -26,6 +26,22 @@ export const NAV_ITEMS = [
   { to: "/vendors", label: "店家", end: false },
   { to: "/group-orders", label: "開團紀錄", end: false },
 ] as const;
+
+function LoginRedirect({ returnTo }: { returnTo: string }) {
+  const url = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+  useEffect(() => {
+    // Full navigation: the server starts OIDC or falls back to /login.
+    location.replace(url);
+  }, [url]);
+  return (
+    <div className="mx-auto max-w-md space-y-4 p-6 text-center">
+      <p role="status">正在前往登入頁面…</p>
+      <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} className="underline">
+        管理員備援登入
+      </Link>
+    </div>
+  );
+}
 
 function NavLinks({ onNavigate, className }: { onNavigate?: () => void; className?: string }) {
   return (
@@ -120,8 +136,7 @@ export function AdminLayout() {
   if (me.isPending) return <LayoutSkeleton />;
   if (me.isError) {
     if (me.error instanceof ApiError && me.error.status === 401) {
-      const returnTo = encodeURIComponent(location.pathname + location.search);
-      return <Navigate to={`/login?returnTo=${returnTo}`} replace />;
+      return <LoginRedirect returnTo={location.pathname + location.search} />;
     }
     return (
       <div className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-4 p-4 text-center">

@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ME, problem, server } from "@/test/server";
 import { renderApp } from "@/test/render";
 
@@ -14,8 +14,18 @@ function mockConfig(devLoginEnabled: boolean, oidcEnabled = true, passwordLoginE
 }
 
 beforeEach(() => server.use(http.get("*/api/v1/me", () => problem(401, "unauthorized"))));
+afterEach(() => vi.unstubAllGlobals());
 
 describe("LoginPage", () => {
+  it.each(["/login", "/login?error=provider_error"])("keeps %s available for backup without auto-redirecting", async (path) => {
+    const replace = vi.fn();
+    vi.stubGlobal("location", { ...window.location, replace });
+    mockConfig(false, true, true);
+    renderApp(path);
+    expect(await screen.findByLabelText("密碼")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "使用單一登入（OIDC）" })).toBeEnabled();
+    expect(replace).not.toHaveBeenCalled();
+  });
   it("shows the dev form only when devLoginEnabled", async () => {
     mockConfig(false);
     const { unmount } = renderApp("/login");

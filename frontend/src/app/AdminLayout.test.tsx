@@ -1,11 +1,15 @@
 import { screen } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ME, problem, server } from "@/test/server";
 import { renderApp } from "@/test/render";
 
 describe("AdminLayout auth gating", () => {
-  it("redirects to /login with returnTo on 401", async () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("starts the default server login with returnTo on 401, keeping a backup link", async () => {
+    const replace = vi.fn();
+    vi.stubGlobal("location", { ...window.location, replace });
     server.use(
       http.get("*/api/v1/me", () => problem(401, "unauthorized")),
       http.get("*/api/v1/auth/config", () =>
@@ -16,10 +20,10 @@ describe("AdminLayout auth gating", () => {
         }),
       ),
     );
-    const { router } = renderApp("/rosters?x=1");
-    await screen.findByRole("button", { name: "使用單一登入（OIDC）" });
-    expect(router.state.location.pathname).toBe("/login");
-    expect(router.state.location.search).toBe("?returnTo=%2Frosters%3Fx%3D1");
+    renderApp("/rosters?x=1");
+    await screen.findByRole("status");
+    expect(replace).toHaveBeenCalledWith("/auth/login?returnTo=%2Frosters%3Fx%3D1");
+    expect(screen.getByRole("link", { name: "管理員備援登入" })).toHaveAttribute("href", "/login?returnTo=%2Frosters%3Fx%3D1");
   });
 
   it("renders the page and the user menu on 200", async () => {

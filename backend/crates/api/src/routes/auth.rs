@@ -62,6 +62,35 @@ fn user_agent(headers: &HeaderMap) -> Option<&str> {
         .and_then(|v| v.to_str().ok())
 }
 
+/// Default sign-in entry: OIDC when configured, otherwise the local backup page.
+#[utoipa::path(
+    get,
+    path = "/auth/login",
+    tag = TAG_AUTH,
+    params(LoginQuery),
+    responses((status = 302, description = "Redirect to OIDC or the local backup login page"))
+)]
+pub async fn login(State(state): State<AppState>, Query(q): Query<LoginQuery>) -> Response {
+    let return_to = application::auth::sanitize_return_to(q.return_to.as_deref());
+    let error_code = if state.auth.identity.is_some() {
+        match state.auth.begin_oidc_login(Some(&return_to)).await {
+            Ok(url) => return redirect(&url),
+            Err(e) => {
+                tracing::warn!(error = %e, "default OIDC login failed");
+                Some(e.login_error_code())
+            }
+        }
+    } else {
+        None
+    };
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("returnTo", &return_to);
+    if let Some(code) = error_code {
+        query.append_pair("error", code);
+    }
+    redirect(&format!("/login?{}", query.finish()))
+}
+
 /// Start OIDC login: redirects to the provider (PKCE + state + nonce).
 #[utoipa::path(
     get,
@@ -268,6 +297,7 @@ pub fn v1_router() -> OpenApiRouter<AppState> {
 /// `dev_login` and `password_login` are only included when their flag is true.
 pub fn router(with_dev_login: bool, with_password_login: bool) -> OpenApiRouter<AppState> {
     let mut r = OpenApiRouter::new()
+        .routes(routes!(login))
         .routes(routes!(oidc_login))
         .routes(routes!(oidc_callback))
         .routes(routes!(logout));
@@ -597,6 +627,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_login_without_oidc_falls_back_and_sanitizes_return_to() {
+        let (app, _t) = app(false, false).await;
+        for (query, expected) in [
+            (
+                "returnTo=%2Frosters%3Fx%3D1",
+                "/login?returnTo=%2Frosters%3Fx%3D1",
+            ),
+            ("returnTo=https%3A%2F%2Fevil.example", "/login?returnTo=%2F"),
+        ] {
+            let res = send(
+                &app,
+                Request::get(format!("/auth/login?{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::FOUND);
+            assert_eq!(header_str(&res, header::LOCATION), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn default_login_discovery_failure_redirects_to_backup_without_looping() {
+        struct Unavailable;
+        #[async_trait::async_trait]
+        impl application::ports::IdentityProvider for Unavailable {
+            async fn authorize_url(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<String, application::ports::IdentityError> {
+                Err(application::ports::IdentityError::Provider(
+                    "discovery unavailable".into(),
+                ))
+            }
+            async fn exchange(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<application::ports::VerifiedIdentity, application::ports::IdentityError>
+            {
+                unreachable!()
+            }
+        }
+        let mut t = test_app(false, true).await;
+        std::sync::Arc::make_mut(&mut t.state.auth).identity =
+            Some(std::sync::Arc::new(Unavailable));
+        let app = router(t.state);
+        let res = send(
+            &app,
+            Request::get("/auth/login?returnTo=%2Fvendors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::FOUND);
+        assert_eq!(
+            header_str(&res, header::LOCATION),
+            "/login?returnTo=%2Fvendors&error=provider_error"
+        );
+        assert!(res.headers().get(header::SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
     async fn dev_login_rejects_bad_email() {
         let (app, _t) = app(true, false).await;
         let res = send(&app, post_json("/auth/dev-login", r#"{"email":"nope"}"#)).await;
@@ -604,11 +700,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_google_flow_with_fake_provider() {
+    async fn full_default_oidc_flow_with_fake_provider() {
         let (app, _t) = app(false, true).await;
         let res = send(
             &app,
-            Request::get("/auth/oidc/login?returnTo=/admin/orders")
+            Request::get("/auth/login?returnTo=/admin/orders")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -837,6 +933,7 @@ mod tests {
     fn openapi_documents_auth_routes() {
         let doc = serde_json::to_value(crate::openapi()).unwrap();
         for (p, m) in [
+            ("/auth/login", "get"),
             ("/auth/oidc/login", "get"),
             ("/auth/oidc/callback", "get"),
             ("/auth/logout", "post"),

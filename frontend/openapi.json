@@ -2684,6 +2684,31 @@
         }
       }
     },
+    "/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Default sign-in entry: OIDC when configured, otherwise the local backup page.",
+        "operationId": "login",
+        "parameters": [
+          {
+            "name": "returnTo",
+            "in": "query",
+            "description": "Same-origin path to return to after login (default `/`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to OIDC or the local backup login page"
+          }
+        }
+      }
+    },
     "/auth/logout": {
       "post": {
         "tags": [
