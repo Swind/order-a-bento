@@ -12,6 +12,7 @@ import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
@@ -92,21 +93,23 @@ function UserMenu({ me }: { me: Me }) {
         <span className="hidden max-w-32 truncate sm:inline">{me.displayName}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuLabel className="max-w-56 truncate">{me.email}</DropdownMenuLabel>
-        <DropdownMenuItem
-          onClick={() =>
-            logout.mutate(undefined, {
-              onSuccess: () => navigate("/login", { replace: true }),
-              onError: (e) => {
-                toast.error(errorMessage(e));
-                queryClient.invalidateQueries();
-              },
-            })
-          }
-        >
-          <LogOut />
-          登出
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="max-w-56 truncate">{me.email}</DropdownMenuLabel>
+          <DropdownMenuItem
+            onClick={() =>
+              logout.mutate(undefined, {
+                onSuccess: () => navigate("/login", { replace: true }),
+                onError: (e) => {
+                  toast.error(errorMessage(e));
+                  queryClient.invalidateQueries();
+                },
+              })
+            }
+          >
+            <LogOut />
+            登出
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
