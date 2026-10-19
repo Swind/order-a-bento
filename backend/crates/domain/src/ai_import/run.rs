@@ -81,6 +81,7 @@ pub struct Usage {
 /// `Running -> Proposed -> Applied | Discarded`, `Running -> Failed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRun {
+    pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
     pub id: ImportRunId,
     pub organizer_id: OrganizerId,
     /// `None` only for legacy rows.
@@ -114,6 +115,7 @@ impl ImportRun {
     ) -> Self {
         Self {
             id: ImportRunId::new(),
+            sharing_group_id: None,
             organizer_id,
             mode: Some(mode),
             target_roster_id,

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/shared/api/client";
-import type { MenuItemInput } from "@/shared/api/types";
+import type { MenuItemInput, VendorSummary, VendorDetail } from "@/shared/api/types";
+import { invalidateSharingAccessOnError, scopePath, sharingRequest } from "@/features/sharing-groups/hooks";
 
 const listKey = ["vendors"] as const;
 const detailKey = (id: string) => ["vendor", id] as const;
@@ -12,25 +13,25 @@ export interface VendorFields {
   note?: string | null;
 }
 
-export function useVendors() {
+export function useVendors(sharingGroupId?: string) {
   return useQuery({
-    queryKey: listKey,
-    queryFn: async () => unwrap(await api.GET("/api/v1/vendors")),
+    queryKey: [...listKey, sharingGroupId || "personal"],
+    queryFn: () => sharingRequest<VendorSummary[]>(scopePath("vendors", sharingGroupId)),
   });
 }
 
 export function useVendor(id: string) {
   return useQuery({
     queryKey: detailKey(id),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/vendors/{vendorId}", { params: { path: { vendorId: id } } })),
+    queryFn: () => sharingRequest<VendorDetail>(`vendors/${id}`),
   });
 }
 
 export function useCreateVendor() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: VendorFields) => unwrap(await api.POST("/api/v1/vendors", { body })),
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
+    mutationFn: (body: VendorFields & { sharingGroupId?: string }) => sharingRequest<VendorDetail>("vendors", "POST", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: listKey }),
   });
 }
@@ -38,6 +39,7 @@ export function useCreateVendor() {
 export function usePatchVendor(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (body: Partial<VendorFields>) =>
       unwrap(
         await api.PATCH("/api/v1/vendors/{vendorId}", {
@@ -55,6 +57,7 @@ export function usePatchVendor(id: string) {
 export function useDeleteVendor(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async () =>
       unwrap(await api.DELETE("/api/v1/vendors/{vendorId}", { params: { path: { vendorId: id } } })),
     onSuccess: () => {
@@ -67,6 +70,7 @@ export function useDeleteVendor(id: string) {
 export function useUpsertMenuItems(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (items: MenuItemInput[]) =>
       unwrap(
         await api.POST("/api/v1/vendors/{vendorId}/menu-items/upsert", {
@@ -92,6 +96,7 @@ export interface ItemPatch {
 export function usePatchMenuItem(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (v: { itemId: string } & ItemPatch) => {
       const { itemId, ...body } = v;
       return unwrap(
@@ -108,6 +113,7 @@ export function usePatchMenuItem(id: string) {
 export function useDeleteMenuItem(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (itemId: string) =>
       unwrap(
         await api.DELETE("/api/v1/vendors/{vendorId}/menu-items/{itemId}", {

@@ -422,6 +422,86 @@ export interface paths {
         patch: operations["patch_member"];
         trace?: never;
     };
+    "/api/v1/sharing-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list"];
+        put?: never;
+        post: operations["create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sharing-groups/{groupId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["rename"];
+        trace?: never;
+    };
+    "/api/v1/sharing-groups/{groupId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["members"];
+        put?: never;
+        post: operations["add"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sharing-groups/{groupId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["remove"];
+        options?: never;
+        head?: never;
+        patch: operations["change"];
+        trace?: never;
+    };
+    "/api/v1/sharing-groups/{groupId}/users/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["lookup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vendors": {
         parameters: {
             query?: never;
@@ -673,6 +753,10 @@ export interface components {
         AddParticipantRequest: {
             name: string;
         };
+        AddSharingMemberRequest: {
+            role: components["schemas"]["SharingRoleDto"];
+            userId: string;
+        };
         ApplyRequest: {
             /** @description The changes the user confirmed (possibly edited); anything not listed is ignored. */
             accepted: components["schemas"]["AcceptedChangeDto"][];
@@ -732,6 +816,7 @@ export interface components {
         CreateRosterRequest: {
             members?: components["schemas"]["MemberInputDto"][];
             name: string;
+            sharingGroupId?: string | null;
         };
         CreateVendorRequest: {
             address?: string | null;
@@ -739,6 +824,7 @@ export interface components {
             name: string;
             note?: string | null;
             phone?: string | null;
+            sharingGroupId?: string | null;
         };
         CreatedRoster: components["schemas"]["RosterDetail"] & {
             report?: components["schemas"]["MemberUpsertReport"] | null;
@@ -793,6 +879,9 @@ export interface components {
              */
             totalAmount: number;
             vendorName: string;
+        };
+        GroupNameRequest: {
+            name: string;
         };
         GroupOrderDetail: {
             /** Format: date-time */
@@ -862,6 +951,7 @@ export interface components {
             mode?: components["schemas"]["ImportModeDto"] | null;
             model: string;
             proposal: components["schemas"]["ProposalDto"];
+            sharingGroupId?: string | null;
             status: components["schemas"]["ImportRunStatusDto"];
             /** @description The AI's closing summary (Traditional Chinese). */
             summary?: string | null;
@@ -1197,17 +1287,21 @@ export interface components {
             name: string;
         };
         RosterDetail: {
+            canManage: boolean;
             id: string;
             /** @description Sorted by `sortOrder`. */
             members: components["schemas"]["MemberDto"][];
             name: string;
+            sharingGroupId?: string | null;
             updatedAt: string;
         };
         RosterSummaryDto: {
+            canManage: boolean;
             id: string;
             /** Format: int32 */
             memberCount: number;
             name: string;
+            sharingGroupId?: string | null;
             updatedAt: string;
         };
         RosterTargetDto: {
@@ -1229,6 +1323,26 @@ export interface components {
             paid: boolean;
             pickedUp: boolean;
         };
+        SharingGroupDetail: components["schemas"]["SharingGroupDto"] & {
+            members: components["schemas"]["SharingUserDto"][];
+        };
+        SharingGroupDto: {
+            id: string;
+            name: string;
+            role: string;
+        };
+        /** @enum {string} */
+        SharingRoleDto: "admin" | "member";
+        SharingRoleRequest: {
+            role: components["schemas"]["SharingRoleDto"];
+        };
+        SharingUserDto: {
+            displayName: string;
+            email: string;
+            id: string;
+            identityKind: string;
+            role?: string | null;
+        };
         /**
          * @description Multipart body of `POST /ai/import-runs` (documentation only). `mode` is
          *     required: `roster` for people, `vendor` for menus, `deliveryAddress` for delivery locations.
@@ -1243,6 +1357,7 @@ export interface components {
             instruction?: string | null;
             /** @enum {string} */
             mode: "deliveryAddress" | "roster" | "vendor";
+            sharingGroupId?: string | null;
             /** @description Existing roster to add the members to. */
             targetRosterId?: string | null;
             /** @description Existing vendor to update. */
@@ -1358,12 +1473,14 @@ export interface components {
         };
         VendorDetail: {
             address?: string | null;
+            canManage: boolean;
             id: string;
             /** @description Sorted by `sortOrder`. */
             menuItems: components["schemas"]["MenuItemDto"][];
             name: string;
             note?: string | null;
             phone?: string | null;
+            sharingGroupId?: string | null;
             updatedAt: string;
         };
         VendorInfoSnapshotDto: {
@@ -1378,11 +1495,13 @@ export interface components {
             phone?: string | null;
         };
         VendorSummaryDto: {
+            canManage: boolean;
             id: string;
             /** Format: int32 */
             itemCount: number;
             name: string;
             phone?: string | null;
+            sharingGroupId?: string | null;
             updatedAt: string;
         };
         VendorTargetDto: {
@@ -2591,7 +2710,9 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                sharingGroupId: string | null;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -2946,11 +3067,307 @@ export interface operations {
             };
         };
     };
-    list_vendors: {
+    list: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingGroupDto"][];
+                };
+            };
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupNameRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingGroupDto"];
+                };
+            };
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingGroupDetail"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    rename: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupNameRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingGroupDto"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    members: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingUserDto"][];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    add: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddSharingMemberRequest"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    change: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SharingRoleRequest"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    lookup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                groupId: string;
+                email: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharingUserDto"][];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    list_vendors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sharingGroupId: string | null;
+            };
             cookie?: never;
         };
         requestBody?: never;

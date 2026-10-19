@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, toApiError, unwrap } from "@/shared/api/client";
 import type { AcceptedChange, ImportMode, ImportRun } from "@/shared/api/types";
+import { invalidateSharingAccessOnError, sharingRequest } from "@/features/sharing-groups/hooks";
 
 const runKey = (id: string) => ["import-run", id] as const;
 
 export function useImportRun(runId: string) {
   return useQuery({
     queryKey: runKey(runId),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/ai/import-runs/{runId}", { params: { path: { runId } } })),
+    queryFn: () => sharingRequest<ImportRun>(`ai/import-runs/${runId}`),
   });
 }
 
@@ -18,6 +18,7 @@ export interface StartImportInput {
   mode: ImportMode;
   targetRosterId?: string;
   targetVendorId?: string;
+  sharingGroupId?: string;
   signal?: AbortSignal;
 }
 
@@ -27,6 +28,7 @@ export async function startImport(input: StartImportInput): Promise<ImportRun> {
   fd.append("image", input.image, "photo.jpg");
   if (input.instruction) fd.append("instruction", input.instruction);
   fd.append("mode", input.mode);
+  if (input.sharingGroupId && input.mode !== "deliveryAddress") fd.append("sharingGroupId", input.sharingGroupId);
   if (input.targetRosterId) fd.append("targetRosterId", input.targetRosterId);
   if (input.targetVendorId) fd.append("targetVendorId", input.targetVendorId);
   const base = typeof location !== "undefined" ? location.origin : "";
@@ -51,6 +53,7 @@ export function useStartImport() {
 export function useApplyImport(runId: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (accepted: AcceptedChange[]) =>
       unwrap(
         await api.POST("/api/v1/ai/import-runs/{runId}/apply", {

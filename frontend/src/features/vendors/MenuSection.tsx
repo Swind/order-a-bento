@@ -158,7 +158,12 @@ function ItemActions({ vendorId, item, onEdit }: { vendorId: string; item: MenuI
   );
 }
 
-function ItemCard({ vendorId, item, highlighted }: { vendorId: string; item: MenuItem; highlighted: boolean }) {
+function ItemCard({ vendorId, item, highlighted, canManage }: {
+  vendorId: string;
+  item: MenuItem;
+  highlighted: boolean;
+  canManage: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   return (
     <li
@@ -168,7 +173,7 @@ function ItemCard({ vendorId, item, highlighted }: { vendorId: string; item: Men
         highlighted && "border-primary bg-primary/10",
       )}
     >
-      {editing ? (
+      {editing && canManage ? (
         <ItemEditForm vendorId={vendorId} item={item} onDone={() => setEditing(false)} />
       ) : (
         <div className="space-y-1">
@@ -181,17 +186,22 @@ function ItemCard({ vendorId, item, highlighted }: { vendorId: string; item: Men
               {[item.category, item.description].filter(Boolean).join(" · ")}
             </p>
           )}
-          <ItemActions vendorId={vendorId} item={item} onEdit={() => setEditing(true)} />
+          {canManage && <ItemActions vendorId={vendorId} item={item} onEdit={() => setEditing(true)} />}
         </div>
       )}
     </li>
   );
 }
 
-function ItemTableRow({ vendorId, item, highlighted }: { vendorId: string; item: MenuItem; highlighted: boolean }) {
+function ItemTableRow({ vendorId, item, highlighted, canManage }: {
+  vendorId: string;
+  item: MenuItem;
+  highlighted: boolean;
+  canManage: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const cls = cn(item.archived && "opacity-60", highlighted && "bg-primary/10");
-  if (editing) {
+  if (editing && canManage) {
     return (
       <TableRow className={cls}>
         <TableCell colSpan={5}>
@@ -206,14 +216,20 @@ function ItemTableRow({ vendorId, item, highlighted }: { vendorId: string; item:
       <TableCell className="text-right">{formatMoney(item.price)}</TableCell>
       <TableCell className="whitespace-normal text-muted-foreground">{item.description}</TableCell>
       <TableCell className="text-muted-foreground">{item.category}</TableCell>
-      <TableCell>
-        <ItemActions vendorId={vendorId} item={item} onEdit={() => setEditing(true)} />
-      </TableCell>
+      {canManage && (
+        <TableCell>
+          <ItemActions vendorId={vendorId} item={item} onEdit={() => setEditing(true)} />
+        </TableCell>
+      )}
     </TableRow>
   );
 }
 
-function BatchAddItems({ vendorId, onAffected }: { vendorId: string; onAffected: (ids: string[]) => void }) {
+function BatchAddItems({ vendorId, onAffected, sharingGroupId }: {
+  vendorId: string;
+  onAffected: (ids: string[]) => void;
+  sharingGroupId?: string;
+}) {
   const upsert = useUpsertMenuItems(vendorId);
   const [text, setText] = useState("");
   const [summary, setSummary] = useState<string | null>(null);
@@ -258,14 +274,19 @@ function BatchAddItems({ vendorId, onAffected }: { vendorId: string; onAffected:
         <Button type="submit" disabled={items.length === 0 || errors.length > 0 || upsert.isPending}>
           新增 {items.length} 項
         </Button>
-        <ImportButton label="📷 從傳單匯入" mode="vendor" targetVendorId={vendorId} />
+        <ImportButton label="📷 從傳單匯入" mode="vendor" targetVendorId={vendorId} sharingGroupId={sharingGroupId} />
       </div>
       {summary && <ReportSummary text={summary} />}
     </form>
   );
 }
 
-export function MenuSection({ vendorId, items }: { vendorId: string; items: MenuItem[] }) {
+export function MenuSection({ vendorId, items, canManage = true, sharingGroupId }: {
+  vendorId: string;
+  items: MenuItem[];
+  canManage?: boolean;
+  sharingGroupId?: string;
+}) {
   const desktop = useMediaQuery("(min-width: 768px)");
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const timer = useRef<number | undefined>(undefined);
@@ -280,10 +301,10 @@ export function MenuSection({ vendorId, items }: { vendorId: string; items: Menu
   return (
     <section className="space-y-4" aria-label="菜單">
       <h2 className="text-lg font-semibold">菜單（{items.length}）</h2>
-      <BatchAddItems vendorId={vendorId} onAffected={flash} />
+      {canManage && <BatchAddItems vendorId={vendorId} onAffected={flash} sharingGroupId={sharingGroupId} />}
       {sorted.length === 0 ? (
         <p className="rounded-xl border border-dashed py-8 text-center text-muted-foreground">
-          還沒有品項，從上方貼上菜單吧。
+          {canManage ? "還沒有品項，從上方貼上菜單吧。" : "這間店家還沒有菜單品項。"}
         </p>
       ) : desktop ? (
         <Table>
@@ -293,7 +314,7 @@ export function MenuSection({ vendorId, items }: { vendorId: string; items: Menu
               <TableHead className="text-right">價格</TableHead>
               <TableHead>說明</TableHead>
               <TableHead>分類</TableHead>
-              <TableHead>操作</TableHead>
+              {canManage && <TableHead>操作</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -303,6 +324,7 @@ export function MenuSection({ vendorId, items }: { vendorId: string; items: Menu
                 vendorId={vendorId}
                 item={it}
                 highlighted={highlight.has(it.id)}
+                canManage={canManage}
               />
             ))}
           </TableBody>
@@ -315,6 +337,7 @@ export function MenuSection({ vendorId, items }: { vendorId: string; items: Menu
               vendorId={vendorId}
               item={it}
               highlighted={highlight.has(it.id)}
+              canManage={canManage}
             />
           ))}
         </ul>

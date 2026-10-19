@@ -25,6 +25,7 @@ export const NAV_ITEMS = [
   { to: "/rosters", label: "名單", end: false },
   { to: "/delivery-addresses", label: "送餐地址", end: false },
   { to: "/vendors", label: "店家", end: false },
+  { to: "/sharing-groups", label: "共用群組", end: false },
   { to: "/group-orders", label: "開團紀錄", end: false },
 ] as const;
 

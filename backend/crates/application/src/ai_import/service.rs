@@ -53,6 +53,7 @@ impl AiImportConfig {
 
 #[derive(Debug, Clone)]
 pub struct StartImportCmd {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
     pub image: ImageInput,
     pub instruction: Option<String>,
     pub mode: ImportMode,
@@ -231,18 +232,30 @@ impl AiImportService {
         org: OrganizerId,
         cmd: StartImportCmd,
     ) -> Result<ImportRunView, AiImportError> {
+        self.rosters
+            .check_scope(org, cmd.sharing_group_id, true)
+            .await?;
+        if cmd.sharing_group_id.is_some() && cmd.mode == ImportMode::DeliveryAddress {
+            return Err(
+                DomainError::invalid("sharingGroupId", "delivery addresses are private").into(),
+            );
+        }
         let instruction = optional_text(
             "instruction",
             cmd.instruction.as_deref(),
             INSTRUCTION_MAX_LEN,
         )?;
         if let Some(id) = cmd.target_roster_id
-            && self.rosters.find(org, id).await?.is_none()
+            && self.rosters.find(org, id).await?.is_none_or(|s| {
+                !s.value.can_manage || s.value.sharing_group_id != cmd.sharing_group_id
+            })
         {
             return Err(AiImportError::NotFound);
         }
         if let Some(id) = cmd.target_vendor_id
-            && self.vendors.find(org, id).await?.is_none()
+            && self.vendors.find(org, id).await?.is_none_or(|s| {
+                !s.value.can_manage || s.value.sharing_group_id != cmd.sharing_group_id
+            })
         {
             return Err(AiImportError::NotFound);
         }
@@ -264,15 +277,18 @@ impl AiImportService {
             self.config.model.clone(),
             now,
         );
+        run.sharing_group_id = cmd.sharing_group_id;
         self.runs.create(&run).await?;
 
-        let ctx = Arc::new(ImportToolContext::new(
+        let mut ctx = ImportToolContext::new(
             org,
             run.id,
             self.rosters.clone(),
             self.vendors.clone(),
             self.clock.clone(),
-        ));
+        );
+        ctx.sharing_group_id = cmd.sharing_group_id;
+        let ctx = Arc::new(ctx);
         let input = AgentInput {
             image: cmd.image,
             instruction,
@@ -297,6 +313,11 @@ impl AiImportService {
                     self.clock.now(),
                 )?;
                 self.runs.save(&run, ImportRunStatus::Running).await?;
+                // The agent can run for a long time; do not return shared
+                // proposal data after the initiating actor was revoked.
+                self.rosters
+                    .check_scope(org, run.sharing_group_id, true)
+                    .await?;
                 Ok(run)
             }
             Err(e) => {
@@ -344,10 +365,15 @@ impl AiImportService {
         org: OrganizerId,
         id: ImportRunId,
     ) -> Result<ImportRunView, AiImportError> {
-        self.runs
+        let run = self
+            .runs
             .find(org, id)
             .await?
-            .ok_or(AiImportError::NotFound)
+            .ok_or(AiImportError::NotFound)?;
+        self.rosters
+            .check_scope(org, run.sharing_group_id, false)
+            .await?;
+        Ok(run)
     }
 
     pub async fn discard(
@@ -372,6 +398,9 @@ impl AiImportService {
         cmd: ApplyCmd,
     ) -> Result<ApplyResult, AiImportError> {
         let mut run = self.get(org, id).await?;
+        self.rosters
+            .check_scope(org, run.sharing_group_id, true)
+            .await?;
         if run.status != ImportRunStatus::Proposed {
             // Same error the domain transition gives.
             run.apply(self.clock.now())?;
@@ -384,6 +413,13 @@ impl AiImportService {
             let p = format!("accepted[{ci}]");
             match change {
                 AcceptedChange::DeliveryAddress(a) => {
+                    if run.sharing_group_id.is_some() {
+                        return Err(DomainError::invalid(
+                            "accepted",
+                            "delivery addresses are private",
+                        )
+                        .into());
+                    }
                     if !seen_targets.insert(format!(
                         "delivery-address:{}",
                         NameKey::from(a.name.as_str())
@@ -459,7 +495,9 @@ impl AiImportService {
                 }
                 Prepared::Roster(r) => match r.target {
                     ResolvedRoster::Existing(rid) => {
-                        if self.rosters.find(org, rid).await?.is_none() {
+                        if self.rosters.find(org, rid).await?.is_none_or(|s| {
+                            !s.value.can_manage || s.value.sharing_group_id != run.sharing_group_id
+                        }) {
                             errors.push(err(format!("{}.roster", r.path), "找不到這份名單"));
                             continue;
                         }
@@ -474,6 +512,7 @@ impl AiImportService {
                     }
                     ResolvedRoster::New(name) => {
                         let mut roster = Roster::new(org, &name)?;
+                        roster.sharing_group_id = run.sharing_group_id;
                         roster
                             .upsert_members(r.members)
                             .map_err(|e| limit_err(&r.path, e))?;
@@ -484,7 +523,10 @@ impl AiImportService {
                 Prepared::Vendor(v) => {
                     let existing = match v.target {
                         ResolvedVendor::Existing(vid) => {
-                            if self.vendors.find(org, vid).await?.is_none() {
+                            if self.vendors.find(org, vid).await?.is_none_or(|s| {
+                                !s.value.can_manage
+                                    || s.value.sharing_group_id != run.sharing_group_id
+                            }) {
                                 errors.push(err(format!("{}.vendor", v.path), "找不到這間店家"));
                                 continue;
                             }
@@ -493,7 +535,11 @@ impl AiImportService {
                         // A "new" vendor whose name now exists is that vendor.
                         ResolvedVendor::New(ref name) => {
                             self.vendors
-                                .find_id_by_name_key(org, &VendorName::new(name)?.key())
+                                .find_scoped_name(
+                                    org,
+                                    run.sharing_group_id,
+                                    &VendorName::new(name)?.key(),
+                                )
                                 .await?
                         }
                     };
@@ -519,6 +565,7 @@ impl AiImportService {
                                 unreachable!()
                             };
                             let mut vendor = Vendor::new(org, &name)?;
+                            vendor.sharing_group_id = run.sharing_group_id;
                             vendor.update_info(patch)?;
                             if !items.is_empty() {
                                 vendor

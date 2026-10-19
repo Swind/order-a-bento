@@ -66,6 +66,8 @@ pub struct MenuItemEdit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vendor {
+    pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
+    pub can_manage: bool,
     id: VendorId,
     organizer_id: OrganizerId,
     name: VendorName,
@@ -92,6 +94,8 @@ impl Vendor {
     pub fn new(organizer_id: OrganizerId, name: &str) -> Result<Self, DomainError> {
         Ok(Self {
             id: VendorId::new(),
+            sharing_group_id: None,
+            can_manage: true,
             organizer_id,
             name: VendorName::new(name)?,
             phone: None,
@@ -128,6 +132,8 @@ impl Vendor {
         }
         Ok(Self {
             id,
+            sharing_group_id: None,
+            can_manage: true,
             organizer_id,
             name,
             phone,

@@ -44,7 +44,7 @@ export default defineConfig({
     },
     {
       name: "desktop",
-      testMatch: ["auth-directory.spec.ts", "management.spec.ts"],
+      testMatch: ["auth-directory.spec.ts", "management.spec.ts", "sharing-groups.spec.ts"],
       use: {
         browserName: "chromium",
         viewport: { width: 1280, height: 800 },
@@ -70,6 +70,7 @@ export default defineConfig({
       OIDC_ISSUER_URL: "",
       OIDC_CLIENT_ID: "",
       OIDC_CLIENT_SECRET: "",
+      OIDC_ADDITIONAL_AUDIENCES: "",
       ADMIN_EMAIL: E2E_ADMIN_EMAIL,
       ADMIN_PASSWORD: "",
       PASSWORD_LOGIN_ENABLED: "true",

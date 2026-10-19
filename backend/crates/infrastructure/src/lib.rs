@@ -16,3 +16,4 @@ pub mod ua;
 
 #[cfg(test)]
 mod ai_import_tests;
+pub mod sharing_repo;

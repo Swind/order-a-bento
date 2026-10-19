@@ -24,6 +24,7 @@ import {
   useUpsertMembers,
 } from "./hooks";
 import { parseMemberLines } from "./parseMemberLines";
+import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
 
 function RosterTitle({ id, name }: { id: string; name: string }) {
   const navigate = useNavigate();
@@ -123,10 +124,12 @@ function MemberRow({
   rosterId,
   member,
   highlighted,
+  canManage = true,
 }: {
   rosterId: string;
   member: Member;
   highlighted: boolean;
+  canManage?: boolean;
 }) {
   const patch = usePatchMember(rosterId);
   const del = useDeleteMember(rosterId);
@@ -161,7 +164,7 @@ function MemberRow({
     );
   }
 
-  if (editing) {
+  if (editing && canManage) {
     return (
       <li className="rounded-lg border p-3">
         <form onSubmit={save} className="space-y-2">
@@ -219,29 +222,37 @@ function MemberRow({
         <p className="truncate font-medium">{member.name}</p>
         {member.note && <p className="truncate text-sm text-muted-foreground">{member.note}</p>}
       </div>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={`編輯 ${member.name}`}
-        onClick={() => setEditing(true)}
-      >
-        <Pencil />
-      </Button>
-      <ConfirmDeleteButton
-        label={`刪除 ${member.name}`}
-        pending={del.isPending}
-        onConfirm={() =>
-          del.mutate(member.id, {
-            onSuccess: () => toast.success("已刪除成員"),
-            onError: (err) => toast.error(errorMessage(err)),
-          })
-        }
-      />
+      {canManage && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`編輯 ${member.name}`}
+            onClick={() => setEditing(true)}
+          >
+            <Pencil />
+          </Button>
+          <ConfirmDeleteButton
+            label={`刪除 ${member.name}`}
+            pending={del.isPending}
+            onConfirm={() =>
+              del.mutate(member.id, {
+                onSuccess: () => toast.success("已刪除成員"),
+                onError: (err) => toast.error(errorMessage(err)),
+              })
+            }
+          />
+        </>
+      )}
     </li>
   );
 }
 
-function BatchAdd({ id, onAffected }: { id: string; onAffected: (ids: string[]) => void }) {
+function BatchAdd({ id, onAffected, sharingGroupId }: {
+  id: string;
+  onAffected: (ids: string[]) => void;
+  sharingGroupId?: string;
+}) {
   const upsert = useUpsertMembers(id);
   const [text, setText] = useState("");
   const [summary, setSummary] = useState<string | null>(null);
@@ -279,7 +290,7 @@ function BatchAdd({ id, onAffected }: { id: string; onAffected: (ids: string[]) 
         <Button type="submit" disabled={parsed.length === 0 || upsert.isPending}>
           新增 {parsed.length} 位
         </Button>
-        <ImportButton label="📷 從照片匯入" mode="roster" targetRosterId={id} />
+        <ImportButton label="📷 從照片匯入" mode="roster" targetRosterId={id} sharingGroupId={sharingGroupId} />
       </div>
       {summary && <ReportSummary text={summary} />}
     </form>
@@ -328,19 +339,28 @@ export function RosterDetailPage() {
   }
 
   const data = roster.data;
+  const canManage = data.canManage !== false;
   const members = [...data.members].sort((a, b) => a.sortOrder - b.sortOrder);
   return (
     <div className="space-y-6">
-      <Link to="/rosters" className="text-sm text-muted-foreground hover:underline">
+      <Link
+        to={data.sharingGroupId ? `/rosters?sharingGroupId=${encodeURIComponent(data.sharingGroupId)}` : "/rosters"}
+        className="text-sm text-muted-foreground hover:underline"
+      >
         ← 名單
       </Link>
-      <RosterTitle key={data.name} id={id} name={data.name} />
-      <BatchAdd id={id} onAffected={flash} />
+      {canManage ? (
+        <RosterTitle key={data.name} id={id} name={data.name} />
+      ) : (
+        <h1 className="text-2xl font-bold">{data.name}</h1>
+      )}
+      <ScopeBadge sharingGroupId={data.sharingGroupId} canManage={data.canManage} />
+      {canManage && <BatchAdd id={id} onAffected={flash} sharingGroupId={data.sharingGroupId ?? undefined} />}
       <section className="space-y-2" aria-label="成員">
         <h2 className="text-lg font-semibold">成員（{members.length}）</h2>
         {members.length === 0 ? (
           <p className="rounded-xl border border-dashed py-8 text-center text-muted-foreground">
-            還沒有成員，從上方貼上名單吧。
+            {canManage ? "還沒有成員，從上方貼上名單吧。" : "這份名單還沒有成員。"}
           </p>
         ) : (
           <ul className="space-y-2">
@@ -350,6 +370,7 @@ export function RosterDetailPage() {
                 rosterId={id}
                 member={m}
                 highlighted={highlight.has(m.id)}
+                canManage={canManage}
               />
             ))}
           </ul>

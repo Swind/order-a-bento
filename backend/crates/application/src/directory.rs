@@ -20,7 +20,7 @@ use crate::ports::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum DirectoryError {
-    /// Unknown id, or an id owned by another organizer.
+    /// Unknown id or insufficient permission (including read-only shared access).
     #[error("not found")]
     NotFound,
     #[error(transparent)]
@@ -124,7 +124,19 @@ impl DirectoryService {
         name: &str,
         members: Vec<MemberInput>,
     ) -> Result<RosterModified, DirectoryError> {
+        self.create_roster_scoped(org, None, name, members).await
+    }
+
+    pub async fn create_roster_scoped(
+        &self,
+        org: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+        name: &str,
+        members: Vec<MemberInput>,
+    ) -> Result<RosterModified, DirectoryError> {
+        self.rosters.check_scope(org, group, true).await?;
         let mut roster = Roster::new(org, name)?;
+        roster.sharing_group_id = group;
         let report = if members.is_empty() {
             None
         } else {
@@ -250,13 +262,14 @@ impl DirectoryService {
     async fn name_taken(
         &self,
         org: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
         name: Option<&str>,
         own_id: Option<VendorId>,
     ) -> DirectoryError {
         let existing_id = match name.and_then(|n| VendorName::new(n).ok()) {
             Some(n) => self
                 .vendors
-                .find_id_by_name_key(org, &n.key())
+                .find_scoped_name(org, group, &n.key())
                 .await
                 .ok()
                 .flatten()
@@ -275,7 +288,18 @@ impl DirectoryService {
         org: OrganizerId,
         new: NewVendor,
     ) -> Result<VendorModified, DirectoryError> {
+        self.create_vendor_scoped(org, None, new).await
+    }
+
+    pub async fn create_vendor_scoped(
+        &self,
+        org: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+        new: NewVendor,
+    ) -> Result<VendorModified, DirectoryError> {
+        self.rosters.check_scope(org, group, true).await?;
         let mut vendor = Vendor::new(org, &new.name)?;
+        vendor.sharing_group_id = group;
         vendor.edit_info(VendorInfoEdit {
             name: None,
             phone: new
@@ -296,7 +320,7 @@ impl DirectoryService {
         // Cheap pre-check for a good error; the UNIQUE constraint remains the
         // authority and is handled below.
         let key: NameKey = vendor.name().key();
-        if let Some(existing) = self.vendors.find_id_by_name_key(org, &key).await? {
+        if let Some(existing) = self.vendors.find_scoped_name(org, group, &key).await? {
             return Err(DirectoryError::VendorNameTaken {
                 existing_id: Some(existing),
             });
@@ -304,7 +328,7 @@ impl DirectoryService {
         match self.vendors.create(vendor, self.clock.now()).await {
             Ok(stored) => Ok(Modified { stored, report }),
             Err(RepoError::UniqueViolation) => {
-                Err(self.name_taken(org, Some(&new.name), None).await)
+                Err(self.name_taken(org, group, Some(&new.name), None).await)
             }
             Err(e) => Err(e.into()),
         }
@@ -324,7 +348,14 @@ impl DirectoryService {
         {
             Ok(m) => Ok(m),
             Err(RepoError::UniqueViolation) => {
-                Err(self.name_taken(org, new_name.as_deref(), Some(id)).await)
+                let group = self
+                    .vendors
+                    .find(org, id)
+                    .await?
+                    .and_then(|s| s.value.sharing_group_id);
+                Err(self
+                    .name_taken(org, group, new_name.as_deref(), Some(id))
+                    .await)
             }
             Err(e) => Err(e.into()),
         }

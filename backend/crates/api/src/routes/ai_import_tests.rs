@@ -137,6 +137,65 @@ async fn client() -> Client {
 }
 
 #[tokio::test]
+async fn sharing_scope_multipart_and_revoked_apply_are_enforced() {
+    let c = client().await;
+    let other = c.other().await;
+    let uid = other.get("/me").await.1["id"].as_str().unwrap().to_owned();
+    let (_, g) = c.post("/sharing-groups", json!({"name":"Team"})).await;
+    let gid = g["id"].as_str().unwrap();
+    assert_eq!(
+        c.post(
+            &format!("/sharing-groups/{gid}/members"),
+            json!({"userId":uid,"role":"member"})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        upload(&other, JPEG, &[("sharingGroupId", gid)]).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (s, run) = upload(&c, JPEG, &[("sharingGroupId", gid)]).await;
+    assert_eq!(s, StatusCode::CREATED, "{run}");
+    assert_eq!(run["sharingGroupId"], gid);
+    let id = run["id"].as_str().unwrap();
+    let path = format!("/ai/import-runs/{id}");
+    c.patch(
+        &format!("/sharing-groups/{gid}/members/{uid}"),
+        json!({"role":"admin"}),
+    )
+    .await;
+    assert_eq!(other.get(&path).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        other
+            .post(&format!("{path}/apply"), json!({"accepted":[]}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let own = c.get("/me").await.1["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        other
+            .send(
+                "DELETE",
+                &format!("/sharing-groups/{gid}/members/{own}"),
+                None
+            )
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(c.get(&path).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        c.post(&format!("{path}/apply"), json!({"accepted":[]}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn delivery_address_import_is_reviewed_before_atomic_apply() {
     let agent = Arc::new(FakeImportAgent::new(
         vec![FakeToolCall::ProposeDeliveryAddress(

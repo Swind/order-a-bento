@@ -1,30 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/shared/api/client";
-import type { MemberInput } from "@/shared/api/types";
+import type { MemberInput, RosterSummary, RosterDetail } from "@/shared/api/types";
+import { invalidateSharingAccessOnError, scopePath, sharingRequest } from "@/features/sharing-groups/hooks";
 
 const listKey = ["rosters"] as const;
 const detailKey = (id: string) => ["roster", id] as const;
 
-export function useRosters() {
+export function useRosters(sharingGroupId?: string) {
   return useQuery({
-    queryKey: listKey,
-    queryFn: async () => unwrap(await api.GET("/api/v1/rosters")),
+    queryKey: [...listKey, sharingGroupId || "personal"],
+    queryFn: () => sharingRequest<RosterSummary[]>(scopePath("rosters", sharingGroupId)),
   });
 }
 
 export function useRoster(id: string) {
   return useQuery({
     queryKey: detailKey(id),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/rosters/{rosterId}", { params: { path: { rosterId: id } } })),
+    enabled: !!id,
+    queryFn: () => sharingRequest<RosterDetail>(`rosters/${id}`),
   });
 }
 
 export function useCreateRoster() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { name: string; members?: MemberInput[] }) =>
-      unwrap(await api.POST("/api/v1/rosters", { body })),
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
+    mutationFn: (body: { name: string; members?: MemberInput[]; sharingGroupId?: string }) =>
+      sharingRequest<RosterDetail>("rosters", "POST", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: listKey }),
   });
 }
@@ -32,6 +34,7 @@ export function useCreateRoster() {
 export function useRenameRoster(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (name: string) =>
       unwrap(
         await api.PATCH("/api/v1/rosters/{rosterId}", {
@@ -49,6 +52,7 @@ export function useRenameRoster(id: string) {
 export function useDeleteRoster(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async () =>
       unwrap(await api.DELETE("/api/v1/rosters/{rosterId}", { params: { path: { rosterId: id } } })),
     onSuccess: () => {
@@ -61,6 +65,7 @@ export function useDeleteRoster(id: string) {
 export function useUpsertMembers(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (members: MemberInput[]) =>
       unwrap(
         await api.POST("/api/v1/rosters/{rosterId}/members/upsert", {
@@ -78,6 +83,7 @@ export function useUpsertMembers(id: string) {
 export function usePatchMember(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (v: { memberId: string; name?: string; note?: string | null }) => {
       const { memberId, ...body } = v;
       return unwrap(
@@ -94,6 +100,7 @@ export function usePatchMember(id: string) {
 export function useDeleteMember(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (memberId: string) =>
       unwrap(
         await api.DELETE("/api/v1/rosters/{rosterId}/members/{memberId}", {

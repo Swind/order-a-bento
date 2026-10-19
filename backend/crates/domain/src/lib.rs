@@ -6,3 +6,4 @@ pub mod identity;
 pub mod ordering;
 pub mod settlement;
 pub mod shared;
+pub mod sharing;

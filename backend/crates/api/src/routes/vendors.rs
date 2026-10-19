@@ -1,9 +1,10 @@
 //! `/vendors`: vendor and menu management.
 
+use super::sharing_groups::SharingScopeQuery;
 use application::NewVendor;
 use application::ports::{Modified, Stored, VendorSummary};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use domain::directory::{
     MenuItemEdit, MenuItemId, MenuItemInput, UpsertOutcome, UpsertReport, Vendor, VendorId,
@@ -25,6 +26,8 @@ use crate::state::AppState;
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VendorSummaryDto {
+    pub sharing_group_id: Option<String>,
+    pub can_manage: bool,
     pub id: String,
     pub name: String,
     pub phone: Option<String>,
@@ -36,6 +39,8 @@ impl From<VendorSummary> for VendorSummaryDto {
     fn from(s: VendorSummary) -> Self {
         Self {
             id: s.id.to_string(),
+            sharing_group_id: s.sharing_group_id.map(|g| g.to_string()),
+            can_manage: s.can_manage,
             name: s.name,
             phone: s.phone,
             item_count: s.item_count,
@@ -60,6 +65,8 @@ pub struct MenuItemDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VendorDetail {
+    pub sharing_group_id: Option<String>,
+    pub can_manage: bool,
     pub id: String,
     pub name: String,
     pub phone: Option<String>,
@@ -78,6 +85,8 @@ impl From<&Stored<Vendor>> for VendorDetail {
         menu.sort_by_key(|m| m.sort_order);
         Self {
             id: v.id().to_string(),
+            sharing_group_id: v.sharing_group_id.map(|g| g.to_string()),
+            can_manage: v.can_manage,
             name: v.name().to_string(),
             phone: v.phone().map(str::to_owned),
             address: v.address().map(str::to_owned),
@@ -169,6 +178,7 @@ fn inputs(items: Vec<MenuItemInputDto>) -> (Vec<String>, Vec<MenuItemInput>) {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateVendorRequest {
+    pub sharing_group_id: Option<String>,
     pub name: String,
     pub phone: Option<String>,
     pub address: Option<String>,
@@ -238,16 +248,19 @@ fn vid(s: &str) -> Result<VendorId, AppError> {
 
 /// List vendors, newest updated first.
 #[utoipa::path(get, path = "/vendors", tag = TAG_DIRECTORY, security(("cookieAuth" = [])),
+    params(SharingScopeQuery),
     responses((status = 200, body = Vec<VendorSummaryDto>), (status = 401, description = "Not logged in", body = ProblemDetails, content_type = "application/problem+json")))]
 pub async fn list_vendors(
     State(state): State<AppState>,
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Query(scope): Query<SharingScopeQuery>,
 ) -> Result<Json<Vec<VendorSummaryDto>>, AppError> {
     let list = state
         .directory
-        .list_vendors(o.id)
+        .vendors
+        .list_scoped(o.id, scope.group()?)
         .await
-        .map_err(directory_error)?;
+        .map_err(|e| directory_error(e.into()))?;
     Ok(Json(list.into_iter().map(Into::into).collect()))
 }
 
@@ -264,8 +277,9 @@ pub async fn create_vendor(
     let (names, menu_items) = inputs(req.menu_items);
     let Modified { stored, report } = state
         .directory
-        .create_vendor(
+        .create_vendor_scoped(
             o.id,
+            req.sharing_group_id.as_deref().map(parse_id).transpose()?,
             NewVendor {
                 name: req.name,
                 phone: req.phone,

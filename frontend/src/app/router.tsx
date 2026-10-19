@@ -23,6 +23,8 @@ export const routes: RouteObject[] = [
     HydrateFallback: RouteFallback,
     children: [
       { path: "/", lazy: page(() => import("@/features/group-orders/DashboardPage"), "DashboardPage") },
+      { path: "/sharing-groups", lazy: page(() => import("@/features/sharing-groups/SharingGroupsPage"), "SharingGroupsPage") },
+      { path: "/sharing-groups/:id", lazy: page(() => import("@/features/sharing-groups/SharingGroupDetailPage"), "SharingGroupDetailPage") },
       { path: "/rosters", lazy: page(() => import("@/features/rosters/RostersPage"), "RostersPage") },
       { path: "/delivery-addresses", lazy: page(() => import("@/features/delivery-addresses/DeliveryAddressesPage"), "DeliveryAddressesPage") },
       { path: "/rosters/:id", lazy: page(() => import("@/features/rosters/RosterDetailPage"), "RosterDetailPage") },

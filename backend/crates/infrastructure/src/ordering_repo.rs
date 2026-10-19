@@ -216,6 +216,22 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(port)?;
+        // Recheck current membership while holding the write lock: revocation
+        // between the snapshot reads and this insert must not open a new order.
+        if let Some(id) = g.source_roster_id()
+            && crate::directory_repo::load_roster(&mut tx, g.organizer_id(), id)
+                .await?
+                .is_none()
+        {
+            return Err(RepoError::NotFound);
+        }
+        if let Some(id) = g.source_vendor_id()
+            && crate::directory_repo::load_vendor(&mut tx, g.organizer_id(), id)
+                .await?
+                .is_none()
+        {
+            return Err(RepoError::NotFound);
+        }
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO group_orders ({GROUP_COLUMNS}) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"

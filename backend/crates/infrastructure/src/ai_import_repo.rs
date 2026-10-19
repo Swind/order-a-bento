@@ -47,6 +47,7 @@ impl SqliteImportRunRepo {
 
 #[derive(sqlx::FromRow)]
 struct RunRow {
+    sharing_group_id: Option<String>,
     id: String,
     organizer_id: String,
     mode_hint: Option<String>,
@@ -70,7 +71,7 @@ macro_rules! columns {
     () => {
         "id, organizer_id, mode_hint, target_roster_id, target_vendor_id, instruction, status, \
          proposal_json, summary, model, input_tokens, output_tokens, error, tool_calls_json, created_at, \
-         finished_at, applied_at"
+         finished_at, applied_at, sharing_group_id"
     };
 }
 
@@ -81,6 +82,10 @@ fn opt_ts(s: Option<String>) -> PortResult<Option<SystemTime>> {
 impl RunRow {
     fn into_run(self) -> PortResult<ImportRun> {
         Ok(ImportRun {
+            sharing_group_id: self
+                .sharing_group_id
+                .map(|s| s.parse().map_err(port))
+                .transpose()?,
             id: self.id.parse().map_err(port)?,
             organizer_id: self.organizer_id.parse().map_err(port)?,
             mode: self
@@ -129,7 +134,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
         sqlx::query(concat!(
             "INSERT INTO ai_import_runs (",
             columns!(),
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ))
         .bind(run.id.to_string())
         .bind(run.organizer_id.to_string())
@@ -148,6 +153,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
         .bind(to_text(run.created_at))
         .bind(run.finished_at.map(to_text))
         .bind(run.applied_at.map(to_text))
+        .bind(run.sharing_group_id.map(|g| g.to_string()))
         .execute(&self.db.write)
         .await
         .map_err(port)?;
@@ -252,21 +258,49 @@ impl ImportApplyRepo for SqliteImportRunRepo {
             return miss(&self.db, run).await;
         }
         let org = run.organizer_id;
+        crate::directory_repo::scope_admin(&mut tx, org, run.sharing_group_id).await?;
         for step in steps {
             match step {
                 ImportApplyStep::CreateDeliveryAddress(a) => {
+                    if run.sharing_group_id.is_some() || a.organizer_id != org {
+                        return Err(RepoError::NotFound);
+                    }
                     crate::delivery_address_repo::create_tx(&mut tx, &a, now).await?;
                 }
                 ImportApplyStep::CreateRoster(r) => {
+                    if r.sharing_group_id != run.sharing_group_id || r.organizer_id() != org {
+                        return Err(RepoError::NotFound);
+                    }
                     create_roster_tx(&mut tx, r, now).await?;
                 }
                 ImportApplyStep::ModifyRoster { id, mutation } => {
+                    let scope: Option<(Option<String>,)> =
+                        sqlx::query_as("SELECT sharing_group_id FROM rosters WHERE id=?")
+                            .bind(id.to_string())
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .map_err(port)?;
+                    if scope != Some((run.sharing_group_id.map(|g| g.to_string()),)) {
+                        return Err(RepoError::NotFound);
+                    }
                     modify_roster_tx(&mut tx, org, id, now, mutation).await?;
                 }
                 ImportApplyStep::CreateVendor(v) => {
+                    if v.sharing_group_id != run.sharing_group_id || v.organizer_id() != org {
+                        return Err(RepoError::NotFound);
+                    }
                     create_vendor_tx(&mut tx, v, now).await?;
                 }
                 ImportApplyStep::ModifyVendor { id, mutation } => {
+                    let scope: Option<(Option<String>,)> =
+                        sqlx::query_as("SELECT sharing_group_id FROM vendors WHERE id=?")
+                            .bind(id.to_string())
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .map_err(port)?;
+                    if scope != Some((run.sharing_group_id.map(|g| g.to_string()),)) {
+                        return Err(RepoError::NotFound);
+                    }
                     modify_vendor_tx(&mut tx, org, id, now, mutation).await?;
                 }
             }

@@ -161,9 +161,36 @@ describe("AiImportPage roster proposal", () => {
     await userEvent.clear(await screen.findByDisplayValue("業務部"));
     expect(screen.getByRole("button", { name: /套用/ })).toBeDisabled();
   });
+
+  it("refreshes import access after apply is forbidden", async () => {
+    let revoked = false;
+    server.use(
+      http.get("*/api/v1/ai/import-runs/run1", () => revoked ? problem(403, "forbidden") : HttpResponse.json({ ...ROSTER_RUN, sharingGroupId: "s1" })),
+      http.post("*/api/v1/ai/import-runs/run1/apply", () => {
+        revoked = true;
+        return problem(403, "forbidden");
+      }),
+    );
+    renderApp("/ai-import/run1");
+    await userEvent.click(await screen.findByRole("button", { name: /套用 \d+ 筆變更/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("沒有權限");
+    expect(screen.queryByRole("button", { name: /套用 \d+ 筆變更/ })).not.toBeInTheDocument();
+  });
 });
 
 describe("AiImportPage other statuses", () => {
+  it.each(["roster", "vendor"])("preserves scope in the completed new %s fallback after reload", async (mode) => {
+    const proposal = mode === "roster" ? ROSTER_RUN.proposal : {
+      warnings: [],
+      targets: [{ type: "vendor", vendor: { kind: "new", name: "新店家" }, info: {}, menu: [] }],
+    };
+    useRun({ ...ROSTER_RUN, mode, proposal, status: "applied", sharingGroupId: "s1" });
+    renderApp("/ai-import/run1");
+    const label = mode === "roster" ? "前往名單" : "前往店家";
+    const path = mode === "roster" ? "/rosters" : "/vendors";
+    expect(await screen.findByRole("link", { name: label })).toHaveAttribute("href", `${path}?sharingGroupId=s1`);
+  });
+
   it("shows applied with links", async () => {
     useRun({ ...VENDOR_RUN, status: "applied" });
     renderApp("/ai-import/run1");

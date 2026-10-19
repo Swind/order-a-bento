@@ -1643,6 +1643,19 @@
         ],
         "summary": "List rosters, newest updated first.",
         "operationId": "list_rosters",
+        "parameters": [
+          {
+            "name": "sharingGroupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2133,6 +2146,414 @@
         ]
       }
     },
+    "/api/v1/sharing-groups": {
+      "get": {
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SharingGroupDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingGroupDto"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sharing-groups/{groupId}": {
+      "get": {
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingGroupDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "rename",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharingGroupDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sharing-groups/{groupId}/members": {
+      "get": {
+        "operationId": "members",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SharingUserDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "add",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSharingMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sharing-groups/{groupId}/members/{userId}": {
+      "delete": {
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "change",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SharingRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {},
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/sharing-groups/{groupId}/users/lookup": {
+      "get": {
+        "operationId": "lookup",
+        "parameters": [
+          {
+            "name": "groupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "email",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SharingUserDto"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/vendors": {
       "get": {
         "tags": [
@@ -2140,6 +2561,19 @@
         ],
         "summary": "List vendors, newest updated first.",
         "operationId": "list_vendors",
+        "parameters": [
+          {
+            "name": "sharingGroupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3104,6 +3538,21 @@
           }
         }
       },
+      "AddSharingMemberRequest": {
+        "type": "object",
+        "required": [
+          "userId",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/SharingRoleDto"
+          },
+          "userId": {
+            "type": "string"
+          }
+        }
+      },
       "ApplyRequest": {
         "type": "object",
         "required": [
@@ -3332,6 +3781,12 @@
           },
           "name": {
             "type": "string"
+          },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -3363,6 +3818,12 @@
             ]
           },
           "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharingGroupId": {
             "type": [
               "string",
               "null"
@@ -3568,6 +4029,17 @@
             "description": "Sum of the effective orders."
           },
           "vendorName": {
+            "type": "string"
+          }
+        }
+      },
+      "GroupNameRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
             "type": "string"
           }
         }
@@ -3814,6 +4286,12 @@
           },
           "proposal": {
             "$ref": "#/components/schemas/ProposalDto"
+          },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/ImportRunStatusDto"
@@ -4983,12 +5461,16 @@
       "RosterDetail": {
         "type": "object",
         "required": [
+          "canManage",
           "id",
           "name",
           "updatedAt",
           "members"
         ],
         "properties": {
+          "canManage": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -5002,6 +5484,12 @@
           "name": {
             "type": "string"
           },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "updatedAt": {
             "type": "string"
           }
@@ -5010,12 +5498,16 @@
       "RosterSummaryDto": {
         "type": "object",
         "required": [
+          "canManage",
           "id",
           "name",
           "memberCount",
           "updatedAt"
         ],
         "properties": {
+          "canManage": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -5026,6 +5518,12 @@
           },
           "name": {
             "type": "string"
+          },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "updatedAt": {
             "type": "string"
@@ -5106,6 +5604,93 @@
           }
         }
       },
+      "SharingGroupDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SharingGroupDto"
+          },
+          {
+            "type": "object",
+            "required": [
+              "members"
+            ],
+            "properties": {
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SharingUserDto"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SharingGroupDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "SharingRoleDto": {
+        "type": "string",
+        "enum": [
+          "admin",
+          "member"
+        ]
+      },
+      "SharingRoleRequest": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/SharingRoleDto"
+          }
+        }
+      },
+      "SharingUserDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "email",
+          "identityKind"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "identityKind": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "StartImportForm": {
         "type": "object",
         "description": "Multipart body of `POST /ai/import-runs` (documentation only). `mode` is\nrequired: `roster` for people, `vendor` for menus, `deliveryAddress` for delivery locations.",
@@ -5132,6 +5717,12 @@
               "deliveryAddress",
               "roster",
               "vendor"
+            ]
+          },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "targetRosterId": {
@@ -5453,6 +6044,7 @@
       "VendorDetail": {
         "type": "object",
         "required": [
+          "canManage",
           "id",
           "name",
           "updatedAt",
@@ -5464,6 +6056,9 @@
               "string",
               "null"
             ]
+          },
+          "canManage": {
+            "type": "boolean"
           },
           "id": {
             "type": "string"
@@ -5485,6 +6080,12 @@
             ]
           },
           "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharingGroupId": {
             "type": [
               "string",
               "null"
@@ -5550,12 +6151,16 @@
       "VendorSummaryDto": {
         "type": "object",
         "required": [
+          "canManage",
           "id",
           "name",
           "itemCount",
           "updatedAt"
         ],
         "properties": {
+          "canManage": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
           },
@@ -5568,6 +6173,12 @@
             "type": "string"
           },
           "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharingGroupId": {
             "type": [
               "string",
               "null"

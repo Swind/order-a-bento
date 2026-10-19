@@ -13,6 +13,7 @@ use crate::ports::{Clock, RosterRepo, VendorRepo};
 /// by the backend, never tool parameters: the model cannot address other
 /// organizers' data.
 pub struct ImportToolContext {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
     pub organizer_id: OrganizerId,
     pub run_id: ImportRunId,
     pub rosters: Arc<dyn RosterRepo>,
@@ -39,6 +40,7 @@ impl ImportToolContext {
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
+            sharing_group_id: None,
             organizer_id,
             run_id,
             rosters,
@@ -49,6 +51,35 @@ impl ImportToolContext {
             turns: std::sync::atomic::AtomicU32::new(0),
             tool_calls: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    pub async fn authorize(&self) -> Result<(), super::tools::ToolError> {
+        self.rosters
+            .check_scope(self.organizer_id, self.sharing_group_id, true)
+            .await
+            .map_err(|e| super::tools::ToolError(e.to_string()))
+    }
+
+    pub async fn find_roster(
+        &self,
+        id: RosterId,
+    ) -> crate::ports::PortResult<Option<crate::ports::Stored<domain::directory::Roster>>> {
+        Ok(self
+            .rosters
+            .find(self.organizer_id, id)
+            .await?
+            .filter(|s| s.value.sharing_group_id == self.sharing_group_id && s.value.can_manage))
+    }
+
+    pub async fn find_vendor(
+        &self,
+        id: VendorId,
+    ) -> crate::ports::PortResult<Option<crate::ports::Stored<domain::directory::Vendor>>> {
+        Ok(self
+            .vendors
+            .find(self.organizer_id, id)
+            .await?
+            .filter(|s| s.value.sharing_group_id == self.sharing_group_id && s.value.can_manage))
     }
 
     /// Add the usage of one finished model turn.

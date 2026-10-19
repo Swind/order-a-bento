@@ -237,6 +237,8 @@ pub trait DeliveryAddressRepo: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterSummary {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
+    pub can_manage: bool,
     pub id: RosterId,
     pub name: String,
     pub member_count: u32,
@@ -245,6 +247,8 @@ pub struct RosterSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorSummary {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
+    pub can_manage: bool,
     pub id: VendorId,
     pub name: String,
     pub phone: Option<String>,
@@ -267,7 +271,8 @@ pub struct Modified<T, R> {
     pub report: Option<R>,
 }
 
-/// Roster persistence. Every method is scoped by `organizer_id`.
+/// Roster persistence. The organizer argument is the authenticated actor:
+/// private data requires ownership, shared reads membership, shared writes admin.
 ///
 /// Mutations go through [`RosterRepo::modify`]: the adapter loads the aggregate,
 /// runs the closure and persists the difference (changed rows are upserted by
@@ -275,6 +280,17 @@ pub struct Modified<T, R> {
 /// a single write transaction, so concurrent modifications never lose updates.
 #[async_trait]
 pub trait RosterRepo: Send + Sync {
+    async fn check_scope(
+        &self,
+        actor: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+        write: bool,
+    ) -> RepoResult<()>;
+    async fn list_scoped(
+        &self,
+        organizer_id: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+    ) -> RepoResult<Vec<RosterSummary>>;
     async fn list(&self, organizer_id: OrganizerId) -> PortResult<Vec<RosterSummary>>;
     async fn find(
         &self,
@@ -297,6 +313,17 @@ pub trait RosterRepo: Send + Sync {
 /// Vendor persistence; same contract as [`RosterRepo`].
 #[async_trait]
 pub trait VendorRepo: Send + Sync {
+    async fn list_scoped(
+        &self,
+        organizer_id: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+    ) -> RepoResult<Vec<VendorSummary>>;
+    async fn find_scoped_name(
+        &self,
+        organizer_id: OrganizerId,
+        group: Option<domain::sharing::SharingGroupId>,
+        key: &NameKey,
+    ) -> PortResult<Option<VendorId>>;
     async fn list(&self, organizer_id: OrganizerId) -> PortResult<Vec<VendorSummary>>;
     async fn find(
         &self,

@@ -19,11 +19,13 @@ import { Label } from "@/shared/ui/label";
 import { Textarea } from "@/shared/ui/textarea";
 import { useAuthConfig } from "@/features/auth/hooks";
 import { startImport } from "./hooks";
+import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
 
 export interface ImportTarget {
   mode: ImportMode;
   targetRosterId?: string;
   targetVendorId?: string;
+  sharingGroupId?: string;
 }
 
 const MAX_INSTRUCTION = 200;
@@ -145,6 +147,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
               <DialogDescription>
                 選一張照片，AI 會整理成待確認的變更，確認後才會寫入。
               </DialogDescription>
+              {target.mode !== "deliveryAddress" && <ScopeBadge sharingGroupId={target.sharingGroupId} />}
               {aiDemo && (
                 <p className="flex items-start gap-2 text-sm text-muted-foreground">
                   <Badge variant="secondary" className="shrink-0">示範模式</Badge>

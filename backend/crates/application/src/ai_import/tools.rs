@@ -43,6 +43,10 @@ pub async fn propose_delivery_address(
     ctx: &ImportToolContext,
     args: ProposeDeliveryAddressArgs,
 ) -> Result<serde_json::Value, ToolError> {
+    ctx.authorize().await?;
+    if ctx.sharing_group_id.is_some() {
+        return Err(ToolError("delivery addresses are private".into()));
+    }
     // Record only a proposal: the user must review and explicitly apply it.
     let mut proposal = ctx.proposal.lock().await;
     proposal.replace_target(ProposalTarget::DeliveryAddress(
@@ -96,10 +100,12 @@ pub struct RosterListItem {
 }
 
 pub async fn list_rosters(ctx: &ImportToolContext) -> Result<Vec<RosterListItem>, ToolError> {
+    ctx.authorize().await?;
     Ok(ctx
         .rosters
-        .list(ctx.organizer_id)
-        .await?
+        .list_scoped(ctx.organizer_id, ctx.sharing_group_id)
+        .await
+        .map_err(|e| ToolError(e.to_string()))?
         .into_iter()
         .map(|r| RosterListItem {
             id: r.id.to_string(),
@@ -140,10 +146,11 @@ pub async fn get_roster(
     ctx: &ImportToolContext,
     args: GetRosterArgs,
 ) -> Result<GetRosterOutput, ToolError> {
+    ctx.authorize().await?;
     let Some(id) = parse_id::<RosterId>(&args.roster_id) else {
         return Ok(GetRosterOutput::Error(not_found("roster")));
     };
-    Ok(match ctx.rosters.find(ctx.organizer_id, id).await? {
+    Ok(match ctx.find_roster(id).await? {
         None => GetRosterOutput::Error(not_found("roster")),
         Some(s) => GetRosterOutput::Found(RosterDetail {
             id: id.to_string(),
@@ -171,10 +178,12 @@ pub struct VendorListItem {
 }
 
 pub async fn list_vendors(ctx: &ImportToolContext) -> Result<Vec<VendorListItem>, ToolError> {
+    ctx.authorize().await?;
     Ok(ctx
         .vendors
-        .list(ctx.organizer_id)
-        .await?
+        .list_scoped(ctx.organizer_id, ctx.sharing_group_id)
+        .await
+        .map_err(|e| ToolError(e.to_string()))?
         .into_iter()
         .map(|v| VendorListItem {
             id: v.id.to_string(),
@@ -222,10 +231,11 @@ pub async fn get_vendor(
     ctx: &ImportToolContext,
     args: GetVendorArgs,
 ) -> Result<GetVendorOutput, ToolError> {
+    ctx.authorize().await?;
     let Some(id) = parse_id::<VendorId>(&args.vendor_id) else {
         return Ok(GetVendorOutput::Error(not_found("vendor")));
     };
-    Ok(match ctx.vendors.find(ctx.organizer_id, id).await? {
+    Ok(match ctx.find_vendor(id).await? {
         None => GetVendorOutput::Error(not_found("vendor")),
         Some(s) => {
             let v = &s.value;
@@ -412,6 +422,7 @@ pub async fn propose_roster_members(
     ctx: &ImportToolContext,
     args: ProposeRosterMembersArgs,
 ) -> Result<ProposalDiffSummary, ToolError> {
+    ctx.authorize().await?;
     let mut out = ProposalDiffSummary::default();
 
     // --- resolve the target ------------------------------------------------
@@ -423,7 +434,7 @@ pub async fn propose_roster_members(
                     "rosterId is malformed; use an id returned by list_rosters",
                 ));
             };
-            match ctx.rosters.find(ctx.organizer_id, id).await? {
+            match ctx.find_roster(id).await? {
                 None => {
                     return Ok(out.rejected(
                         "target.rosterId",
@@ -657,6 +668,7 @@ pub async fn propose_vendor(
     ctx: &ImportToolContext,
     args: ProposeVendorArgs,
 ) -> Result<ProposalDiffSummary, ToolError> {
+    ctx.authorize().await?;
     let mut out = ProposalDiffSummary::default();
 
     // --- info fields (validated first; invalid ones are dropped) ---------------
@@ -683,7 +695,7 @@ pub async fn propose_vendor(
                     "vendorId is malformed; use an id returned by list_vendors",
                 ));
             };
-            match ctx.vendors.find(ctx.organizer_id, id).await? {
+            match ctx.find_vendor(id).await? {
                 None => {
                     return Ok(out.rejected(
                         "target.vendorId",
@@ -708,10 +720,10 @@ pub async fn propose_vendor(
             };
             match ctx
                 .vendors
-                .find_id_by_name_key(ctx.organizer_id, &name.key())
+                .find_scoped_name(ctx.organizer_id, ctx.sharing_group_id, &name.key())
                 .await?
             {
-                Some(id) => match ctx.vendors.find(ctx.organizer_id, id).await? {
+                Some(id) => match ctx.find_vendor(id).await? {
                     Some(s) => {
                         out.notes.push(format!(
                             "A vendor named 「{}」 already exists, so that vendor is updated instead (no duplicate is created)",

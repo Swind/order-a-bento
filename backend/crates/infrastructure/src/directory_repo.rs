@@ -32,6 +32,39 @@ use sqlx::SqliteConnection;
 
 use crate::sqlite::Db;
 use crate::timefmt::{from_text, to_text};
+use domain::sharing::SharingGroupId;
+
+pub(crate) async fn scope_admin(
+    conn: &mut SqliteConnection,
+    actor: OrganizerId,
+    group: Option<SharingGroupId>,
+) -> RepoResult<()> {
+    if let Some(group) = group {
+        crate::sharing_repo::authorize(conn, actor, &group.to_string(), true)
+            .await
+            .map_err(|e| match e {
+                application::sharing::SharingError::Port(p) => RepoError::Port(p),
+                _ => RepoError::NotFound,
+            })?;
+    }
+    Ok(())
+}
+
+async fn access(
+    conn: &mut SqliteConnection,
+    actor: OrganizerId,
+    owner: &str,
+    group: Option<&str>,
+) -> PortResult<Option<bool>> {
+    match group {
+        None => Ok((owner == actor.to_string()).then_some(true)),
+        Some(g) => {
+            let r: Option<(String,)> = sqlx::query_as("SELECT role FROM sharing_group_members WHERE sharing_group_id=? AND organizer_id=?")
+                .bind(g).bind(actor.to_string()).fetch_optional(conn).await.map_err(port)?;
+            Ok(r.map(|(role,)| role == "admin"))
+        }
+    }
+}
 
 fn port(e: impl std::fmt::Display) -> PortError {
     PortError::new(e)
@@ -73,6 +106,8 @@ impl SqliteRosterRepo {
 
 #[derive(sqlx::FromRow)]
 struct RosterRow {
+    organizer_id: String,
+    sharing_group_id: Option<String>,
     id: String,
     name: String,
     updated_at: String,
@@ -86,19 +121,28 @@ struct MemberRow {
     sort_order: i32,
 }
 
-async fn load_roster(
+pub(crate) async fn load_roster(
     conn: &mut SqliteConnection,
     org: OrganizerId,
     id: RosterId,
 ) -> PortResult<Option<Stored<Roster>>> {
     let Some(row) = sqlx::query_as::<_, RosterRow>(
-        "SELECT id, name, updated_at FROM rosters WHERE id = ? AND organizer_id = ?",
+        "SELECT id, organizer_id, sharing_group_id, name, updated_at FROM rosters WHERE id = ?",
     )
     .bind(id.to_string())
-    .bind(org.to_string())
     .fetch_optional(&mut *conn)
     .await
     .map_err(port)?
+    else {
+        return Ok(None);
+    };
+    let Some(can_manage) = access(
+        conn,
+        org,
+        &row.organizer_id,
+        row.sharing_group_id.as_deref(),
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -120,13 +164,18 @@ async fn load_roster(
         })
     })
     .collect::<PortResult<Vec<_>>>()?;
-    let roster = Roster::from_parts(
+    let mut roster = Roster::from_parts(
         row.id.parse().map_err(port)?,
-        org,
+        row.organizer_id.parse().map_err(port)?,
         RosterName::new(&row.name).map_err(port)?,
         members,
     )
     .map_err(port)?;
+    roster.sharing_group_id = row
+        .sharing_group_id
+        .map(|s| s.parse().map_err(port))
+        .transpose()?;
+    roster.can_manage = can_manage;
     Ok(Some(Stored {
         value: roster,
         updated_at: ts(&row.updated_at)?,
@@ -164,16 +213,18 @@ pub(crate) async fn create_roster_tx(
     roster: Roster,
     now: SystemTime,
 ) -> RepoResult<Stored<Roster>> {
+    scope_admin(conn, roster.organizer_id(), roster.sharing_group_id).await?;
     let t = to_text(now);
     sqlx::query(
-        "INSERT INTO rosters (id, organizer_id, name, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO rosters (id, organizer_id, name, created_at, updated_at, sharing_group_id) \
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(roster.id().to_string())
     .bind(roster.organizer_id().to_string())
     .bind(roster.name().as_str())
     .bind(&t)
     .bind(&t)
+    .bind(roster.sharing_group_id.map(|g| g.to_string()))
     .execute(&mut *conn)
     .await
     .map_err(repo)?;
@@ -200,6 +251,9 @@ pub(crate) async fn modify_roster_tx(
         .await?
         .ok_or(RepoError::NotFound)?;
     let mut after = before.value.clone();
+    if !after.can_manage {
+        return Err(RepoError::NotFound);
+    }
     // On error the transaction is dropped, i.e. rolled back.
     let report = mutation(&mut after)?;
 
@@ -249,11 +303,60 @@ pub(crate) async fn modify_roster_tx(
 
 #[async_trait]
 impl RosterRepo for SqliteRosterRepo {
+    async fn check_scope(
+        &self,
+        actor: OrganizerId,
+        group: Option<SharingGroupId>,
+        write: bool,
+    ) -> RepoResult<()> {
+        if let Some(g) = group {
+            let mut tx = self.db.read.begin().await.map_err(port)?;
+            crate::sharing_repo::authorize(&mut tx, actor, &g.to_string(), write)
+                .await
+                .map_err(|e| match e {
+                    application::sharing::SharingError::Port(p) => RepoError::Port(p),
+                    _ => RepoError::NotFound,
+                })?;
+        }
+        Ok(())
+    }
+    async fn list_scoped(
+        &self,
+        org: OrganizerId,
+        group: Option<SharingGroupId>,
+    ) -> RepoResult<Vec<RosterSummary>> {
+        let mut tx = self.db.read.begin().await.map_err(port)?;
+        let can_manage = if let Some(g) = group {
+            crate::sharing_repo::authorize(&mut tx, org, &g.to_string(), false)
+                .await
+                .map_err(|e| match e {
+                    application::sharing::SharingError::Port(p) => RepoError::Port(p),
+                    _ => RepoError::NotFound,
+                })?
+                == "admin"
+        } else {
+            true
+        };
+        let rows: Vec<(String,String,i64,String)> = sqlx::query_as("SELECT r.id,r.name,(SELECT count(*) FROM roster_members m WHERE m.roster_id=r.id),r.updated_at FROM rosters r WHERE (r.sharing_group_id = ? OR (? IS NULL AND r.sharing_group_id IS NULL AND r.organizer_id=?)) ORDER BY r.updated_at DESC,r.id DESC")
+            .bind(group.map(|g|g.to_string())).bind(group.map(|g|g.to_string())).bind(org.to_string()).fetch_all(&mut *tx).await.map_err(port)?;
+        rows.into_iter()
+            .map(|(id, name, n, t)| {
+                Ok(RosterSummary {
+                    id: id.parse().map_err(port)?,
+                    name,
+                    member_count: n as u32,
+                    updated_at: ts(&t)?,
+                    sharing_group_id: group,
+                    can_manage,
+                })
+            })
+            .collect()
+    }
     async fn list(&self, org: OrganizerId) -> PortResult<Vec<RosterSummary>> {
         let rows = sqlx::query_as::<_, (String, String, i64, String)>(
             "SELECT r.id, r.name, (SELECT COUNT(*) FROM roster_members m WHERE m.roster_id = r.id), \
                     r.updated_at \
-             FROM rosters r WHERE r.organizer_id = ? ORDER BY r.updated_at DESC, r.id DESC",
+             FROM rosters r WHERE r.organizer_id = ? AND r.sharing_group_id IS NULL ORDER BY r.updated_at DESC, r.id DESC",
         )
         .bind(org.to_string())
         .fetch_all(&self.db.read)
@@ -262,6 +365,8 @@ impl RosterRepo for SqliteRosterRepo {
         rows.into_iter()
             .map(|(id, name, n, updated)| {
                 Ok(RosterSummary {
+                    sharing_group_id: None,
+                    can_manage: true,
                     id: id.parse().map_err(port)?,
                     name,
                     member_count: n as u32,
@@ -307,8 +412,9 @@ impl RosterRepo for SqliteRosterRepo {
     }
 
     async fn delete(&self, org: OrganizerId, id: RosterId) -> PortResult<bool> {
-        let r = sqlx::query("DELETE FROM rosters WHERE id = ? AND organizer_id = ?")
+        let r = sqlx::query("DELETE FROM rosters WHERE id = ? AND ((sharing_group_id IS NULL AND organizer_id = ?) OR EXISTS(SELECT 1 FROM sharing_group_members m WHERE m.sharing_group_id=rosters.sharing_group_id AND m.organizer_id=? AND m.role='admin'))")
             .bind(id.to_string())
+            .bind(org.to_string())
             .bind(org.to_string())
             .execute(&self.db.write)
             .await
@@ -334,6 +440,8 @@ impl SqliteVendorRepo {
 
 #[derive(sqlx::FromRow)]
 struct VendorRow {
+    organizer_id: String,
+    sharing_group_id: Option<String>,
     id: String,
     name: String,
     phone: Option<String>,
@@ -353,20 +461,29 @@ struct ItemRow {
     archived: bool,
 }
 
-async fn load_vendor(
+pub(crate) async fn load_vendor(
     conn: &mut SqliteConnection,
     org: OrganizerId,
     id: VendorId,
 ) -> PortResult<Option<Stored<Vendor>>> {
     let Some(row) = sqlx::query_as::<_, VendorRow>(
-        "SELECT id, name, phone, address, note, updated_at FROM vendors \
-         WHERE id = ? AND organizer_id = ?",
+        "SELECT id, organizer_id, sharing_group_id, name, phone, address, note, updated_at FROM vendors \
+         WHERE id = ?",
     )
     .bind(id.to_string())
-    .bind(org.to_string())
     .fetch_optional(&mut *conn)
     .await
     .map_err(port)?
+    else {
+        return Ok(None);
+    };
+    let Some(can_manage) = access(
+        conn,
+        org,
+        &row.organizer_id,
+        row.sharing_group_id.as_deref(),
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -391,9 +508,9 @@ async fn load_vendor(
         })
     })
     .collect::<PortResult<Vec<_>>>()?;
-    let vendor = Vendor::from_parts(
+    let mut vendor = Vendor::from_parts(
         row.id.parse().map_err(port)?,
-        org,
+        row.organizer_id.parse().map_err(port)?,
         VendorName::new(&row.name).map_err(port)?,
         row.phone,
         row.address,
@@ -401,6 +518,11 @@ async fn load_vendor(
         menu,
     )
     .map_err(port)?;
+    vendor.sharing_group_id = row
+        .sharing_group_id
+        .map(|s| s.parse().map_err(port))
+        .transpose()?;
+    vendor.can_manage = can_manage;
     Ok(Some(Stored {
         value: vendor,
         updated_at: ts(&row.updated_at)?,
@@ -444,10 +566,11 @@ pub(crate) async fn create_vendor_tx(
     vendor: Vendor,
     now: SystemTime,
 ) -> RepoResult<Stored<Vendor>> {
+    scope_admin(conn, vendor.organizer_id(), vendor.sharing_group_id).await?;
     let t = to_text(now);
     sqlx::query(
-        "INSERT INTO vendors (id, organizer_id, name, name_key, phone, address, note, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO vendors (id, organizer_id, name, name_key, phone, address, note, created_at, updated_at, sharing_group_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(vendor.id().to_string())
     .bind(vendor.organizer_id().to_string())
@@ -458,6 +581,7 @@ pub(crate) async fn create_vendor_tx(
     .bind(vendor.note())
     .bind(&t)
     .bind(&t)
+    .bind(vendor.sharing_group_id.map(|g|g.to_string()))
     .execute(&mut *conn)
     .await
     .map_err(repo)?;
@@ -484,6 +608,9 @@ pub(crate) async fn modify_vendor_tx(
         .await?
         .ok_or(RepoError::NotFound)?;
     let mut after = before.value.clone();
+    if !after.can_manage {
+        return Err(RepoError::NotFound);
+    }
     let report = mutation(&mut after)?;
 
     let old: HashMap<MenuItemId, &MenuItem> =
@@ -542,11 +669,54 @@ pub(crate) async fn modify_vendor_tx(
 
 #[async_trait]
 impl VendorRepo for SqliteVendorRepo {
+    async fn list_scoped(
+        &self,
+        org: OrganizerId,
+        group: Option<SharingGroupId>,
+    ) -> RepoResult<Vec<VendorSummary>> {
+        let mut tx = self.db.read.begin().await.map_err(port)?;
+        let can_manage = if let Some(g) = group {
+            crate::sharing_repo::authorize(&mut tx, org, &g.to_string(), false)
+                .await
+                .map_err(|e| match e {
+                    application::sharing::SharingError::Port(p) => RepoError::Port(p),
+                    _ => RepoError::NotFound,
+                })?
+                == "admin"
+        } else {
+            true
+        };
+        let rows: Vec<(String,String,Option<String>,i64,String)> = sqlx::query_as("SELECT v.id,v.name,v.phone,(SELECT count(*) FROM menu_items i WHERE i.vendor_id=v.id),v.updated_at FROM vendors v WHERE (v.sharing_group_id=? OR (? IS NULL AND v.sharing_group_id IS NULL AND v.organizer_id=?)) ORDER BY v.updated_at DESC,v.id DESC")
+            .bind(group.map(|g|g.to_string())).bind(group.map(|g|g.to_string())).bind(org.to_string()).fetch_all(&mut *tx).await.map_err(port)?;
+        rows.into_iter()
+            .map(|(id, name, phone, n, t)| {
+                Ok(VendorSummary {
+                    id: id.parse().map_err(port)?,
+                    name,
+                    phone,
+                    item_count: n as u32,
+                    updated_at: ts(&t)?,
+                    sharing_group_id: group,
+                    can_manage,
+                })
+            })
+            .collect()
+    }
+    async fn find_scoped_name(
+        &self,
+        org: OrganizerId,
+        group: Option<SharingGroupId>,
+        key: &NameKey,
+    ) -> PortResult<Option<VendorId>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT v.id FROM vendors v WHERE v.name_key=? AND ((v.sharing_group_id=? AND EXISTS(SELECT 1 FROM sharing_group_members m WHERE m.sharing_group_id=v.sharing_group_id AND m.organizer_id=?)) OR (? IS NULL AND v.sharing_group_id IS NULL AND v.organizer_id=?))")
+            .bind(key.as_str()).bind(group.map(|g|g.to_string())).bind(org.to_string()).bind(group.map(|g|g.to_string())).bind(org.to_string()).fetch_optional(&self.db.read).await.map_err(port)?;
+        row.map(|(s,)| s.parse().map_err(port)).transpose()
+    }
     async fn list(&self, org: OrganizerId) -> PortResult<Vec<VendorSummary>> {
         let rows = sqlx::query_as::<_, (String, String, Option<String>, i64, String)>(
             "SELECT v.id, v.name, v.phone, \
                     (SELECT COUNT(*) FROM menu_items i WHERE i.vendor_id = v.id), v.updated_at \
-             FROM vendors v WHERE v.organizer_id = ? ORDER BY v.updated_at DESC, v.id DESC",
+             FROM vendors v WHERE v.organizer_id = ? AND v.sharing_group_id IS NULL ORDER BY v.updated_at DESC, v.id DESC",
         )
         .bind(org.to_string())
         .fetch_all(&self.db.read)
@@ -555,6 +725,8 @@ impl VendorRepo for SqliteVendorRepo {
         rows.into_iter()
             .map(|(id, name, phone, n, updated)| {
                 Ok(VendorSummary {
+                    sharing_group_id: None,
+                    can_manage: true,
                     id: id.parse().map_err(port)?,
                     name,
                     phone,
@@ -576,7 +748,7 @@ impl VendorRepo for SqliteVendorRepo {
         key: &NameKey,
     ) -> PortResult<Option<VendorId>> {
         sqlx::query_as::<_, (String,)>(
-            "SELECT id FROM vendors WHERE organizer_id = ? AND name_key = ?",
+            "SELECT id FROM vendors WHERE organizer_id = ? AND name_key = ? AND sharing_group_id IS NULL",
         )
         .bind(org.to_string())
         .bind(key.as_str())
@@ -618,8 +790,9 @@ impl VendorRepo for SqliteVendorRepo {
     }
 
     async fn delete(&self, org: OrganizerId, id: VendorId) -> PortResult<bool> {
-        let r = sqlx::query("DELETE FROM vendors WHERE id = ? AND organizer_id = ?")
+        let r = sqlx::query("DELETE FROM vendors WHERE id = ? AND ((sharing_group_id IS NULL AND organizer_id = ?) OR EXISTS(SELECT 1 FROM sharing_group_members m WHERE m.sharing_group_id=vendors.sharing_group_id AND m.organizer_id=? AND m.role='admin'))")
             .bind(id.to_string())
+            .bind(org.to_string())
             .bind(org.to_string())
             .execute(&self.db.write)
             .await

@@ -262,6 +262,7 @@ pub struct UsageDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportRunDto {
+    pub sharing_group_id: Option<String>,
     pub id: String,
     pub status: ImportRunStatusDto,
     /// What the user chose to upload. `null` only for runs created before the
@@ -287,6 +288,7 @@ impl From<&ImportRunView> for ImportRunDto {
     fn from(r: &ImportRunView) -> Self {
         Self {
             id: r.id.to_string(),
+            sharing_group_id: r.sharing_group_id.map(|g| g.to_string()),
             status: match r.status {
                 ImportRunStatus::Running => ImportRunStatusDto::Running,
                 ImportRunStatus::Proposed => ImportRunStatusDto::Proposed,
@@ -323,6 +325,7 @@ impl From<&ImportRunView> for ImportRunDto {
 #[allow(dead_code)]
 #[schema(rename_all = "camelCase")]
 pub struct StartImportForm {
+    sharing_group_id: Option<String>,
     /// JPEG, PNG or WebP, at most 5 MB (detected from the bytes, not the file name).
     #[schema(value_type = String, format = Binary)]
     image: Vec<u8>,
@@ -536,6 +539,7 @@ pub async fn start_import(
     let mut mode = None;
     let mut target_roster = None;
     let mut target_vendor = None;
+    let mut sharing_group = None;
     while let Some(field) = mp.next_field().await.map_err(multipart_error)? {
         let name = field.name().unwrap_or_default().to_owned();
         match name.as_str() {
@@ -546,12 +550,13 @@ pub async fn start_import(
                 }
                 image = Some(bytes.to_vec());
             }
-            "instruction" | "mode" | "targetRosterId" | "targetVendorId" => {
+            "instruction" | "mode" | "targetRosterId" | "targetVendorId" | "sharingGroupId" => {
                 let text = blank_to_none(field.text().await.map_err(multipart_error)?);
                 match name.as_str() {
                     "instruction" => instruction = text,
                     "mode" => mode = text,
                     "targetRosterId" => target_roster = text,
+                    "sharingGroupId" => sharing_group = text,
                     _ => target_vendor = text,
                 }
             }
@@ -599,6 +604,7 @@ pub async fn start_import(
         .start(
             o.id,
             StartImportCmd {
+                sharing_group_id: sharing_group.as_deref().map(parse_id).transpose()?,
                 image: ImageInput {
                     bytes: image,
                     media_type: media_type.into(),

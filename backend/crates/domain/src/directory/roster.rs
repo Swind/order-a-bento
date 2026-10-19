@@ -35,6 +35,8 @@ pub struct MemberEdit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Roster {
+    pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
+    pub can_manage: bool,
     id: RosterId,
     organizer_id: OrganizerId,
     name: RosterName,
@@ -47,6 +49,8 @@ impl Roster {
     pub fn new(organizer_id: OrganizerId, name: &str) -> Result<Self, DomainError> {
         Ok(Self {
             id: RosterId::new(),
+            sharing_group_id: None,
+            can_manage: true,
             organizer_id,
             name: RosterName::new(name)?,
             members: Vec::new(),
@@ -78,6 +82,8 @@ impl Roster {
         }
         Ok(Self {
             id,
+            sharing_group_id: None,
+            can_manage: true,
             organizer_id,
             name,
             members,

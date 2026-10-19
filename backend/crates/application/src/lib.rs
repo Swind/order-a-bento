@@ -23,3 +23,4 @@ pub use ordering::{
     GroupSummary, OpenGroupCmd, OrderingError, OrderingService, OrganizerSubmitCmd,
     PublicGroupView, SubmitOrderCmd, UpdateGroupCmd,
 };
+pub mod sharing;

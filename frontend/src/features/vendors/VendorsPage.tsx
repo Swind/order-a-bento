@@ -1,6 +1,6 @@
 import { Plus, Store } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage, fieldError } from "@/shared/api/errors";
@@ -21,10 +21,12 @@ import { Label } from "@/shared/ui/label";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Textarea } from "@/shared/ui/textarea";
 import { useCreateVendor, useVendors } from "./hooks";
+import { ScopeBadge, ScopeSelect } from "@/features/sharing-groups/ScopeSelect";
+import { useSharingGroups } from "@/features/sharing-groups/hooks";
 
 const FIELDS = ["name", "phone", "address", "note"] as const;
 
-function CreateVendorDialog() {
+function CreateVendorDialog({ sharingGroupId }: { sharingGroupId?: string }) {
   const [open, setOpen] = useState(false);
   const [v, setV] = useState({ name: "", phone: "", address: "", note: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -49,6 +51,7 @@ function CreateVendorDialog() {
         phone: opt(v.phone),
         address: opt(v.address),
         note: opt(v.note),
+        ...(sharingGroupId ? { sharingGroupId } : {}),
       },
       {
         onSuccess: (data) => {
@@ -79,6 +82,8 @@ function CreateVendorDialog() {
         <form onSubmit={submit} className="grid gap-3">
           <DialogHeader>
             <DialogTitle>新增店家</DialogTitle>
+            <ScopeBadge sharingGroupId={sharingGroupId} />
+            <p className="text-sm text-muted-foreground">建立後無法變更資料範圍。</p>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="vendor-name">店家名稱</Label>
@@ -140,14 +145,20 @@ function CreateVendorDialog() {
 }
 
 export function VendorsPage() {
-  const vendors = useVendors();
+  const [search, setSearch] = useSearchParams();
+  const scope = search.get("sharingGroupId") ?? "";
+  const setScope = (value: string) => setSearch(value ? { sharingGroupId: value } : {});
+  const groups = useSharingGroups();
+  const vendors = useVendors(scope || undefined);
+  const canManage = !scope || (!groups.isError && groups.data?.find((group) => group.id === scope)?.role === "admin");
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold">店家</h1>
-        <CreateVendorDialog />
+        {canManage && <CreateVendorDialog key={scope} sharingGroupId={scope || undefined} />}
       </div>
-      <ImportButton label="📷 從傳單建立店家" mode="vendor" />
+      <ScopeSelect value={scope} onChange={setScope} />
+      {canManage ? <ImportButton key={scope} label="📷 從傳單建立店家" mode="vendor" sharingGroupId={scope || undefined} /> : <p className="text-sm text-muted-foreground">唯讀：可查看並選用開團，只有群組管理員可修改。</p>}
       {vendors.isPending && (
         <div className="space-y-3" aria-busy="true">
           <Skeleton className="h-16 w-full" />
@@ -171,13 +182,14 @@ export function VendorsPage() {
         </div>
       )}
       <ul className="grid gap-3 sm:grid-cols-2">
-        {vendors.data?.map((v) => (
+        {!vendors.isError && vendors.data?.map((v) => (
           <li key={v.id}>
             <Link to={`/vendors/${v.id}`} className="block rounded-xl focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
               <Card className="transition-colors hover:bg-muted/50">
                 <CardContent className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-base font-medium">{v.name}</p>
+                    <p className="text-xs text-muted-foreground">{scope ? `共用群組：${groups.data?.find((group) => group.id === scope)?.name ?? scope}` : "個人"}{v.canManage === false ? " · 唯讀" : ""}</p>
                     <p className="truncate text-sm text-muted-foreground">{v.phone || "未填電話"}</p>
                   </div>
                   <span className="shrink-0 text-sm">{v.itemCount} 項</span>

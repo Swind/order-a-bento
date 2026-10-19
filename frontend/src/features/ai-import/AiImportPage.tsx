@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useAuthConfig } from "@/features/auth/hooks";
 import { useRoster } from "@/features/rosters/hooks";
 import { DeliveryAddressImportConfirmation } from "@/features/delivery-addresses/ImportConfirmation";
+import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import type { ImportRun } from "@/shared/api/types";
@@ -44,7 +45,8 @@ function originPath(run: ImportRun): string {
   if (run.mode === "deliveryAddress") return "/delivery-addresses";
   if (run.targetRosterId) return `/rosters/${run.targetRosterId}`;
   if (run.targetVendorId) return `/vendors/${run.targetVendorId}`;
-  return run.mode === "vendor" ? "/vendors" : "/rosters";
+  const path = run.mode === "vendor" ? "/vendors" : "/rosters";
+  return run.sharingGroupId ? `${path}?sharingGroupId=${encodeURIComponent(run.sharingGroupId)}` : path;
 }
 
 function DemoBadge() {
@@ -159,6 +161,7 @@ function ConfirmView({ run, demo }: { run: ImportRun; demo: boolean }) {
           <h1 className="text-2xl font-bold">AI 匯入確認</h1>
           {demo && <DemoBadge />}
         </div>
+        <ScopeBadge sharingGroupId={run.sharingGroupId} />
         {run.summary && (
           <p className="rounded-lg bg-muted p-3 text-sm">
             <span className="font-medium">AI 摘要：</span>
@@ -288,7 +291,10 @@ function Finished({ run }: { run: ImportRun }) {
   }
   if (links.length === 0 && run.status === "applied") {
     const t = run.proposal.targets[0];
-    links.push(run.mode === "deliveryAddress" ? { to: "/delivery-addresses", label: "前往送餐地址" } : t?.type === "vendor" ? { to: "/vendors", label: "前往店家" } : { to: "/rosters", label: "前往名單" });
+    links.push({
+      to: originPath(run),
+      label: run.mode === "deliveryAddress" ? "前往送餐地址" : t?.type === "vendor" ? "前往店家" : "前往名單",
+    });
   }
   return (
     <div className="space-y-3">

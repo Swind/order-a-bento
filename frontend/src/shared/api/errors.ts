@@ -16,6 +16,9 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const MESSAGES: Record<string, string> = {
+  last_admin: "不能移除或降級最後一位管理員，請先指定其他管理員",
+  last_group_admin: "不能移除或降級最後一位管理員，請先指定其他管理員",
+  already_member: "此使用者已是群組成員",
   unauthorized: "請先登入",
   forbidden: "沒有權限執行此操作",
   bad_origin: "請求來源不被允許，請重新整理頁面後再試",
@@ -68,6 +71,7 @@ export function errorMessage(err: unknown): string {
   }
   if (err.status === 429) return MESSAGES.rate_limited;
   if (err.status === 401) return MESSAGES.unauthorized;
+  if (err.status === 403) return MESSAGES.forbidden;
   if (err.status === 404) return MESSAGES.not_found;
   if (err.status >= 500) return MESSAGES.internal_error;
   return FALLBACK_MESSAGE;

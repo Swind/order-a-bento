@@ -2,8 +2,8 @@ import { Check } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { useRosters } from "@/features/rosters/hooks";
-import { useVendors } from "@/features/vendors/hooks";
+import { useAccessibleDirectory } from "@/features/sharing-groups/hooks";
+import type { RosterSummary, VendorSummary } from "@/shared/api/types";
 import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage, fieldError } from "@/shared/api/errors";
@@ -55,6 +55,7 @@ function ChoiceRow({
   title,
   meta,
   hint,
+  sourceLabel,
   onSelect,
 }: {
   selected: boolean;
@@ -62,6 +63,7 @@ function ChoiceRow({
   title: string;
   meta: string;
   hint?: string;
+  sourceLabel?: string;
   onSelect: () => void;
 }) {
   return (
@@ -78,6 +80,7 @@ function ChoiceRow({
     >
       <span className="min-w-0">
         <span className="block truncate text-base font-medium">{title}</span>
+        {sourceLabel && <span className="block text-xs text-muted-foreground">{sourceLabel}</span>}
         {hint && <span className="block text-sm text-muted-foreground">{hint}</span>}
       </span>
       <span className="shrink-0 text-sm">{meta}</span>
@@ -126,8 +129,8 @@ function ListState({
 
 export function NewGroupOrderPage() {
   const navigate = useNavigate();
-  const rosters = useRosters();
-  const vendors = useVendors();
+  const rosters = useAccessibleDirectory<RosterSummary>("rosters");
+  const vendors = useAccessibleDirectory<VendorSummary>("vendors");
   const create = useCreateGroupOrder();
 
   const [step, setStep] = useState(0);
@@ -224,6 +227,7 @@ export function NewGroupOrderPage() {
                   selected={rosterId === r.id}
                   disabled={r.memberCount === 0}
                   title={r.name}
+                  sourceLabel={r.sourceLabel}
                   meta={`${r.memberCount} 人`}
                   hint={r.memberCount === 0 ? "此名單沒有成員，請先新增成員" : undefined}
                   onSelect={() => setRosterId(r.id)}
@@ -249,6 +253,7 @@ export function NewGroupOrderPage() {
                   selected={vendorId === v.id}
                   disabled={v.itemCount === 0}
                   title={v.name}
+                  sourceLabel={v.sourceLabel}
                   meta={`${v.itemCount} 個品項`}
                   hint={v.itemCount === 0 ? "此店家沒有品項，請先新增菜單" : undefined}
                   onSelect={() => setVendorId(v.id)}

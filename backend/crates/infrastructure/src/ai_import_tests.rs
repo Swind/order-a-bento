@@ -170,6 +170,7 @@ fn vargs(v: serde_json::Value) -> ProposeVendorArgs {
 }
 fn cmd() -> StartImportCmd {
     StartImportCmd {
+        sharing_group_id: None,
         image: ImageInput {
             bytes: vec![1, 2, 3],
             media_type: "image/jpeg".into(),
@@ -925,6 +926,498 @@ async fn agent_timeout_fails_the_run() {
 // ===========================================================================
 // service: apply / discard
 // ===========================================================================
+
+#[tokio::test]
+async fn shared_import_is_actor_and_scope_bound_and_rechecks_admin_on_apply() {
+    use application::ports::{ImportApplyRepo, ImportApplyStep};
+    use application::sharing::SharingRepo;
+    let e = env().await;
+    let groups = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+    let g = groups.create(e.org, "Team").await.unwrap();
+    let g2 = groups.create(e.org, "Other").await.unwrap();
+    groups.add(e.org, g.id, e.other, "admin").await.unwrap();
+    let svc = e.service(Arc::new(FakeImportAgent::empty()), 100);
+    let mut command = cmd();
+    command.sharing_group_id = Some(g.id);
+    let run = svc.start(e.org, command.clone()).await.unwrap();
+    assert_eq!(
+        svc.get(e.org, run.id).await.unwrap().sharing_group_id,
+        Some(g.id)
+    );
+    assert!(matches!(
+        svc.get(e.other, run.id).await,
+        Err(AiImportError::NotFound)
+    ));
+    assert!(matches!(
+        svc.apply(e.other, run.id, ApplyCmd::default()).await,
+        Err(AiImportError::NotFound)
+    ));
+    let private = e.roster(e.org, "Private", &[("A", None)]).await;
+    let mut other = Roster::new(e.org, "Other").unwrap();
+    other.sharing_group_id = Some(g2.id);
+    let other = e
+        .rosters
+        .create(other, SystemTime::now())
+        .await
+        .unwrap()
+        .value
+        .id();
+    for target in [private, other] {
+        let mut bad = command.clone();
+        bad.target_roster_id = Some(target);
+        assert!(matches!(
+            svc.start(e.org, bad).await,
+            Err(AiImportError::NotFound)
+        ));
+        assert!(matches!(
+            svc.apply(
+                e.org,
+                run.id,
+                ApplyCmd {
+                    accepted: vec![acc_roster(
+                        TargetRef::Existing {
+                            existing_id: target
+                        },
+                        &[("Injected", None)]
+                    )]
+                }
+            )
+            .await,
+            Err(AiImportError::InvalidChanges(_))
+        ));
+    }
+    // Successful creates inherit the draft scope, never a caller-selected scope.
+    let applied = svc
+        .apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: vec![
+                    acc_roster(
+                        TargetRef::New {
+                            name: "Imported".into(),
+                        },
+                        &[("Alice", None)],
+                    ),
+                    acc_vendor(
+                        TargetRef::New {
+                            name: "Cafe".into(),
+                        },
+                        info("Cafe", None, None),
+                        &[("Rice", Some(80))],
+                    ),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+    let rid = applied.roster_ids[0];
+    assert_eq!(
+        e.rosters
+            .find(e.other, rid)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .sharing_group_id,
+        Some(g.id)
+    );
+    let vid = applied.vendor_ids[0];
+    assert_eq!(
+        e.vendors
+            .find(e.other, vid)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .sharing_group_id,
+        Some(g.id)
+    );
+    let mut existing = command.clone();
+    existing.target_roster_id = Some(rid);
+    let pending = svc.start(e.org, existing.clone()).await.unwrap();
+    groups
+        .change(e.other, g.id, e.org, Some("member"))
+        .await
+        .unwrap();
+    assert!(
+        svc.get(e.org, pending.id).await.is_ok(),
+        "member may read own draft"
+    );
+    assert!(matches!(
+        svc.start(e.org, existing).await,
+        Err(AiImportError::NotFound)
+    ));
+    assert!(matches!(
+        svc.apply(e.org, pending.id, ApplyCmd::default()).await,
+        Err(AiImportError::NotFound)
+    ));
+    let mut in_memory = pending.clone();
+    in_memory.apply(SystemTime::now()).unwrap();
+    let mut bypass = Roster::new(e.org, "Bypass").unwrap();
+    bypass.sharing_group_id = Some(g.id);
+    assert!(
+        e.runs
+            .apply(&in_memory, vec![ImportApplyStep::CreateRoster(bypass)])
+            .await
+            .is_err(),
+        "transaction rechecks even an already-prepared apply"
+    );
+    groups.change(e.other, g.id, e.org, None).await.unwrap();
+    assert!(matches!(
+        svc.get(e.org, pending.id).await,
+        Err(AiImportError::NotFound)
+    ));
+    assert!(matches!(
+        svc.apply(e.org, pending.id, ApplyCmd::default()).await,
+        Err(AiImportError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn import_tools_cannot_escape_scope_and_recheck_revocation() {
+    use application::sharing::SharingRepo;
+    let e = env().await;
+    let groups = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+    let g = groups.create(e.org, "Team").await.unwrap();
+    groups.add(e.org, g.id, e.other, "admin").await.unwrap();
+    let private = e.roster(e.org, "Private", &[("Secret", None)]).await;
+    let private_vendor = e.vendor(e.org, "Private", None, &[("Rice", 80)]).await;
+    let mut r = Roster::new(e.other, "Shared").unwrap();
+    r.sharing_group_id = Some(g.id);
+    let shared = e
+        .rosters
+        .create(r, SystemTime::now())
+        .await
+        .unwrap()
+        .value
+        .id();
+    let mut ctx = e.ctx(e.org);
+    ctx.sharing_group_id = Some(g.id);
+    assert_eq!(tools::list_rosters(&ctx).await.unwrap().len(), 1);
+    assert!(tools::list_vendors(&ctx).await.unwrap().is_empty());
+    assert!(matches!(
+        tools::get_roster(
+            &ctx,
+            GetRosterArgs {
+                roster_id: private.to_string()
+            }
+        )
+        .await
+        .unwrap(),
+        GetRosterOutput::Error(_)
+    ));
+    assert!(matches!(
+        tools::get_vendor(
+            &ctx,
+            GetVendorArgs {
+                vendor_id: private_vendor.to_string()
+            }
+        )
+        .await
+        .unwrap(),
+        GetVendorOutput::Error(_)
+    ));
+    assert!(
+        !tools::propose_roster_members(
+            &ctx,
+            rargs(json!({"target":{"rosterId":private.to_string()},"members":[{"name":"No"}]}))
+        )
+        .await
+        .unwrap()
+        .recorded
+    );
+    assert!(!tools::propose_vendor(&ctx,vargs(json!({"target":{"vendorId":private_vendor.to_string()},"info":{"name":"No"},"menuItems":[]}))).await.unwrap().recorded);
+    assert!(
+        tools::propose_roster_members(
+            &ctx,
+            rargs(json!({"target":{"rosterId":shared.to_string()},"members":[{"name":"Yes"}]}))
+        )
+        .await
+        .unwrap()
+        .recorded
+    );
+    groups.change(e.other, g.id, e.org, None).await.unwrap();
+    assert!(tools::list_rosters(&ctx).await.is_err());
+    assert!(tools::list_vendors(&ctx).await.is_err());
+    assert!(
+        tools::get_roster(
+            &ctx,
+            GetRosterArgs {
+                roster_id: shared.to_string()
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        tools::propose_vendor(
+            &ctx,
+            vargs(json!({"target":"new","info":{"name":"No"},"menuItems":[]}))
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn shared_vendor_import_targets_and_same_name_matching_stay_in_draft_scope() {
+    use application::sharing::SharingRepo;
+    let e = env().await;
+    let groups = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+    let first = groups.create(e.org, "First").await.unwrap();
+    let second = groups.create(e.org, "Second").await.unwrap();
+    let empty = groups.create(e.org, "Empty").await.unwrap();
+    let svc = e.service(Arc::new(FakeImportAgent::empty()), 100);
+    let scopes = [None, Some(first.id), Some(second.id)];
+    let mut vendors = Vec::new();
+    for scope in scopes {
+        let mut vendor = Vendor::new(e.org, "Cafe").unwrap();
+        vendor.sharing_group_id = scope;
+        vendor
+            .upsert_menu_items(vec![MenuItemInput {
+                name: "Rice".into(),
+                price: 80,
+                description: None,
+                category: None,
+            }])
+            .unwrap();
+        vendors.push(
+            e.vendors
+                .create(vendor, SystemTime::now())
+                .await
+                .unwrap()
+                .value,
+        );
+    }
+    for (i, scope) in scopes.into_iter().enumerate() {
+        let mut command = cmd();
+        command.mode = ImportMode::Vendor;
+        command.sharing_group_id = scope;
+        command.target_vendor_id = Some(vendors[i].id());
+        let run = svc.start(e.org, command.clone()).await.unwrap();
+        for (j, vendor) in vendors.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let mut bad_start = command.clone();
+            bad_start.target_vendor_id = Some(vendor.id());
+            assert!(matches!(
+                svc.start(e.org, bad_start).await,
+                Err(AiImportError::NotFound)
+            ));
+            assert!(matches!(
+                svc.apply(
+                    e.org,
+                    run.id,
+                    ApplyCmd {
+                        accepted: vec![acc_vendor(
+                            TargetRef::Existing {
+                                existing_id: vendor.id()
+                            },
+                            info("Cafe", Some("Injected"), None),
+                            &[("Rice", Some(999))],
+                        )],
+                    }
+                )
+                .await,
+                Err(AiImportError::InvalidChanges(_))
+            ));
+            assert_eq!(
+                svc.get(e.org, run.id).await.unwrap().status,
+                ImportRunStatus::Proposed
+            );
+            assert_eq!(
+                e.vendors
+                    .find(e.org, vendor.id())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                *vendor
+            );
+        }
+        // A "new" target with the same normalized name must resolve only in
+        // this draft's namespace, even when all three namespaces contain it.
+        let price = 100 + i as i64;
+        let result = svc
+            .apply(
+                e.org,
+                run.id,
+                ApplyCmd {
+                    accepted: vec![acc_vendor(
+                        TargetRef::New {
+                            name: " cafe ".into(),
+                        },
+                        info(" cafe ", None, None),
+                        &[("Rice", Some(price))],
+                    )],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.vendor_ids, [vendors[i].id()]);
+        vendors[i] = e
+            .vendors
+            .find(e.org, vendors[i].id())
+            .await
+            .unwrap()
+            .unwrap()
+            .value;
+        assert_eq!(vendors[i].sharing_group_id, scope);
+        assert_eq!(vendors[i].menu()[0].price.get(), price);
+        for vendor in &vendors {
+            assert_eq!(
+                e.vendors
+                    .find(e.org, vendor.id())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                *vendor
+            );
+        }
+    }
+    // No match in a fourth scope must create there, never fall back to a
+    // same-name private or other-group vendor.
+    let mut command = cmd();
+    command.mode = ImportMode::Vendor;
+    command.sharing_group_id = Some(empty.id);
+    let run = svc.start(e.org, command).await.unwrap();
+    let result = svc
+        .apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: vec![acc_vendor(
+                    TargetRef::New {
+                        name: "Cafe".into(),
+                    },
+                    info("Cafe", None, None),
+                    &[("Rice", Some(200))],
+                )],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.vendor_ids.len(), 1);
+    assert!(
+        vendors
+            .iter()
+            .all(|vendor| vendor.id() != result.vendor_ids[0])
+    );
+    let created = e
+        .vendors
+        .find(e.org, result.vendor_ids[0])
+        .await
+        .unwrap()
+        .unwrap()
+        .value;
+    assert_eq!(created.sharing_group_id, Some(empty.id));
+    assert_eq!(created.menu()[0].price.get(), 200);
+    for vendor in &vendors {
+        assert_eq!(
+            e.vendors
+                .find(e.org, vendor.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .value,
+            *vendor
+        );
+    }
+}
+
+#[tokio::test]
+async fn shared_draft_cannot_create_private_address_or_touch_another_scope_in_transaction() {
+    use application::ports::{ImportApplyRepo, ImportApplyStep};
+    use application::sharing::SharingRepo;
+    let e = env().await;
+    let groups = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+    let g = groups.create(e.org, "Team").await.unwrap();
+    let svc = e.service(Arc::new(FakeImportAgent::empty()), 100);
+    let mut c = cmd();
+    c.sharing_group_id = Some(g.id);
+    c.mode = ImportMode::DeliveryAddress;
+    assert!(svc.start(e.org, c.clone()).await.is_err());
+    c.mode = ImportMode::Roster;
+    let run = svc.start(e.org, c).await.unwrap();
+    assert!(
+        svc.apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: vec![AcceptedChange::DeliveryAddress(
+                    application::ai_import::AcceptedDeliveryAddress {
+                        name: "Home".into(),
+                        address: "Address".into()
+                    }
+                )]
+            }
+        )
+        .await
+        .is_err()
+    );
+    let private = e.roster(e.org, "Private", &[("A", None)]).await;
+    let mut applied = run.clone();
+    applied.apply(SystemTime::now()).unwrap();
+    let address = domain::directory::DeliveryAddress::new(e.org, "Home", "Address").unwrap();
+    let mut preceding = Roster::new(e.org, "Must roll back").unwrap();
+    preceding.sharing_group_id = Some(g.id);
+    let preceding_id = preceding.id();
+    assert!(matches!(
+        e.runs
+            .apply(
+                &applied,
+                vec![
+                    ImportApplyStep::CreateRoster(preceding),
+                    ImportApplyStep::CreateDeliveryAddress(address),
+                ]
+            )
+            .await,
+        Err(application::ports::RepoError::NotFound)
+    ));
+    assert_eq!(
+        svc.get(e.org, run.id).await.unwrap().status,
+        ImportRunStatus::Proposed
+    );
+    assert!(e.rosters.find(e.org, preceding_id).await.unwrap().is_none());
+    let (address_count,): (i64,) = sqlx::query_as("SELECT count(*) FROM delivery_addresses")
+        .fetch_one(&e.db.read)
+        .await
+        .unwrap();
+    assert_eq!(address_count, 0);
+    assert!(
+        e.runs
+            .apply(
+                &applied,
+                vec![ImportApplyStep::ModifyRoster {
+                    id: private,
+                    mutation: Box::new(|r| {
+                        r.rename("Hacked")?;
+                        Ok(None)
+                    })
+                }]
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        svc.get(e.org, run.id).await.unwrap().status,
+        ImportRunStatus::Proposed
+    );
+    assert_eq!(
+        e.rosters
+            .find(e.org, private)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .name()
+            .as_str(),
+        "Private"
+    );
+}
 
 fn acc_roster(target: TargetRef<RosterId>, members: &[(&str, Option<&str>)]) -> AcceptedChange {
     AcceptedChange::Roster(AcceptedRoster {

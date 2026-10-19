@@ -19,3 +19,6 @@ mod directory_tests;
 mod management_tests;
 #[cfg(test)]
 mod ordering_tests;
+pub mod sharing_groups;
+#[cfg(test)]
+mod sharing_tests;

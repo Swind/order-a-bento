@@ -1,8 +1,9 @@
 //! `/rosters`: roster and member management.
 
+use super::sharing_groups::SharingScopeQuery;
 use application::ports::{Modified, RosterSummary, Stored};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use domain::directory::{
     MemberEdit, MemberInput, Roster, RosterId, RosterMemberId, UpsertOutcome, UpsertReport,
@@ -23,6 +24,8 @@ use crate::state::AppState;
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RosterSummaryDto {
+    pub sharing_group_id: Option<String>,
+    pub can_manage: bool,
     pub id: String,
     pub name: String,
     pub member_count: u32,
@@ -33,6 +36,8 @@ impl From<RosterSummary> for RosterSummaryDto {
     fn from(s: RosterSummary) -> Self {
         Self {
             id: s.id.to_string(),
+            sharing_group_id: s.sharing_group_id.map(|g| g.to_string()),
+            can_manage: s.can_manage,
             name: s.name,
             member_count: s.member_count,
             updated_at: time_text(s.updated_at),
@@ -52,6 +57,8 @@ pub struct MemberDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RosterDetail {
+    pub sharing_group_id: Option<String>,
+    pub can_manage: bool,
     pub id: String,
     pub name: String,
     pub updated_at: String,
@@ -67,6 +74,8 @@ impl From<&Stored<Roster>> for RosterDetail {
         members.sort_by_key(|m| m.sort_order);
         Self {
             id: r.id().to_string(),
+            sharing_group_id: r.sharing_group_id.map(|g| g.to_string()),
+            can_manage: r.can_manage,
             name: r.name().to_string(),
             updated_at: time_text(s.updated_at),
             members: members
@@ -147,6 +156,7 @@ fn inputs(members: Vec<MemberInputDto>) -> (Vec<String>, Vec<MemberInput>) {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateRosterRequest {
+    pub sharing_group_id: Option<String>,
     pub name: String,
     #[serde(default)]
     pub members: Vec<MemberInputDto>,
@@ -197,16 +207,19 @@ fn rid(s: &str) -> Result<RosterId, AppError> {
 
 /// List rosters, newest updated first.
 #[utoipa::path(get, path = "/rosters", tag = TAG_DIRECTORY, security(("cookieAuth" = [])),
+    params(SharingScopeQuery),
     responses((status = 200, body = Vec<RosterSummaryDto>), (status = 401, description = "Not logged in", body = ProblemDetails, content_type = "application/problem+json")))]
 pub async fn list_rosters(
     State(state): State<AppState>,
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Query(scope): Query<SharingScopeQuery>,
 ) -> Result<Json<Vec<RosterSummaryDto>>, AppError> {
     let list = state
         .directory
-        .list_rosters(o.id)
+        .rosters
+        .list_scoped(o.id, scope.group()?)
         .await
-        .map_err(directory_error)?;
+        .map_err(|e| directory_error(e.into()))?;
     Ok(Json(list.into_iter().map(Into::into).collect()))
 }
 
@@ -222,7 +235,12 @@ pub async fn create_roster(
     let (names, members) = inputs(req.members);
     let Modified { stored, report } = state
         .directory
-        .create_roster(o.id, &req.name, members)
+        .create_roster_scoped(
+            o.id,
+            req.sharing_group_id.as_deref().map(parse_id).transpose()?,
+            &req.name,
+            members,
+        )
         .await
         .map_err(directory_error)?;
     Ok((

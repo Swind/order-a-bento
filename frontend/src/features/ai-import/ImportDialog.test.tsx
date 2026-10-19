@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderApp } from "@/test/render";
 import { ME, problem, server } from "@/test/server";
 import { AUTH_CONFIG, ROSTER_RUN } from "./fixtures";
+import { startImport } from "./hooks";
 
 vi.mock("@/shared/lib/compressImage", () => ({
   compressImage: async () => new Blob(["jpegdata"], { type: "image/jpeg" }),
@@ -69,6 +70,40 @@ describe("ImportDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("這張照片無法辨識，請改用手動輸入");
     expect(screen.queryByRole("button", { name: "重試" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a shared target scope through upload and confirmation", async () => {
+    setup();
+    const sharedRun = { ...ROSTER_RUN, sharingGroupId: "s1" };
+    let form: FormData | undefined;
+    server.use(
+      http.get("*/api/v1/sharing-groups", () => HttpResponse.json([{ id: "s1", name: "午餐同好", role: "admin" }])),
+      http.get("*/api/v1/rosters/r1", () => HttpResponse.json({ ...roster, sharingGroupId: "s1", canManage: true })),
+      http.get("*/api/v1/ai/import-runs/run1", () => HttpResponse.json(sharedRun)),
+      http.post("*/api/v1/ai/import-runs", async ({ request }) => {
+        form = await request.formData();
+        return HttpResponse.json(sharedRun, { status: 201 });
+      }),
+    );
+    renderApp("/rosters/r1");
+    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入" }));
+    await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
+    await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
+    await screen.findByRole("heading", { name: "AI 匯入確認" });
+    expect(form!.get("sharingGroupId")).toBe("s1");
+    expect(form!.get("targetRosterId")).toBe("r1");
+    expect(screen.getByText("共用群組：午餐同好")).toBeInTheDocument();
+  });
+
+  it("never sends a sharing scope for delivery address imports", async () => {
+    let form: FormData | undefined;
+    server.use(http.post("*/api/v1/ai/import-runs", async ({ request }) => {
+      form = await request.formData();
+      return HttpResponse.json({ ...ROSTER_RUN, mode: "deliveryAddress" });
+    }));
+    await startImport({ image: photo(), mode: "deliveryAddress", sharingGroupId: "s1" });
+    expect(form!.get("mode")).toBe("deliveryAddress");
+    expect(form!.get("sharingGroupId")).toBeNull();
   });
 
   it("offers retry when the AI is unavailable and shows the demo badge", async () => {
