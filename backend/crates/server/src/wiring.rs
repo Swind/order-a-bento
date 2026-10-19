@@ -45,7 +45,8 @@ pub fn oidc_provider(config: &Config) -> anyhow::Result<Option<Arc<dyn IdentityP
                 issuer,
             )
             .map_err(|e| anyhow::anyhow!("{e}"))
-            .context("configuring OIDC")?;
+            .context("configuring OIDC")?
+            .with_additional_audiences(config.oidc_additional_audiences.clone());
             Ok(Some(Arc::new(p)))
         }
         _ => Ok(None),

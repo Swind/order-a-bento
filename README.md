@@ -243,6 +243,7 @@ docker start bento
 | `OIDC_ISSUER_URL` | 否 | 空 | HTTPS issuer URL（可含 realm 路徑） | 與 client id 一起設定，自動 Discovery；回呼網址 `APP_BASE_URL/auth/oidc/callback` | no |
 | `OIDC_CLIENT_ID` | 否 | 空 | OIDC client id | Authorization Code + PKCE S256，範圍 `openid email profile` | no |
 | `OIDC_CLIENT_SECRET` | 否 | 空 | 字串 | Public Client／PKCE／驗證方式 `none` 留空；機密用戶端可用 `client_secret_basic` | **yes** |
+| `OIDC_ADDITIONAL_AUDIENCES` | 否 | 空 | 逗號分隔的額外 audience ID | 精確信任清單，例如身分服務的 Project ID；不支援萬用字元。仍要求 `aud` 含本站 Client ID，多 audience 時 `azp` 必須等於本站 Client ID | no |
 | `PASSWORD_LOGIN_ENABLED` | 否 | 有 `ADMIN_EMAIL` 時開啟 | 布林 | 僅指定管理員可用；`true` 必須設定 `ADMIN_EMAIL`；`false` 時端點回 404 | no |
 | `ADMIN_EMAIL` | 否 | 空 | email | 唯一可使用本機帳密登入的帳號。CLI 建立帳號後仍需保留此設定。不授予跨使用者資料存取權 | no |
 | `ADMIN_PASSWORD` | 否 | 空 | 10 到 256 字元 | 選填 bootstrap，需有 `ADMIN_EMAIL`；只建立尚不存在的本機帳號，從不覆寫密碼。建立後建議移除 | **yes** |

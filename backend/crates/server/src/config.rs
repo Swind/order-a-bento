@@ -54,6 +54,8 @@ pub struct Config {
     pub oidc_issuer_url: Option<String>,
     pub oidc_client_id: Option<String>,
     pub oidc_client_secret: Option<Secret>,
+    /// Exact extra ID-token audiences trusted in addition to the mandatory client ID.
+    pub oidc_additional_audiences: Vec<String>,
     pub oidc_enabled: bool,
     /// `PASSWORD_LOGIN_ENABLED` (defaults to ADMIN_EMAIL being set): backup admin login.
     pub password_login_enabled: bool,
@@ -161,11 +163,19 @@ impl Config {
         let oidc_issuer_url = opt("OIDC_ISSUER_URL");
         let oidc_client_id = opt("OIDC_CLIENT_ID");
         let oidc_client_secret = opt("OIDC_CLIENT_SECRET").map(Secret);
+        let oidc_additional_audiences: Vec<String> = opt("OIDC_ADDITIONAL_AUDIENCES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
         let oidc_enabled = oidc_issuer_url.is_some() && oidc_client_id.is_some();
         if !oidc_enabled
             && (oidc_issuer_url.is_some()
                 || oidc_client_id.is_some()
-                || oidc_client_secret.is_some())
+                || oidc_client_secret.is_some()
+                || !oidc_additional_audiences.is_empty())
         {
             return Err(ConfigError::Invalid {
                 key: "OIDC_ISSUER_URL",
@@ -439,6 +449,7 @@ impl Config {
             oidc_issuer_url,
             oidc_client_id,
             oidc_client_secret,
+            oidc_additional_audiences,
             oidc_enabled,
             password_login_enabled,
             admin_email,
@@ -688,6 +699,26 @@ mod tests {
         kv.iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn oidc_additional_audiences_are_trimmed_and_default_to_empty() {
+        assert!(
+            Config::from_map(&env(&[]))
+                .unwrap()
+                .oidc_additional_audiences
+                .is_empty()
+        );
+        let config = Config::from_map(&env(&[
+            ("OIDC_ISSUER_URL", "https://id.example"),
+            ("OIDC_CLIENT_ID", "cid"),
+            ("OIDC_ADDITIONAL_AUDIENCES", " project-1, project-2 ,, "),
+        ]))
+        .unwrap();
+        assert_eq!(config.oidc_additional_audiences, ["project-1", "project-2"]);
+        assert!(Config::from_map(&env(&[("OIDC_ADDITIONAL_AUDIENCES", "project-1")])).is_err());
+        let empty = Config::from_map(&env(&[("OIDC_ADDITIONAL_AUDIENCES", " , , ")])).unwrap();
+        assert!(!empty.oidc_enabled && empty.oidc_additional_audiences.is_empty());
     }
 
     #[test]

@@ -15,6 +15,7 @@ use tokio::sync::OnceCell;
 pub struct OidcProvider {
     client_id: ClientId,
     client_secret: Option<ClientSecret>,
+    additional_audiences: Vec<String>,
     redirect_url: RedirectUrl,
     issuer: IssuerUrl,
     http: reqwest::Client,
@@ -42,6 +43,7 @@ impl OidcProvider {
         Ok(Self {
             client_id: ClientId::new(client_id.to_owned()),
             client_secret: client_secret.map(|s| ClientSecret::new(s.to_owned())),
+            additional_audiences: Vec::new(),
             redirect_url: RedirectUrl::new(redirect_url.to_owned()).map_err(perr)?,
             issuer: IssuerUrl::new(issuer.to_owned()).map_err(perr)?,
             http,
@@ -52,6 +54,12 @@ impl OidcProvider {
     /// Pre-seed discovery metadata (used by tests to avoid the network).
     pub fn with_metadata(self, metadata: CoreProviderMetadata) -> Self {
         let _ = self.metadata.set(metadata);
+        self
+    }
+
+    /// Exact extra audiences trusted for this issuer; the client ID remains required.
+    pub fn with_additional_audiences(mut self, audiences: Vec<String>) -> Self {
+        self.additional_audiences = audiences;
         self
     }
 
@@ -129,11 +137,29 @@ impl IdentityProvider for OidcProvider {
         let id_token = token
             .id_token()
             .ok_or_else(|| perr("token response has no id_token"))?;
-        let verifier = client.id_token_verifier();
+        let verifier = client
+            .id_token_verifier()
+            .set_other_audience_verifier_fn(|aud| {
+                self.additional_audiences
+                    .iter()
+                    .any(|trusted| trusted == aud.as_str())
+            });
         // Verifies signature, iss, aud, exp and nonce.
         let claims = id_token
             .claims(&verifier, &Nonce::new(nonce.to_owned()))
             .map_err(perr)?;
+        // openidconnect 4 does not check azp. Bind multi-audience tokens to this client.
+        match claims.authorized_party() {
+            Some(azp) if azp.as_str() != self.client_id.as_str() => {
+                return Err(perr("ID token authorized party does not match client ID"));
+            }
+            None if claims.audiences().len() > 1 => {
+                return Err(perr(
+                    "multi-audience ID token has no authorized party (azp)",
+                ));
+            }
+            _ => {}
+        }
         if let Some(expected) = claims.access_token_hash() {
             let actual = AccessTokenHash::from_token(
                 token.access_token(),
@@ -382,9 +408,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn additional_audiences_are_explicit_and_never_replace_client_id_or_azp() {
+        use serde_json::json;
+        let mut m = MockIssuer::new(None).await;
+        let mut claims = m.claims.clone();
+        claims["aud"] = json!(["cid", "project-id"]);
+        claims["azp"] = json!("cid");
+        m.set_claims(claims.clone());
+        let error = m
+            .provider
+            .exchange("code", "verifier", "nonce")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not a trusted audience"));
+
+        m.provider.additional_audiences = vec!["project-id".into()];
+        m.provider
+            .exchange("code", "verifier", "nonce")
+            .await
+            .unwrap();
+
+        for aud in [
+            json!(["project-id"]),
+            json!(["other-client", "project-id"]),
+            json!(["cid", "project-id", "untrusted-project"]),
+        ] {
+            let mut invalid = claims.clone();
+            invalid["aud"] = aud;
+            m.set_claims(invalid);
+            assert!(
+                m.provider
+                    .exchange("code", "verifier", "nonce")
+                    .await
+                    .is_err()
+            );
+        }
+        for aud in [json!(["cid", "project-id"]), json!("cid")] {
+            let mut invalid = claims.clone();
+            invalid["aud"] = aud;
+            invalid["azp"] = json!("other-client");
+            m.set_claims(invalid);
+            assert!(
+                m.provider
+                    .exchange("code", "verifier", "nonce")
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("authorized party")
+            );
+        }
+        claims.as_object_mut().unwrap().remove("azp");
+        m.set_claims(claims);
+        assert!(
+            m.provider
+                .exchange("code", "verifier", "nonce")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("azp")
+        );
+
+        // A '*' is a literal audience, never a bypass for arbitrary audiences.
+        m.provider.additional_audiences = vec!["*".into()];
+        let mut claims = m.claims.clone();
+        claims["aud"] = json!(["cid", "project-id"]);
+        claims["azp"] = json!("cid");
+        m.set_claims(claims);
+        assert!(
+            m.provider
+                .exchange("code", "verifier", "nonce")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn confidential_client_and_id_token_validation() {
         use serde_json::json;
-        let m = MockIssuer::new(Some("secret")).await;
+        let mut m = MockIssuer::new(Some("secret")).await;
+        m.provider.additional_audiences = vec!["project-id".into()];
+        m.claims["aud"] = json!(["cid", "project-id"]);
+        m.claims["azp"] = json!("cid");
+        m.set_claims(m.claims.clone());
         m.provider
             .exchange("code", "verifier", "nonce")
             .await

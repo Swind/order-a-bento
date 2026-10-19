@@ -32,8 +32,12 @@ CI 也會把雙架構（amd64 / arm64，arm64 為交叉編譯）映像推到 `gh
 ```env
 OIDC_ISSUER_URL=https://auth.code-life.info
 OIDC_CLIENT_ID=395790351723397130
+# 若 ID token 額外包含此 Project audience，明確加入信任清單：
+OIDC_ADDITIONAL_AUDIENCES=395789596295692298
 # 不設定 OIDC_CLIENT_SECRET
 ```
+
+`OIDC_ADDITIONAL_AUDIENCES` 預設空白，只信任本站 Client ID；多筆以逗號分隔，逐筆精確比對，不接受萬用字元。只加入你確認屬於此 issuer 的受信任 audience，不能直接信任 token 裡的任意值。設定後仍要求 `aud` 包含 `OIDC_CLIENT_ID`，多 audience 的 `azp` 必須等於本站 Client ID；簽章、issuer、期限與 nonce 驗證維持不變。
 
 **升級注意**：不再讀取 `GOOGLE_*`，也不再提供 `/auth/google/*`。帳號以 `(issuer, sub)` 識別，絕不依 email 自動合併。Migration 保留舊使用者 ID、名單、訂單及本機密碼；舊 Google 身分保留原 issuer，因此換到新 issuer 的使用者會建立獨立帳號。需沿用舊資料時，應另外安排經驗證的帳號移轉。
 
@@ -73,6 +77,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `DATABASE_URL` | `sqlite://data/bento.db`（映像：`sqlite:///data/bento.db`） | SQLite 路徑 |
 | `OIDC_ISSUER_URL` / `OIDC_CLIENT_ID` | 空 | 同時設定啟用通用 OIDC，issuer 必須 HTTPS；兩者空白則停用（§3） |
 | `OIDC_CLIENT_SECRET` | 空 | Public Client 不填；機密用戶端可用 `client_secret_basic` |
+| `OIDC_ADDITIONAL_AUDIENCES` | 空 | 逗號分隔的額外 audience 精確信任清單；不取代必要的本站 Client ID，多 audience 時必須有相符的 `azp` |
 | `PASSWORD_LOGIN_ENABLED` | 有 `ADMIN_EMAIL` 時開啟 | 僅管理員備援；`false` 時 `/auth/password-login` 回 404 |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 空 | email 指定唯一備援帳號，password 選填且只供初次建立，不覆寫既有密碼（§3.1） |
 | `DEV_LOGIN` | `false` | 開發用登入捷徑。**正式環境不可開**（production 下設為 true 會拒絕啟動） |
