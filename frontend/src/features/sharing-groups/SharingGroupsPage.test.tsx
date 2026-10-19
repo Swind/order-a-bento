@@ -35,11 +35,15 @@ describe("sharing groups", () => {
     expect(await screen.findByRole("link", { name: /午餐同好 · 管理員/ })).toHaveAttribute("href", "/sharing-groups/s1");
   });
 
-  it("renames, adds an exact organizer ID, and invalidates directory list and detail caches", async () => {
+  it("renames, looks up email, confirms an account, and invalidates directory caches", async () => {
     const requests: unknown[] = [];
     server.use(
       http.patch("*/api/v1/sharing-groups/s1", async ({ request }) => { requests.push(await request.json()); return HttpResponse.json(group); }),
       http.post("*/api/v1/sharing-groups/s1/members", async ({ request }) => { requests.push(await request.json()); return new HttpResponse(null, { status: 204 }); }),
+      http.get("*/api/v1/sharing-groups/s1/users/lookup", ({ request }) => {
+        expect(new URL(request.url).searchParams.get("email")).toBe("bob+team@example.com");
+        return HttpResponse.json([{ ...member, id: "exact-organizer-id", displayName: "Bob", role: null }]);
+      }),
     );
     const { queryClient } = renderApp("/sharing-groups/s1");
     for (const key of [["rosters", "s1"], ["roster", "r1"], ["vendors", "s1"], ["vendor", "v1"]]) queryClient.setQueryData(key, {});
@@ -48,11 +52,72 @@ describe("sharing groups", () => {
     await userEvent.type(name, "新名稱");
     await userEvent.click(screen.getByRole("button", { name: "儲存名稱" }));
     await waitFor(() => expect(requests).toContainEqual({ name: "新名稱" }));
-    await userEvent.type(screen.getByLabelText("本站使用者 ID"), "exact-organizer-id");
+    await userEvent.type(screen.getByLabelText("使用者 Email"), "bob+team@example.com");
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "查找帳號" }));
+    await screen.findByRole("radio");
     await userEvent.selectOptions(screen.getByLabelText("加入角色"), "admin");
     await userEvent.click(screen.getByRole("button", { name: "加入成員" }));
     await waitFor(() => expect(requests).toContainEqual({ userId: "exact-organizer-id", role: "admin" }));
     for (const key of [["rosters", "s1"], ["roster", "r1"], ["vendors", "s1"], ["vendor", "v1"]]) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(screen.getByLabelText("使用者 Email")).toHaveValue("");
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  });
+
+  it("requires an explicit identity choice for a shared email and excludes existing members", async () => {
+    let posted: unknown;
+    server.use(
+      http.get("*/api/v1/sharing-groups/s1/users/lookup", () => HttpResponse.json([
+        member,
+        { ...member, id: "oidc-1", identityKind: "oidc", role: null },
+        { ...member, id: "oidc-2", identityKind: "oidc", role: null },
+      ])),
+      http.post("*/api/v1/sharing-groups/s1/members", async ({ request }) => {
+        posted = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderApp("/sharing-groups/s1");
+    await userEvent.type(await screen.findByLabelText("使用者 Email"), ME.email);
+    await userEvent.click(screen.getByRole("button", { name: "查找帳號" }));
+    const radios = await screen.findAllByRole("radio");
+    expect(radios).toHaveLength(3);
+    expect(radios[0]).toBeDisabled();
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeDisabled();
+    expect(posted).toBeUndefined();
+    await userEvent.click(radios[2]);
+    await userEvent.click(screen.getByRole("button", { name: "加入成員" }));
+    await waitFor(() => expect(posted).toEqual({ userId: "oidc-2", role: "member" }));
+  });
+
+  it("clears email lookup results when the input changes and handles no matches", async () => {
+    server.use(http.get("*/api/v1/sharing-groups/s1/users/lookup", ({ request }) => HttpResponse.json(
+      new URL(request.url).searchParams.get("email") === "found@example.com"
+        ? [{ ...member, id: "new-user", role: null }] : [],
+    )));
+    renderApp("/sharing-groups/s1");
+    const email = await screen.findByLabelText("使用者 Email");
+    await userEvent.type(email, "found@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "查找帳號" }));
+    await screen.findByRole("radio");
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeEnabled();
+    await userEvent.clear(email);
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeDisabled();
+    await userEvent.type(email, "missing@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "查找帳號" }));
+    expect(await screen.findByText(/找不到這個 Email 的本站帳號/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeDisabled();
+  });
+
+  it("shows lookup errors without offering an account to add", async () => {
+    server.use(http.get("*/api/v1/sharing-groups/s1/users/lookup", () => problem(500, "internal_error")));
+    renderApp("/sharing-groups/s1");
+    await userEvent.type(await screen.findByLabelText("使用者 Email"), "bob@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "查找帳號" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入成員" })).toBeDisabled();
   });
 
   it("reports last-admin protection and preserves the role", async () => {

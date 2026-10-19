@@ -17,7 +17,7 @@
 - [x] T1：新增資料庫 migration，保留舊資料與外鍵。
 - [x] T2：群組與成員管理的 domain/application/repository/API。
 - [x] T3：管理員／成員權限、跨群組隔離與最後管理員不變條件。
-- [x] T4：限群組管理員查找既有使用者，明確選擇本站使用者 ID 加入（完整 Email 查找提供 API；第一版介面直接輸入 ID）。
+- [x] T4：限群組管理員以完整 Email 查找既有使用者，確認帳號後以本站使用者 ID 加入；同 Email 多個身分必須明確選擇。
 
 ## Phase 2：共用名單與店家菜單
 
@@ -62,7 +62,7 @@
 
 - API 資源名稱使用 `/api/v1/sharing-groups`，資料範圍欄位使用 `sharingGroupId`，避免與既有開團 API 混淆。
 - 名單／店家列表預設仍為個人資料；傳 `sharingGroupId` 選擇群組。開團前端需聚合可用個人及各群組資料。
-- 群組成員 API 以 `userId` 作為加入／修改／移除識別鍵（其值就是本站 organizer ID）；成員回應以 `id` 表示。第一版介面直接貼上本站 ID 加入，不提供全站帳號瀏覽。
+- 群組成員 API 以 `userId` 作為加入／修改／移除識別鍵（其值就是本站 organizer ID）；成員回應以 `id` 表示。介面使用完整 Email 查找後確認加入，不提供全站帳號瀏覽，亦不以 Email 自動合併身分。
 - 回應中的名單／店家附帶 `sharingGroupId`（可空）與 `canManage`；前端依此顯示群組唯讀畫面，但後端仍逐次授權。
 - 目前 vendor 有 `(organizer_id, name_key)` 唯一限制，migration 必須改成個人／群組各自命名空間，同時保留所有 menu_items 與外鍵。
 - 讀取共用 aggregate 時必須保留真正的 creator/owner ID，不可用呼叫者 ID 重建。
@@ -85,7 +85,8 @@
 
 - API 已匯出至 `frontend/openapi.json` 並重新產生 TypeScript schema；前端不再使用暫時的群組 DTO 定義。
 - 後端 312 項測試、Clippy（`-D warnings`）、格式及 diff 檢查通過。
-- 前端 148 項測試、型別檢查及 production build 通過；lint 無錯誤，仍有既有 warnings。
+- 前端 151 項測試、型別檢查及 production build 通過；群組頁面另涵蓋 Email 查找、多身分選擇、既有成員與查無結果。
 - 手機／桌面 Playwright 共 10 項通過，含群組來源選擇、一般成員唯讀、最後管理員保護、成員移除及個人團存取。
+- Email 加入介面更新後，重新執行群組流程的手機／桌面 2 項 Playwright 測試通過。
 - 後端獨立安全覆核未發現確定的高／中風險問題；另補強 vendor 命名空間與群組匯入禁止個人地址的交易回滾測試。
 - 未測試外部真實 AI provider；瀏覽器匯入測試使用既有 demo provider。未自動 commit、push 或正式部署。

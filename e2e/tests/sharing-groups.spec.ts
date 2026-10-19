@@ -20,10 +20,12 @@ test("shared directory is read-only for members and orders remain personal after
       data: { role: "member" },
     });
     expect(lastAdmin.status()).toBe(409);
-    const added = await page.request.post(`/api/v1/sharing-groups/${group.id}/members`, {
-      data: { userId: memberIdentity.id, role: "member" },
-    });
-    expect(added.ok()).toBeTruthy();
+    await page.goto(`/sharing-groups/${group.id}`);
+    await page.getByLabel("使用者 Email").fill(memberIdentity.email);
+    await page.getByRole("button", { name: "查找帳號" }).click();
+    await expect(page.getByRole("radio")).toBeChecked();
+    await page.getByRole("button", { name: "加入成員", exact: true }).click();
+    await expect(page.getByLabel("使用者 Email")).toHaveValue("");
     const privateRoster = await createRoster(page, "私人名單", ["私人同學"]);
     const roster = await create(page, "/api/v1/rosters", {
       name: "共用名單", sharingGroupId: group.id, members: [{ name: "共用同學" }],

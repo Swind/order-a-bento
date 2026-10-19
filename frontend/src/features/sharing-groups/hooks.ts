@@ -57,6 +57,16 @@ export function useSharingMutation(id?: string) {
   });
 }
 
+export function useSharingUserLookup(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (email: string) => sharingRequest<SharingMember[]>(
+      `sharing-groups/${id}/users/lookup?email=${encodeURIComponent(email.trim())}`,
+    ),
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
+  });
+}
+
 export function useAccessibleDirectory<T extends RosterSummary | VendorSummary>(resource: "rosters" | "vendors") {
   const groups = useSharingGroups();
   const scopes = [undefined, ...(groups.data ?? []).map((group) => group.id)];

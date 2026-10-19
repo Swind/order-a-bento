@@ -37,7 +37,7 @@ export function SharingGroupsPage() {
           複製使用者 ID
         </Button>
         <p className="text-sm text-muted-foreground">
-          將此 ID 交給群組管理員加入。不同登入身分不會因相同 Email 合併。
+          將登入使用的 Email 提供給群組管理員即可查找加入；若有多個同 Email 帳號，可用此 ID 確認身分，不會自動合併。
         </p>
       </div>
       <form className="flex flex-wrap items-end gap-2" onSubmit={submit}>
