@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { errorMessage, fieldError } from "@/shared/api/errors";
 import { ImportButton } from "@/features/ai-import/ImportDialog";
 import { FieldError } from "@/shared/components/FieldError";
+import { EmptyState } from "@/shared/components/EmptyState";
 import { formatUpdatedAt } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent } from "@/shared/ui/card";
@@ -62,7 +63,7 @@ function CreateRosterDialog({ sharingGroupId }: { sharingGroupId?: string }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button />}>
+      <DialogTrigger render={<Button className="h-11" />}>
         <Plus />
         新增名單
       </DialogTrigger>
@@ -114,13 +115,15 @@ export function RostersPage() {
   const rosters = useRosters(scope || undefined);
   const canManage = !scope || (!groups.isError && groups.data?.find((group) => group.id === scope)?.role === "admin");
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold">名單</h1>
+        <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">名單</h1><p className="text-sm text-muted-foreground">整理成員，開團時就不必重新輸入。</p></div>
         {canManage && <CreateRosterDialog key={scope} sharingGroupId={scope || undefined} />}
       </div>
-      <ScopeSelect value={scope} onChange={setScope} />
-      {canManage ? <ImportButton key={scope} label="📷 從照片建立名單" mode="roster" sharingGroupId={scope || undefined} /> : <p className="text-sm text-muted-foreground">唯讀：可查看並選用開團，只有群組管理員可修改。</p>}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
+        <ScopeSelect value={scope} onChange={setScope} />
+        {canManage ? <ImportButton key={scope} label="從照片建立名單" mode="roster" sharingGroupId={scope || undefined} /> : <p className="text-sm text-muted-foreground">唯讀：可查看並選用開團，只有群組管理員可修改。</p>}
+      </div>
       {rosters.isPending && (
         <div className="space-y-3" aria-busy="true">
           <Skeleton className="h-16 w-full" />
@@ -138,10 +141,7 @@ export function RostersPage() {
         </div>
       )}
       {rosters.data?.length === 0 && (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-center text-muted-foreground">
-          <Users className="size-8" />
-          <p>還沒有名單，按「新增名單」開始建立。</p>
-        </div>
+        <EmptyState icon={<Users className="size-6" />} title="還沒有名單" hint={canManage ? "按「新增名單」開始建立，也可以從照片匯入成員。" : "群組管理員建立名單後，就可以在這裡查看並選用開團。"} />
       )}
       <ul className="grid gap-3 sm:grid-cols-2">
         {!rosters.isError && rosters.data?.map((r) => (

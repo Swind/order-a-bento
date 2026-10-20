@@ -53,7 +53,8 @@ describe("delivery addresses", () => {
     expect(await within(screen.getByRole("list", { name: "送餐地址清單" })).findByText("台北市 5 樓")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "刪除 台北教室" }));
     await userEvent.click(screen.getByRole("button", { name: "確定刪除 台北教室" }));
-    expect(await screen.findByText("還沒有送餐地址，可手動新增或從照片匯入。")).toBeInTheDocument();
+    expect(await screen.findByText("還沒有送餐地址")).toBeInTheDocument();
+    expect(screen.getByText("可手動新增或從照片匯入。")).toBeInTheDocument();
   });
 
   it("uploads a delivery photo, allows correction and saves only after confirmation", async () => {
@@ -78,7 +79,7 @@ describe("delivery addresses", () => {
       }),
     );
     const { router } = renderApp("/delivery-addresses");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入地址" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入地址" }));
     expect(screen.getByRole("heading", { name: "從照片匯入送餐地址" })).toBeInTheDocument();
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), new File(["x"], "classroom.png", { type: "image/png" }));
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));

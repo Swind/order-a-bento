@@ -69,9 +69,12 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   if (await submit.count()) await expect(submit.first()).toBeDisabled();
 
   // Rotate link (available while closed)
+  await page.getByText("更多操作", { exact: true }).click();
+  await expectNoHorizontalOverflow(page);
   await page.getByRole("button", { name: "重新產生連結" }).click();
   await page.getByRole("button", { name: "確定重新產生連結" }).click();
-  await expect(page.locator("input[readonly]").first()).not.toHaveValue(g.shareUrl);
+  await page.getByText("顯示完整連結", { exact: true }).click();
+  await expect(page.getByLabel("分享連結", { exact: true })).not.toHaveValue(g.shareUrl);
 
   const old = await pubCtx.newPage();
   await old.goto(g.shareUrl);

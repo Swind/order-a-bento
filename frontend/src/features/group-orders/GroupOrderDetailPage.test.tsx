@@ -48,6 +48,20 @@ beforeEach(() => {
 });
 
 describe("GroupOrderDetailPage header", () => {
+  it("keeps settings collapsed and opens the link for manual copying on clipboard failure", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    renderApp("/group-orders/g1");
+    await screen.findByText("更多操作");
+    expect(screen.getByRole("button", { name: "重新產生連結" })).not.toBeVisible();
+    expect(screen.getByRole("textbox", { name: "分享連結" })).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "複製連結" }));
+    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "分享連結" });
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
   it("closing switches badge and actions", async () => {
     server.use(
       http.patch("*/api/v1/group-orders/g1", async ({ request }) => {
@@ -61,6 +75,7 @@ describe("GroupOrderDetailPage header", () => {
     await userEvent.click(screen.getByRole("button", { name: "關閉收單" }));
     expect(await screen.findByText("已關閉")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新開放" })).toBeInTheDocument();
+    await userEvent.click(screen.getByText("更多操作"));
     expect(screen.getByRole("button", { name: "封存" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "關閉收單" })).not.toBeInTheDocument();
   });
@@ -72,6 +87,7 @@ describe("GroupOrderDetailPage header", () => {
       ),
     );
     renderApp("/group-orders/g1");
+    await userEvent.click(await screen.findByText("更多操作"));
     await userEvent.click(await screen.findByRole("button", { name: "重新產生連結" }));
     expect(screen.getByText(/舊的分享連結會立即失效/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "確定重新產生連結" }));
@@ -170,6 +186,7 @@ describe("StatsTab", () => {
       }),
     );
     renderApp("/group-orders/g1");
+    await userEvent.click(await screen.findByText("更多操作"));
     await userEvent.click(await screen.findByRole("button", { name: "設定送餐地址" }));
     await screen.findByRole("option", { name: "新教室 — 新地址 5 樓" });
     await userEvent.selectOptions(screen.getByLabelText("送餐地址（選填）"), "a2");

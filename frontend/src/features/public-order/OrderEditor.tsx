@@ -119,9 +119,11 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   return (
     <div className="space-y-4">
       {effective ? (
-        <p className="text-sm font-medium text-green-700 dark:text-green-400">
-          ✓ 已於 {formatHHmm(effective.submittedAt)} 送出
-        </p>
+        <div className="space-y-1 rounded-xl border border-primary/20 bg-accent p-4">
+          <p className="text-sm font-semibold text-accent-foreground">✓ 已於 {formatHHmm(effective.submittedAt)} 送出</p>
+          <p className="text-sm text-accent-foreground">{effective.lines.map((line) => `${line.name} ×${line.quantity}`).join("、")}</p>
+          <p className="text-sm text-muted-foreground">{readOnly ? "這是你最後送出的訂單。" : "截止前都可以修改，修改後請再次送出。"}</p>
+        </div>
       ) : (
         order?.cancelled && (
           <p className="text-sm text-muted-foreground">
@@ -133,7 +135,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
       {group.menu.length === 0 && (
         <EmptyState title="這個團還沒有菜單品項" hint="請向開團的人確認，菜單補上後重新整理頁面即可點餐。" />
       )}
-      <ul className={cn("divide-y rounded-xl border", group.menu.length === 0 && "hidden")}>
+      <ul className={cn("overflow-hidden divide-y rounded-xl border bg-card", group.menu.length === 0 && "hidden")}>
         {group.menu.map((item) => {
           const q = qty[item.id] ?? 0;
           const disabledItem = readOnly || item.soldOut;
@@ -142,11 +144,11 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
             <li
               key={item.id}
               data-testid={`menu-${item.id}`}
-              className={cn("space-y-2 px-4 py-3", conflict && "bg-destructive/10")}
+              className={cn("space-y-2 px-4 py-4 transition-colors", q > 0 && "bg-accent/60", conflict && "bg-destructive/10")}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-base font-medium">
+                  <p className={cn("text-base font-semibold", item.soldOut && "text-muted-foreground")}>
                     {item.name}
                     {item.soldOut && (
                       <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-xs">售完</span>
@@ -163,7 +165,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
                     </p>
                   )}
                 </div>
-                <span className="shrink-0 text-base">{formatMoney(item.price)}</span>
+                <span className={cn("shrink-0 text-base font-medium tabular-nums", item.soldOut && "text-muted-foreground")}>{formatMoney(item.price)}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 {q > 0 && !readOnly ? (
@@ -189,12 +191,12 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
                   >
                     <Minus />
                   </Button>
-                  <span className="w-8 text-center text-lg tabular-nums" aria-live="polite">
+                  <span className={cn("w-8 text-center text-lg font-semibold tabular-nums", q > 0 && "text-primary")} aria-live="polite">
                     {q}
                   </span>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant={q > 0 ? "default" : "outline"}
                     className="size-11"
                     aria-label={`增加 ${item.name}`}
                     disabled={disabledItem || q >= MAX_QTY}
@@ -239,19 +241,20 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
       {!readOnly && (
         <div
           ref={barRef}
-          className="fixed inset-x-0 bottom-0 z-10 border-t bg-background shadow-[0_-2px_8px_rgba(0,0,0,0.08)]"
+          className="fixed inset-x-0 bottom-0 z-10 border-t bg-card shadow-[0_-4px_20px_rgba(0,0,0,0.04)]"
         >
           <div className="mx-auto w-full max-w-md space-y-1 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-            <p className="text-center text-base font-medium">
-              共 {count} 個 {formatMoney(total)}
-            </p>
+            <div role="group" className="flex items-center justify-between pb-2 text-sm text-muted-foreground" aria-label="目前選餐合計">
+              <span>共 {count} 個</span><span className="text-xl font-bold tabular-nums text-foreground">{formatMoney(total)}</span>
+            </div>
             <Button
               type="button"
               className="h-12 w-full text-base"
               disabled={submit.isPending || count === 0 || soldOutSelected}
+              aria-busy={submit.isPending}
               onClick={() => send(lines, orderNote, false)}
             >
-              {effective ? "更新訂單（取代上一次）" : "送出訂單"}
+              {submit.isPending ? "送出中…" : effective ? "更新訂單（取代上一次）" : "送出訂單"}
             </Button>
             {effective && !confirmCancel && (
               <Button

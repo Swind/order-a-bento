@@ -23,9 +23,9 @@ export function GroupOrdersPage() {
     `h-11 rounded-full px-4 ${on ? "" : "bg-background"}`;
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4">
+    <div className="mx-auto max-w-2xl space-y-6">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold">開團紀錄</h1>
+        <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">開團紀錄</h1><p className="text-sm text-muted-foreground">查看收單進度，或回顧過去的午餐。</p></div>
         <Link to="/group-orders/new" className={buttonVariants({ className: "h-11" })}>
           開團
         </Link>

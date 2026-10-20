@@ -209,7 +209,7 @@ export function NewGroupOrderPage() {
 
   return (
     <div className="mx-auto max-w-xl space-y-5">
-      <h1 className="text-2xl font-bold">開團</h1>
+      <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">開團</h1><p className="text-sm text-muted-foreground">三個步驟，揪大家一起訂午餐。</p></div>
       <StepIndicator step={step} />
 
       {step === 0 && (
@@ -265,7 +265,7 @@ export function NewGroupOrderPage() {
       )}
 
       {step === 2 && (
-        <form onSubmit={submit} className="space-y-4" aria-label="設定">
+        <form onSubmit={submit} className="space-y-4 rounded-xl border bg-card p-5" aria-label="設定">
           <h2 className="text-lg font-semibold">設定</h2>
           <DeliveryAddressSelect value={deliveryAddressId} onChange={setDeliveryAddressId} />
           <div className="space-y-1.5">
@@ -323,7 +323,7 @@ export function NewGroupOrderPage() {
             />
           </div>
           <Button type="submit" className="h-12 w-full text-base" disabled={create.isPending}>
-            開團
+            {create.isPending ? "開團中…" : "開團"}
           </Button>
         </form>
       )}

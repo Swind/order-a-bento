@@ -26,8 +26,9 @@ function useNow(ms: number): Date {
 function GroupHeader({ group, closedBanner }: { group: PublicGroup; closedBanner: string | null }) {
   const now = useNow(30_000);
   return (
-    <header className="space-y-1">
-      <h1 className="text-2xl font-bold">{group.title}</h1>
+    <header className="space-y-2 rounded-2xl border bg-card p-5">
+      <p className="text-xs font-medium tracking-wide text-primary">🍱 一起訂便當</p>
+      <h1 className="break-words text-2xl font-bold tracking-tight">{group.title}</h1>
       <p className="text-base">
         {group.vendor.name}
         {group.vendor.phone && (
@@ -134,7 +135,7 @@ function ParticipantPicker({
           </p>
         )
       )}
-      <ul className={cn("divide-y rounded-xl border", shown.length === 0 && "hidden")}>
+      <ul className={cn("overflow-hidden divide-y rounded-xl border bg-card", shown.length === 0 && "hidden")}>
         {shown.map((p) => (
           <li key={p.id}>
             <button
@@ -177,7 +178,7 @@ function OrderStep({
   const order = useEffectiveOrder(token, participant.id);
   return (
     <section className="space-y-3" aria-label="選便當">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-2">
         <h2 className="min-w-0 truncate text-lg font-semibold">{participant.name}</h2>
         <Button variant="outline" className="h-11" onClick={onSwitch}>
           換人

@@ -290,7 +290,7 @@ function BatchAdd({ id, onAffected, sharingGroupId }: {
         <Button type="submit" disabled={parsed.length === 0 || upsert.isPending}>
           新增 {parsed.length} 位
         </Button>
-        <ImportButton label="📷 從照片匯入" mode="roster" targetRosterId={id} sharingGroupId={sharingGroupId} />
+        <ImportButton label="從照片匯入" mode="roster" targetRosterId={id} sharingGroupId={sharingGroupId} />
       </div>
       {summary && <ReportSummary text={summary} />}
     </form>

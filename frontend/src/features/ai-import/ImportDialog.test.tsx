@@ -33,7 +33,7 @@ describe("ImportDialog", () => {
     setup({ aiImportEnabled: false });
     renderApp("/rosters/r1");
     expect(await screen.findByText("尚未設定 AI")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "📷 從照片匯入" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "從照片匯入" })).toBeDisabled();
   });
 
   it("posts FormData with mode and target id, then opens the confirm screen", async () => {
@@ -46,7 +46,7 @@ describe("ImportDialog", () => {
       }),
     );
     const { router } = renderApp("/rosters/r1");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入" }));
     expect(screen.getByRole("button", { name: "開始辨識" })).toBeDisabled();
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.type(screen.getByLabelText("指示（選填）"), "加到業務部名單");
@@ -65,7 +65,7 @@ describe("ImportDialog", () => {
       http.post("*/api/v1/ai/import-runs", () => problem(422, "ai_refused", { runId: "run9" })),
     );
     renderApp("/rosters/r1");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入" }));
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("這張照片無法辨識，請改用手動輸入");
@@ -86,7 +86,7 @@ describe("ImportDialog", () => {
       }),
     );
     renderApp("/rosters/r1");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入" }));
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     await screen.findByRole("heading", { name: "AI 匯入確認" });
@@ -110,7 +110,7 @@ describe("ImportDialog", () => {
     setup({ aiDemo: true });
     server.use(http.post("*/api/v1/ai/import-runs", () => problem(502, "ai_unavailable")));
     renderApp("/rosters/r1");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片匯入" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入" }));
     expect(screen.getByText("示範模式")).toBeInTheDocument();
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
@@ -128,7 +128,7 @@ describe("ImportDialog", () => {
       }),
     );
     renderApp("/rosters");
-    await userEvent.click(await screen.findByRole("button", { name: "📷 從照片建立名單" }));
+    await userEvent.click(await screen.findByRole("button", { name: "從照片建立名單" }));
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("圖片太大");

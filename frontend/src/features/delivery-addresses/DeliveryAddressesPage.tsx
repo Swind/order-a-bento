@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from "react";
+import { MapPin } from "lucide-react";
 import { toast } from "sonner";
 import { ImportButton } from "@/features/ai-import/ImportDialog";
 import { errorMessage } from "@/shared/api/errors";
 import type { DeliveryAddress } from "@/shared/api/types";
 import { ConfirmActionButton } from "@/shared/components/ConfirmActionButton";
+import { EmptyState } from "@/shared/components/EmptyState";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
@@ -47,19 +49,21 @@ export function DeliveryAddressesPage() {
   const [editing, setEditing] = useState<DeliveryAddress | "new" | null>(null);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold">送餐地址</h1>
+        <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">送餐地址</h1><p className="text-sm text-muted-foreground">儲存常用地點，開團時直接選擇。</p></div>
         <Button className="h-11" onClick={() => setEditing("new")}>新增地址</Button>
       </div>
-      <p className="text-sm text-muted-foreground">儲存常用地點，開團時選擇。修改或刪除地址不會影響已建立的團。</p>
-      <ImportButton label="📷 從照片匯入地址" mode="deliveryAddress" />
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
+        <ImportButton label="從照片匯入地址" mode="deliveryAddress" />
+        <p className="text-sm text-muted-foreground">修改或刪除地址不會影響已建立的團。</p>
+      </div>
       {query.isPending && <Skeleton className="h-24 w-full" />}
       {query.isError && <div className="space-y-2"><p role="alert">{errorMessage(query.error)}</p><Button variant="outline" onClick={() => query.refetch()}>重試</Button></div>}
-      {query.data?.length === 0 && <p className="rounded-xl border border-dashed p-8 text-center text-muted-foreground">還沒有送餐地址，可手動新增或從照片匯入。</p>}
+      {query.data?.length === 0 && <EmptyState icon={<MapPin className="size-6" />} title="還沒有送餐地址" hint="可手動新增或從照片匯入。" />}
       <ul className="space-y-3" aria-label="送餐地址清單">
         {query.data?.map((a) => (
-          <li key={a.id} className="space-y-2 rounded-xl border p-4">
+          <li key={a.id} className="space-y-2 rounded-xl border bg-card p-5">
             <h2 className="break-words font-semibold">{a.name}</h2>
             <p className="whitespace-pre-wrap break-words">{a.address}</p>
             <div className="flex gap-2">

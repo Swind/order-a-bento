@@ -57,7 +57,7 @@ function NavLinks({ onNavigate, className }: { onNavigate?: () => void; classNam
           className={({ isActive }) =>
             cn(
               "rounded-md px-3 py-2 text-base font-medium transition-colors hover:bg-muted",
-              isActive ? "bg-muted text-foreground" : "text-muted-foreground",
+              isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground",
               className,
             )
           }
@@ -152,16 +152,16 @@ export function AdminLayout() {
   return (
     <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-40 border-b bg-background/95 pt-[env(safe-area-inset-top)] backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
-          <span className="text-lg font-bold">🍱 訂便當</span>
-          <nav aria-label="主選單" className="hidden items-center gap-1 md:flex">
+        <div className="mx-auto flex h-16 max-w-5xl items-center gap-4 px-4 sm:px-6">
+          <Link to="/" className="shrink-0 rounded-md text-lg font-bold tracking-tight focus-visible:outline-2 focus-visible:outline-ring">🍱 訂便當</Link>
+          <nav aria-label="主選單" className="hidden items-center gap-1 lg:flex">
             <NavLinks />
           </nav>
           <div className="ml-auto flex items-center gap-1">
             <UserMenu me={me.data} />
-            <div className="md:hidden">
+            <div className="lg:hidden">
             <Sheet open={open} onOpenChange={setOpen}>
-              <SheetTrigger render={<Button variant="outline" size="icon" aria-label="開啟選單" />}>
+              <SheetTrigger render={<Button variant="outline" size="icon" className="size-11" aria-label="開啟選單" />}>
                 <Menu />
               </SheetTrigger>
               <SheetContent side="right">
@@ -177,7 +177,7 @@ export function AdminLayout() {
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl px-4 py-6">
+      <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
         <Outlet />
       </main>
     </div>

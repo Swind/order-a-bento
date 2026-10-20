@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { renderApp } from "@/test/render";
 import { problem, server } from "@/test/server";
@@ -68,6 +68,22 @@ beforeEach(() => {
 });
 
 describe("PublicOrderPage", () => {
+  it("shows a busy state while submitting, then keeps a saved order summary", async () => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p3");
+    server.use(http.post(`*/api/v1/public/g/${TOKEN}/participants/p3/submissions`, async () => {
+      await delay(200);
+      return HttpResponse.json(order([{ itemId: "i1", name: "排骨飯", quantity: 1 }]));
+    }));
+    renderApp(`/g/${TOKEN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
+    await userEvent.click(screen.getByRole("button", { name: "送出訂單" }));
+    const pending = await screen.findByRole("button", { name: "送出中…" });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveAttribute("aria-busy", "true");
+    expect(await screen.findByText("排骨飯 ×1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更新訂單（取代上一次）" })).toBeEnabled();
+  });
+
   it("shows a friendly message for an unknown link", async () => {
     server.use(http.get(`*/api/v1/public/g/${TOKEN}`, () => problem(404, "not_found")));
     renderApp(`/g/${TOKEN}`);
@@ -91,7 +107,7 @@ describe("PublicOrderPage", () => {
     expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("1");
     expect(screen.getByRole("button", { name: "更新訂單（取代上一次）" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "增加 雞腿飯" }));
-    expect(screen.getByText("共 2 個 $210")).toBeInTheDocument();
+    expect(screen.getByLabelText("目前選餐合計")).toHaveTextContent("共 2 個$210");
     expect(screen.getByRole("button", { name: "增加 素食便當" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "更新訂單（取代上一次）" }));
     await waitFor(() => expect(submitted).toHaveLength(1));
@@ -102,6 +118,7 @@ describe("PublicOrderPage", () => {
     expect(submitted[0].body.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(submitted[0].body.client.deviceId).toBeTruthy();
     expect(await screen.findByText("已更新訂單")).toBeInTheDocument();
+    expect(screen.getByText("排骨飯 ×1、雞腿飯 ×1")).toBeInTheDocument();
   });
 
   it("reuses the idempotency key on retry of the same payload, renews it after success", async () => {

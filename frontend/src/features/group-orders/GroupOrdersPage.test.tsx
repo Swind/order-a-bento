@@ -32,6 +32,16 @@ beforeEach(() =>
 );
 
 describe("GroupOrdersPage", () => {
+  it("shows only active groups on the dashboard with an opening shortcut", async () => {
+    renderApp("/");
+    expect(await screen.findByRole("heading", { name: "今天訂什麼？" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /進行團/ })).toHaveAttribute("href", "/group-orders/a");
+    expect(screen.queryByText("關閉團")).not.toBeInTheDocument();
+    expect(screen.queryByText("封存團")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "開團" })).toHaveAttribute("href", "/group-orders/new");
+    expect(screen.getByRole("heading", { name: /進行中的團\s*1/ })).toBeInTheDocument();
+  });
+
   it("hides archived by default and filters with chips", async () => {
     renderApp("/group-orders");
     expect(await screen.findByText("進行團")).toBeInTheDocument();

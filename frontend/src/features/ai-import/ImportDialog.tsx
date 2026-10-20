@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Camera, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { ApiError } from "@/shared/api/client";
@@ -229,8 +229,9 @@ export function ImportButton({ label, variant = "outline", ...target }: ButtonPr
   if (config.isPending) return null;
   if (!config.data?.aiImportEnabled) {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant={variant} className="h-11" disabled>
+          <Camera />
           {label}
         </Button>
         <span className="text-sm text-muted-foreground">尚未設定 AI</span>
@@ -240,6 +241,7 @@ export function ImportButton({ label, variant = "outline", ...target }: ButtonPr
   return (
     <>
       <Button type="button" variant={variant} className="h-11" onClick={() => setOpen(true)}>
+        <Camera />
         {label}
       </Button>
       <ImportDialogContent open={open} onOpenChange={setOpen} aiDemo={config.data.aiDemo} {...target} />

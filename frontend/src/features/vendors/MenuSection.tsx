@@ -274,7 +274,7 @@ function BatchAddItems({ vendorId, onAffected, sharingGroupId }: {
         <Button type="submit" disabled={items.length === 0 || errors.length > 0 || upsert.isPending}>
           新增 {items.length} 項
         </Button>
-        <ImportButton label="📷 從傳單匯入" mode="vendor" targetVendorId={vendorId} sharingGroupId={sharingGroupId} />
+        <ImportButton label="從傳單匯入" mode="vendor" targetVendorId={vendorId} sharingGroupId={sharingGroupId} />
       </div>
       {summary && <ReportSummary text={summary} />}
     </form>

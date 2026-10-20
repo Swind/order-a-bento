@@ -6,6 +6,7 @@ import { ApiError } from "@/shared/api/client";
 import { errorMessage, fieldError } from "@/shared/api/errors";
 import { ImportButton } from "@/features/ai-import/ImportDialog";
 import { FieldError } from "@/shared/components/FieldError";
+import { EmptyState } from "@/shared/components/EmptyState";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent } from "@/shared/ui/card";
 import {
@@ -74,7 +75,7 @@ function CreateVendorDialog({ sharingGroupId }: { sharingGroupId?: string }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button />}>
+      <DialogTrigger render={<Button className="h-11" />}>
         <Plus />
         新增店家
       </DialogTrigger>
@@ -152,13 +153,15 @@ export function VendorsPage() {
   const vendors = useVendors(scope || undefined);
   const canManage = !scope || (!groups.isError && groups.data?.find((group) => group.id === scope)?.role === "admin");
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold">店家</h1>
+        <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">店家</h1><p className="text-sm text-muted-foreground">收藏常訂的店家，維護菜單與價格。</p></div>
         {canManage && <CreateVendorDialog key={scope} sharingGroupId={scope || undefined} />}
       </div>
-      <ScopeSelect value={scope} onChange={setScope} />
-      {canManage ? <ImportButton key={scope} label="📷 從傳單建立店家" mode="vendor" sharingGroupId={scope || undefined} /> : <p className="text-sm text-muted-foreground">唯讀：可查看並選用開團，只有群組管理員可修改。</p>}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
+        <ScopeSelect value={scope} onChange={setScope} />
+        {canManage ? <ImportButton key={scope} label="從傳單建立店家" mode="vendor" sharingGroupId={scope || undefined} /> : <p className="text-sm text-muted-foreground">唯讀：可查看並選用開團，只有群組管理員可修改。</p>}
+      </div>
       {vendors.isPending && (
         <div className="space-y-3" aria-busy="true">
           <Skeleton className="h-16 w-full" />
@@ -176,10 +179,7 @@ export function VendorsPage() {
         </div>
       )}
       {vendors.data?.length === 0 && (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-12 text-center text-muted-foreground">
-          <Store className="size-8" />
-          <p>還沒有店家，按「新增店家」開始建立。</p>
-        </div>
+        <EmptyState icon={<Store className="size-6" />} title="還沒有店家" hint={canManage ? "按「新增店家」開始建立，也可以從傳單匯入菜單。" : "群組管理員建立店家後，就可以在這裡查看並選用開團。"} />
       )}
       <ul className="grid gap-3 sm:grid-cols-2">
         {!vendors.isError && vendors.data?.map((v) => (

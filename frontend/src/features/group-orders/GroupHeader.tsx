@@ -25,9 +25,6 @@ function DeliveryAddressEditor({ group, readOnly }: { group: GroupOrderDetail; r
 
   return (
     <div className="space-y-2 text-sm">
-      <p className="break-words">
-        {group.deliveryAddress ? `送餐地址：${group.deliveryAddress}` : "尚未設定送餐地址"}
-      </p>
       {editing ? (
         <div className="space-y-2">
           <DeliveryAddressSelect value={id} onChange={setId} disabled={patch.isPending} />
@@ -196,7 +193,7 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <TitleEditor key={group.title} group={group} readOnly={archived} />
         <StatusBadge status={group.status} />
@@ -205,8 +202,10 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
         {group.vendor.name}
         {group.vendor.phone && ` · ${group.vendor.phone}`}
       </p>
-      <DeadlineEditor key={group.deadlineAt ?? "none"} group={group} readOnly={archived} />
-      <DeliveryAddressEditor group={group} readOnly={archived} />
+      <div className="space-y-1 text-sm text-muted-foreground">
+        <p>{group.deadlineAt ? `截止 ${formatMD(new Date(group.deadlineAt))} ${formatHHmm(group.deadlineAt)}` : "未設定截止時間"}</p>
+        <p className="break-words">{group.deliveryAddress ? `送餐地址：${group.deliveryAddress}` : "尚未設定送餐地址"}</p>
+      </div>
       {group.note && <p className="text-sm">{group.note}</p>}
 
       {archived ? (
@@ -214,10 +213,11 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
           此團已封存，內容為唯讀。
         </p>
       ) : (
-        <div className="flex flex-wrap items-start gap-2">
+        <div className="flex flex-wrap items-start gap-3">
           {group.status === "open" && (
             <Button
               type="button"
+              variant="outline"
               className="h-11"
               disabled={patch.isPending}
               onClick={() => setStatus("closed")}
@@ -226,34 +226,41 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
             </Button>
           )}
           {group.status === "closed" && (
-            <>
-              <Button
-                type="button"
-                className="h-11"
-                disabled={patch.isPending}
-                onClick={() => setStatus("open")}
-              >
-                重新開放
-              </Button>
-              <ConfirmActionButton
-                label="封存"
-                message="封存後此團將變成唯讀，無法再修改訂單。"
-                pending={patch.isPending}
-                onConfirm={() => setStatus("archived")}
-              />
-            </>
+            <Button
+              type="button"
+              className="h-11"
+              disabled={patch.isPending}
+              onClick={() => setStatus("open")}
+            >
+              重新開放
+            </Button>
           )}
-          <ConfirmActionButton
-            label="重新產生連結"
-            message="舊的分享連結會立即失效，已分享出去的連結將無法再使用。"
-            pending={rotate.isPending}
-            onConfirm={() =>
-              rotate.mutate(undefined, {
-                onSuccess: () => toast.success("已產生新的分享連結"),
-                onError: (e) => toast.error(errorMessage(e)),
-              })
-            }
-          />
+          <details className="min-w-0 flex-1 rounded-lg border bg-card">
+            <summary className="cursor-pointer rounded-lg px-3 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">更多操作</summary>
+            <div className="space-y-4 border-t p-4">
+              <DeadlineEditor key={group.deadlineAt ?? "none"} group={group} readOnly={false} />
+              <DeliveryAddressEditor group={group} readOnly={false} />
+              <div className="flex flex-wrap gap-2 border-t pt-4">
+                {group.status === "closed" && <ConfirmActionButton
+                  label="封存"
+                  message="封存後此團將變成唯讀，無法再修改訂單。"
+                  pending={patch.isPending}
+                  onConfirm={() => setStatus("archived")}
+                />}
+                <ConfirmActionButton
+                  label="重新產生連結"
+                  message="舊的分享連結會立即失效，已分享出去的連結將無法再使用。"
+                  pending={rotate.isPending}
+                  onConfirm={() =>
+                    rotate.mutate(undefined, {
+                      onSuccess: () => toast.success("已產生新的分享連結"),
+                      onError: (e) => toast.error(errorMessage(e)),
+                    })
+                  }
+                />
+              </div>
+            </div>
+          </details>
         </div>
       )}
     </div>
