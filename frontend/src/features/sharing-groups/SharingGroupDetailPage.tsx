@@ -122,7 +122,7 @@ export function SharingGroupDetailPage() {
       <section className="space-y-2" aria-label="群組成員">
         <h2 className="text-lg font-semibold">群組成員</h2>
         <p className="text-sm text-muted-foreground">
-          成員可讀取並選用共用名單與店家；管理員可維護共用資料。最後一位管理員不能移除或降級。
+          成員可讀取並選用共用名單與店家，也可建立及查看群組開團。管理員與仍在群組內的原開團者可管理未封存的團；移出群組後即無法存取群組開團。管理員可維護共用資料，最後一位管理員不能移除或降級。
         </p>
         {members.isError && (
           <div className="space-y-2">

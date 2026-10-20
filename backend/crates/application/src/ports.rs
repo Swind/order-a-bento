@@ -188,6 +188,8 @@ pub trait TokenGenerator: Send + Sync {
 /// Failure of a directory repository operation.
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
+    #[error("forbidden")]
+    Forbidden,
     /// No such aggregate for this organizer (also used for another organizer's id).
     #[error("not found")]
     NotFound,
@@ -355,7 +357,8 @@ pub trait VendorRepo: Send + Sync {
 /// write transaction.
 pub type GroupOrderMutation = Box<dyn FnOnce(&mut GroupOrder) -> Result<(), DomainError> + Send>;
 
-/// Group order persistence. Organizer-facing lookups are scoped by `organizer_id`.
+/// Group order persistence. Actor lookups use personal ownership or current
+/// sharing-group membership, never an organizer fallback for shared orders.
 #[async_trait]
 pub trait GroupOrderRepo: Send + Sync {
     /// Insert the group with its participants and offered items in one transaction.
@@ -367,7 +370,7 @@ pub trait GroupOrderRepo: Send + Sync {
     ) -> PortResult<Option<GroupOrder>>;
     /// Public lookup by share token (no organizer scope).
     async fn find_by_token(&self, token: &ShareToken) -> PortResult<Option<GroupOrder>>;
-    /// Load -> mutate -> persist inside one write transaction (scoped by organizer).
+    /// Authorize manager -> load -> mutate -> persist in one write transaction.
     /// Persists status/title/deadline/note/token changes, newly added participants
     /// and changed `sold_out` flags.
     async fn modify(
@@ -391,13 +394,12 @@ pub enum AppendOutcome {
 
 #[async_trait]
 pub trait SubmissionRepo: Send + Sync {
-    /// Append-only insert (see `AppendOutcome`). When `require_open_for_participant`
-    /// is true the open/deadline check happens atomically in the INSERT itself;
-    /// otherwise only archived groups are refused (organizer submissions).
+    /// Append-only insert. None is the public flow (open/deadline enforced).
+    /// Some(actor) rechecks manager access inside the write transaction.
     async fn append(
         &self,
         submission: &OrderSubmission,
-        require_open_for_participant: bool,
+        manager: Option<OrganizerId>,
         now: SystemTime,
     ) -> RepoResult<AppendOutcome>;
     async fn find_id_by_idempotency_key(
@@ -462,6 +464,9 @@ pub trait OrderReadModel: Send + Sync {
 /// One row of the organizer's group order list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupListItem {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
+    pub sharing_group_name: Option<String>,
+    pub can_manage: bool,
     pub id: GroupOrderId,
     pub title: String,
     pub status: GroupOrderStatus,

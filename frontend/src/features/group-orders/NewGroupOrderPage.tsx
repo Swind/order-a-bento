@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useAccessibleDirectory } from "@/features/sharing-groups/hooks";
+import { ScopeSelect } from "@/features/sharing-groups/ScopeSelect";
 import type { RosterSummary, VendorSummary } from "@/shared/api/types";
 import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
 import { ApiError } from "@/shared/api/client";
@@ -134,6 +135,7 @@ export function NewGroupOrderPage() {
   const create = useCreateGroupOrder();
 
   const [step, setStep] = useState(0);
+  const [sharingGroupId, setSharingGroupId] = useState("");
   const [rosterId, setRosterId] = useState<string | null>(null);
   const [vendorId, setVendorId] = useState<string | null>(null);
   const [titleOverride, setTitleOverride] = useState<string | null>(null);
@@ -178,6 +180,7 @@ export function NewGroupOrderPage() {
         title: trimmed,
         rosterId,
         vendorId,
+        ...(sharingGroupId ? { sharingGroupId } : {}),
         ...(deliveryAddressId ? { deliveryAddressId } : {}),
         ...(deadlineAt ? { deadlineAt } : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
@@ -191,8 +194,8 @@ export function NewGroupOrderPage() {
           const f = fieldError(err, ["title", "deadlineAt"]);
           if (f) {
             setErrors({ [f.field]: f.message });
-          } else if (err instanceof ApiError && err.status === 404) {
-            toast.error("名單、店家或送餐地址已不存在，請重新選擇");
+          } else if (err instanceof ApiError && (err.status === 403 || err.status === 404)) {
+            toast.error("共用群組或選用資料已無法存取，請確認開團歸屬並重新選擇資料");
             setRosterId(null);
             setVendorId(null);
             setDeliveryAddressId("");
@@ -211,6 +214,10 @@ export function NewGroupOrderPage() {
     <div className="mx-auto max-w-xl space-y-5">
       <div className="space-y-1"><h1 className="text-2xl font-bold tracking-tight">開團</h1><p className="text-sm text-muted-foreground">三個步驟，揪大家一起訂午餐。</p></div>
       <StepIndicator step={step} />
+      <div className="space-y-2 rounded-xl border p-3">
+        <ScopeSelect ownership value={sharingGroupId} onChange={setSharingGroupId} />
+        <p className="text-sm text-muted-foreground">歸屬與名單、店家的來源無關，開團後無法變更。群組成員可查看，管理員與仍在群組內的開團者可管理。</p>
+      </div>
 
       {step === 0 && (
         <section className="space-y-3" aria-label="選名單">

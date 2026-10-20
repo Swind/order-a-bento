@@ -6,6 +6,9 @@ import { renderApp } from "@/test/render";
 import { ME, problem, server } from "@/test/server";
 
 const detail = {
+  canManage: true,
+  sharingGroupId: null,
+  sharingGroupName: null,
   id: "g1",
   title: "T",
   status: "open",
@@ -73,6 +76,7 @@ describe("NewGroupOrderPage", () => {
     expect(await screen.findByText("分享連結")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/group-orders/g1");
     expect(posted).toMatchObject({ title: "週五午餐", rosterId: "r1", vendorId: "v1", deliveryAddressId: "a1" });
+    expect(posted).not.toHaveProperty("sharingGroupId");
     const delta = new Date(posted!.deadlineAt as string).getTime() - Date.now();
     expect(delta).toBeGreaterThan(55 * 60_000);
     expect(delta).toBeLessThan(65 * 60_000);
@@ -89,6 +93,68 @@ describe("NewGroupOrderPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "下一步" }));
     await userEvent.click(await screen.findByRole("button", { name: "開團" }));
     expect(await screen.findByText("標題格式不正確")).toBeInTheDocument();
+  });
+
+  it.each(["", "s1"])("keeps ownership %s independent of shared directory sources", async (ownership) => {
+    let posted: Record<string, unknown> | undefined;
+    server.use(
+      http.get("*/api/v1/sharing-groups", () => HttpResponse.json([{ id: "s1", name: "共同教室", role: "member" }])),
+      http.get("*/api/v1/rosters", ({ request }) => HttpResponse.json(
+        new URL(request.url).searchParams.has("sharingGroupId")
+          ? [{ id: "shared-r", name: "共用名單", memberCount: 2 }] : [],
+      )),
+      http.get("*/api/v1/vendors", ({ request }) => HttpResponse.json(
+        new URL(request.url).searchParams.has("sharingGroupId")
+          ? [] : [{ id: "personal-v", name: "私人店家", itemCount: 1 }],
+      )),
+      http.post("*/api/v1/group-orders", async ({ request }) => {
+        posted = await request.json() as Record<string, unknown>;
+        return HttpResponse.json(detail, { status: 201 });
+      }),
+      http.get("*/api/v1/group-orders/g1", () => HttpResponse.json(detail)),
+    );
+    renderApp("/group-orders/new");
+    expect(await screen.findByLabelText("開團歸屬")).toHaveValue("");
+    await screen.findByRole("option", { name: "共同教室（成員）" });
+    await userEvent.selectOptions(screen.getByLabelText("開團歸屬"), ownership);
+    await userEvent.click(await screen.findByRole("button", { name: /共用名單/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(await screen.findByRole("button", { name: /私人店家/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "開團" }));
+    await screen.findByText("分享連結");
+    expect(posted).toMatchObject({ rosterId: "shared-r", vendorId: "personal-v" });
+    if (ownership) expect(posted).toHaveProperty("sharingGroupId", ownership);
+    else expect(posted).not.toHaveProperty("sharingGroupId");
+  });
+
+  it("refreshes lost sharing access without silently changing ownership", async () => {
+    let accessible = true;
+    server.use(
+      http.get("*/api/v1/sharing-groups", () => HttpResponse.json(accessible ? [{ id: "s1", name: "共同教室", role: "member" }] : [])),
+      http.get("*/api/v1/rosters", ({ request }) => HttpResponse.json(
+        new URL(request.url).searchParams.has("sharingGroupId") ? [] : [{ id: "r1", name: "業務部", memberCount: 5 }],
+      )),
+      http.get("*/api/v1/vendors", ({ request }) => HttpResponse.json(
+        new URL(request.url).searchParams.has("sharingGroupId") ? [] : [{ id: "v1", name: "好吃便當", itemCount: 3 }],
+      )),
+      http.post("*/api/v1/group-orders", () => {
+        accessible = false;
+        return problem(404, "not_found");
+      }),
+    );
+    renderApp("/group-orders/new");
+    await screen.findByRole("option", { name: "共同教室（成員）" });
+    await userEvent.selectOptions(screen.getByLabelText("開團歸屬"), "s1");
+    await userEvent.click(await screen.findByRole("button", { name: /業務部/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(await screen.findByRole("button", { name: /好吃便當/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "開團" }));
+    expect(await screen.findByText("共用群組或選用資料已無法存取，請確認開團歸屬並重新選擇資料")).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: /原共用群組/ })).toBeDisabled();
+    expect(screen.getByLabelText("開團歸屬")).toHaveValue("s1");
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
   });
 
   it("dashboard links to the wizard", async () => {

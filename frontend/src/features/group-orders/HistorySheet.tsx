@@ -41,7 +41,7 @@ function DeviceLine({ entry }: { entry: SubmissionHistory }) {
   );
 }
 
-function HistoryEntry({ entry }: { entry: SubmissionHistory }) {
+function HistoryEntry({ entry, canManage }: { entry: SubmissionHistory; canManage: boolean }) {
   const t = new Date(entry.submittedAt);
   return (
     <li className={cn("space-y-1 rounded-lg border p-3", entry.effective && "border-primary bg-primary/5")}>
@@ -64,8 +64,8 @@ function HistoryEntry({ entry }: { entry: SubmissionHistory }) {
         </ul>
       )}
       {entry.note && <p className="text-sm text-muted-foreground">備註：{entry.note}</p>}
-      <DeviceLine entry={entry} />
-      {entry.sharedDeviceWith.length > 0 && (
+      {canManage && <DeviceLine entry={entry} />}
+      {canManage && entry.sharedDeviceWith.length > 0 && (
         <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
           ⚠ 此裝置也替 {entry.sharedDeviceWith.join("、")} 送出過訂單
         </p>
@@ -83,7 +83,8 @@ interface Props {
 export function HistorySheet({ group, participant, onClose }: Props) {
   const query = useHistory(group.id, participant?.id ?? null);
   const [editing, setEditing] = useState(false);
-  const archived = group.status === "archived";
+  const readOnly = group.status === "archived" || !group.canManage;
+  const showEditor = editing && !readOnly && !query.isError;
   const effective = query.data?.find((e) => e.effective && !e.cancelled) ?? null;
 
   function close() {
@@ -96,9 +97,9 @@ export function HistorySheet({ group, participant, onClose }: Props) {
       <SheetContent side="bottom" className="max-h-[90dvh] overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <SheetHeader className="p-0">
           <SheetTitle>{participant?.name}</SheetTitle>
-          <SheetDescription>{editing ? "代為修改訂單" : "送出紀錄"}</SheetDescription>
+          <SheetDescription>{showEditor ? "代為修改訂單" : "送出紀錄"}</SheetDescription>
         </SheetHeader>
-        {participant && editing && query.data && (
+        {participant && showEditor && query.data && (
           <OrganizerOrderEditor
             group={group}
             participantId={participant.id}
@@ -110,7 +111,7 @@ export function HistorySheet({ group, participant, onClose }: Props) {
             onCancel={() => setEditing(false)}
           />
         )}
-        {!editing && (
+        {!showEditor && (
           <>
             {query.isPending && <Skeleton className="h-24 w-full" />}
             {query.isError && (
@@ -118,17 +119,17 @@ export function HistorySheet({ group, participant, onClose }: Props) {
                 {errorMessage(query.error)}
               </p>
             )}
-            {query.data && query.data.length === 0 && (
+            {!query.isError && query.data && query.data.length === 0 && (
               <p className="text-muted-foreground">尚無送出紀錄</p>
             )}
-            {query.data && query.data.length > 0 && (
+            {!query.isError && query.data && query.data.length > 0 && (
               <ol className="space-y-2" aria-label="送出紀錄">
                 {query.data.map((e) => (
-                  <HistoryEntry key={e.id} entry={e} />
+                  <HistoryEntry key={e.id} entry={e} canManage={group.canManage} />
                 ))}
               </ol>
             )}
-            {!archived && query.data && (
+            {!readOnly && !query.isError && query.data && (
               <Button type="button" className="h-11" onClick={() => setEditing(true)}>
                 代為修改訂單
               </Button>

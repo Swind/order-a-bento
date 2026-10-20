@@ -6,6 +6,9 @@ import { renderApp } from "@/test/render";
 import { ME, server } from "@/test/server";
 
 const item = (id: string, title: string, status: string) => ({
+  canManage: true,
+  sharingGroupId: null,
+  sharingGroupName: null,
   id,
   title,
   status,
@@ -32,6 +35,15 @@ beforeEach(() =>
 );
 
 describe("GroupOrdersPage", () => {
+  it.each(["/", "/group-orders"])("shows accessible group-owned and personal orders at %s", async (path) => {
+    server.use(http.get("*/api/v1/group-orders", () => HttpResponse.json([
+      item("a", "個人午餐", "open"),
+      { ...item("b", "群組午餐", "open"), sharingGroupId: "s1", sharingGroupName: "共同教室", canManage: false },
+    ])));
+    renderApp(path);
+    expect(await screen.findByRole("link", { name: /群組午餐/ })).toHaveTextContent("共用群組：共同教室 · 唯讀");
+    expect(screen.getByRole("link", { name: /個人午餐/ })).toHaveTextContent("個人");
+  });
   it("shows only active groups on the dashboard with an opening shortcut", async () => {
     renderApp("/");
     expect(await screen.findByRole("heading", { name: "今天訂什麼？" })).toBeInTheDocument();

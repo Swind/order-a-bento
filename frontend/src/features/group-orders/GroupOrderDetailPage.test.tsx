@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +48,87 @@ beforeEach(() => {
 });
 
 describe("GroupOrderDetailPage header", () => {
+  it.each([
+    { status: "open", canManage: false },
+    { status: "closed", canManage: false },
+    { status: "archived", canManage: true },
+  ])("keeps all tabs readable but disables mutations for $status / canManage=$canManage", async (permissions) => {
+    group = { ...group, ...permissions, sharingGroupId: "s1", sharingGroupName: "共同教室" };
+    server.use(http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () => HttpResponse.json([])));
+    renderApp("/group-orders/g1");
+    expect(await screen.findByText("共用群組：共同教室")).toBeInTheDocument();
+    expect(await screen.findByRole("switch", { name: "排骨飯 售完" })).toHaveAttribute("aria-disabled", "true");
+    for (const name of ["修改標題", "修改截止時間", "設定送餐地址", "關閉收單", "重新開放", "封存", "重新產生連結"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "複製訂單文字" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("tab", { name: "明細" }));
+    await userEvent.click(await screen.findByRole("button", { name: /陳美麗/ }));
+    expect(await screen.findByText("尚無送出紀錄")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "代為修改訂單" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("button", { name: "＋ 臨時加入成員" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "領取＆繳費" }));
+    expect(await screen.findByRole("switch", { name: "王小明 繳費" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("switch", { name: "王小明 領取" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("已收 $520 / 應收 $1,140")).toBeInTheDocument();
+  });
+
+  it("does not grant management when the capability is missing", async () => {
+    server.use(http.get("*/api/v1/group-orders/g1", () => HttpResponse.json({ ...group, canManage: undefined })));
+    renderApp("/group-orders/g1");
+    expect(await screen.findByRole("switch", { name: "排骨飯 售完" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("button", { name: "修改標題" })).not.toBeInTheDocument();
+  });
+
+  it("closes an active title editor when management permission is lost", async () => {
+    const { queryClient } = renderApp("/group-orders/g1");
+    await userEvent.click(await screen.findByRole("button", { name: "修改標題" }));
+    expect(screen.getByRole("button", { name: "儲存" })).toBeInTheDocument();
+    group = { ...group, canManage: false };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["group-order", "g1"], exact: true }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "標題" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "儲存" })).not.toBeInTheDocument();
+  });
+
+  it("refreshes capabilities after a readonly mutation denial", async () => {
+    server.use(http.patch("*/api/v1/group-orders/g1/offered-items/i1", () => {
+      group = { ...group, canManage: false };
+      return problem(403, "forbidden");
+    }));
+    renderApp("/group-orders/g1");
+    await userEvent.click(await screen.findByRole("switch", { name: "排骨飯 售完" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "修改標題" })).not.toBeInTheDocument());
+    expect(screen.getByRole("switch", { name: "排骨飯 售完" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it.each(["detail", "participants", "summary", "history"])("removes protected content when a cached %s read discovers removal", async (source) => {
+    server.use(http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () => HttpResponse.json([])));
+    const { queryClient } = renderApp(source === "summary" ? "/group-orders/g1" : "/group-orders/g1?tab=details");
+    if (source === "summary") {
+      await screen.findByText("共 11 個 · $1,140");
+    } else {
+      await userEvent.click(await screen.findByRole("button", { name: /陳美麗/ }));
+      await screen.findByText("尚無送出紀錄");
+    }
+    server.use(
+      http.get("*/api/v1/group-orders/g1", () => problem(404, "not_found")),
+      http.get("*/api/v1/group-orders/g1/participants", () => problem(404, "not_found")),
+      http.get("*/api/v1/group-orders/g1/summary", () => problem(404, "not_found")),
+      http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () => problem(404, "not_found")),
+    );
+    const key = source === "detail" ? ["group-order", "g1"] : source === "history"
+      ? ["group-order", "g1", "history", "p2"] : ["group-order", "g1", source];
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: key, exact: true, type: "all" });
+    });
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "週五午餐" })).not.toBeInTheDocument());
+    expect(screen.queryByText("陳美麗")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "代為修改訂單" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(queryClient.getQueryData(["group-order", "g1", "participants"])).toBeUndefined();
+    expect(queryClient.getQueryData(["group-order", "g1", "history", "p2"])).toBeUndefined();
+  });
   it("keeps settings collapsed and opens the link for manual copying on clipboard failure", async () => {
     const user = userEvent.setup();
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
@@ -265,6 +346,24 @@ describe("DetailsTab + history sheet", () => {
       sharedDeviceWith: [],
     },
   ];
+
+  it("closes an active organizer editor and hides cached device metadata after a downgrade", async () => {
+    server.use(http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () => HttpResponse.json(HISTORY)));
+    const { queryClient } = renderApp("/group-orders/g1?tab=details");
+    await userEvent.click(await screen.findByRole("button", { name: /陳美麗/ }));
+    expect(await screen.findByText(/203\.0\.113\.8/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "代為修改訂單" }));
+    expect(screen.getByRole("button", { name: "儲存訂單" })).toBeInTheDocument();
+    group = { ...group, canManage: false };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["group-order", "g1"], exact: true }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "儲存訂單" })).not.toBeInTheDocument());
+    expect(screen.getByText("目前有效")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "代為修改訂單" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/203\.0\.113\.8/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Android · Chrome/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("device-short")).not.toBeInTheDocument();
+    expect(screen.queryByText(/此裝置也替/)).not.toBeInTheDocument();
+  });
 
   it("lists orders with notes, badges, and opens the history sheet", async () => {
     server.use(

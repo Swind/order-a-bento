@@ -21,6 +21,8 @@ use crate::ports::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum OrderingError {
+    #[error("forbidden")]
+    Forbidden,
     /// Unknown / foreign id, malformed or unknown token, unknown participant.
     #[error("not found")]
     NotFound,
@@ -51,6 +53,7 @@ impl From<RepoError> for OrderingError {
     fn from(e: RepoError) -> Self {
         match e {
             RepoError::NotFound => Self::NotFound,
+            RepoError::Forbidden => Self::Forbidden,
             RepoError::Domain(d) => d.into(),
             RepoError::UniqueViolation => Self::Conflict,
             RepoError::Port(p) => p.into(),
@@ -60,6 +63,7 @@ impl From<RepoError> for OrderingError {
 
 #[derive(Debug, Clone)]
 pub struct OpenGroupCmd {
+    pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
     pub delivery_address_id: Option<domain::directory::DeliveryAddressId>,
     pub title: String,
     pub roster_id: RosterId,
@@ -189,8 +193,9 @@ impl OrderingService {
                 .ok_or(OrderingError::NotFound)?;
             group.set_delivery_address(Patch::Set(address.value.snapshot()))?;
         }
+        group.sharing_group_id = cmd.sharing_group_id;
         self.groups.create(&group).await?;
-        Ok(group)
+        self.get_group(org, group.id()).await
     }
 
     pub async fn get_group(
@@ -276,7 +281,7 @@ impl OrderingService {
             Some(cmd.client_info),
             now,
         )?;
-        match self.submissions.append(&submission, true, now).await? {
+        match self.submissions.append(&submission, None, now).await? {
             AppendOutcome::Inserted | AppendOutcome::Duplicate(_) => {}
             AppendOutcome::Rejected(reason) => {
                 return Err(OrderingError::Domain(DomainError::Closed { reason }));
@@ -315,6 +320,11 @@ impl OrderingService {
         cmd: UpdateGroupCmd,
     ) -> Result<GroupOrder, OrderingError> {
         let now = self.clock.now();
+        // Resolve authorization before looking up an optional replacement address;
+        // the repository still rechecks under its write lock below.
+        if !self.get_group(org, id).await?.can_manage {
+            return Err(OrderingError::Forbidden);
+        }
         let delivery_address = match cmd.delivery_address_id {
             Patch::Keep => Patch::Keep,
             Patch::Clear => Patch::Clear,
@@ -440,8 +450,15 @@ impl OrderingService {
         org: OrganizerId,
         id: GroupOrderId,
     ) -> Result<Vec<ParticipantRow>, OrderingError> {
-        self.get_group(org, id).await?;
-        Ok(self.management.participant_rows(id, None).await?)
+        let group = self.get_group(org, id).await?;
+        let mut rows = self.management.participant_rows(id, None).await?;
+        if !group.can_manage {
+            for row in &mut rows {
+                row.device_short = None;
+                row.suspicious_device = false;
+            }
+        }
+        Ok(rows)
     }
 
     pub async fn submission_history(
@@ -452,7 +469,14 @@ impl OrderingService {
     ) -> Result<Vec<SubmissionHistoryEntry>, OrderingError> {
         let group = self.get_group(org, id).await?;
         self.ensure_participant(&group, participant)?;
-        Ok(self.management.submission_history(id, participant).await?)
+        let mut history = self.management.submission_history(id, participant).await?;
+        if !group.can_manage {
+            for entry in &mut history {
+                entry.client = Default::default();
+                entry.shared_device_with.clear();
+            }
+        }
+        Ok(history)
     }
 
     /// The organizer submits (or corrects, or cancels) on behalf of a participant.
@@ -463,26 +487,29 @@ impl OrderingService {
         cmd: OrganizerSubmitCmd,
     ) -> Result<EffectiveOrderView, OrderingError> {
         let group = self.get_group(org, cmd.group_id).await?;
+        if !group.can_manage {
+            return Err(OrderingError::Forbidden);
+        }
         self.ensure_participant(&group, cmd.participant_id)?;
-        if self
+        let replay = self
             .submissions
             .find_id_by_idempotency_key(group.id(), cmd.idempotency_key)
             .await?
-            .is_some()
-        {
-            return self.effective_after(group.id(), cmd.participant_id).await;
-        }
+            .is_some();
         let now = self.clock.now();
         let submission = group.new_submission(
             cmd.participant_id,
-            &cmd.lines,
-            cmd.note.as_deref(),
+            // A replay must not revalidate a menu item that has since sold out.
+            // Still append through the repository so authorization is rechecked
+            // under the write lock, even when the key already exists.
+            if replay { &[] } else { &cmd.lines },
+            if replay { None } else { cmd.note.as_deref() },
             Actor::Organizer,
             cmd.idempotency_key,
             None,
             now,
         )?;
-        match self.submissions.append(&submission, false, now).await? {
+        match self.submissions.append(&submission, Some(org), now).await? {
             AppendOutcome::Inserted | AppendOutcome::Duplicate(_) => {}
             AppendOutcome::Rejected(reason) => {
                 return Err(OrderingError::Domain(DomainError::Closed { reason }));

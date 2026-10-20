@@ -36,7 +36,7 @@ export function useSharingMembers(id: string) {
 function invalidateSharingQueries(qc: QueryClient) {
   // Membership changes affect listings, already-open details, and import permissions.
   return Promise.all(
-    ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run"]
+    ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run", "group-orders", "group-order"]
       .map((key) => qc.invalidateQueries({ queryKey: [key] })),
   );
 }

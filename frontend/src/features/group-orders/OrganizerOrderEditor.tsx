@@ -75,6 +75,7 @@ export function OrganizerOrderEditor({
   }
 
   function send(payloadLines: typeof lines, note: string, cancelling: boolean) {
+    if (!group.canManage || group.status === "archived") return;
     const trimmed = note.trim();
     const fingerprint = JSON.stringify([participantId, payloadLines, trimmed]);
     pendingKey.current = resolveIdempotencyKey(pendingKey.current, fingerprint);
@@ -94,6 +95,8 @@ export function OrganizerOrderEditor({
       },
     );
   }
+
+  if (!group.canManage || group.status === "archived") return null;
 
   return (
     <div className="space-y-4">

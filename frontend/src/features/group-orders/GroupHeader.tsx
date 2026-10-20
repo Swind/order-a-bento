@@ -25,7 +25,7 @@ function DeliveryAddressEditor({ group, readOnly }: { group: GroupOrderDetail; r
 
   return (
     <div className="space-y-2 text-sm">
-      {editing ? (
+      {editing && !readOnly ? (
         <div className="space-y-2">
           <DeliveryAddressSelect value={id} onChange={setId} disabled={patch.isPending} />
           <div className="flex flex-wrap gap-2">
@@ -71,7 +71,7 @@ function TitleEditor({ group, readOnly }: { group: GroupOrderDetail; readOnly: b
     );
   }
 
-  if (!editing)
+  if (!editing || readOnly)
     return (
       <div className="flex min-w-0 items-center gap-1">
         <h1 className="min-w-0 break-words text-2xl font-bold">{group.title}</h1>
@@ -130,7 +130,7 @@ function DeadlineEditor({ group, readOnly }: { group: GroupOrderDetail; readOnly
     });
   }
 
-  if (!editing)
+  if (!editing || readOnly)
     return (
       <div className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
         <span>{deadline ? `截止 ${formatMD(deadline)} ${formatHHmm(deadline)}` : "未設定截止時間"}</span>
@@ -187,17 +187,20 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
   const patch = usePatchGroup(group.id);
   const rotate = useRotateShareToken(group.id);
   const archived = group.status === "archived";
+  const readOnly = archived || !group.canManage;
 
   function setStatus(status: "open" | "closed" | "archived") {
+    if (readOnly) return;
     patch.mutate({ status }, { onError: (e) => toast.error(errorMessage(e)) });
   }
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <TitleEditor key={group.title} group={group} readOnly={archived} />
+        <TitleEditor key={group.title} group={group} readOnly={readOnly} />
         <StatusBadge status={group.status} deadlineAt={group.deadlineAt} />
       </div>
+      <p className="text-sm text-muted-foreground">{group.sharingGroupId ? `共用群組：${group.sharingGroupName ?? group.sharingGroupId}` : "個人"}</p>
       <p className="text-muted-foreground">
         {group.vendor.name}
         {group.vendor.phone && ` · ${group.vendor.phone}`}
@@ -212,6 +215,8 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
         <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
           此團已封存，內容為唯讀。
         </p>
+      ) : readOnly ? (
+        <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">此團為唯讀，只有群組管理員與仍在群組內的開團者可管理。</p>
       ) : (
         <div className="flex flex-wrap items-start gap-3">
           {group.status === "open" && (

@@ -76,7 +76,7 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
                   size="sm"
                   aria-label={`${i.name} 售完`}
                   checked={isSoldOut}
-                  disabled={archived || soldOut.isPending}
+                   disabled={archived || !group.canManage || soldOut.isPending}
                   onCheckedChange={(checked) =>
                     soldOut.mutate(
                       { itemId: i.itemId, soldOut: checked },

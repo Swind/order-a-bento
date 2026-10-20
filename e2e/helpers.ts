@@ -37,8 +37,15 @@ export const createVendor = (
   menuItems: { name: string; price: number }[],
 ) => postJson<{ id: string }>(page, "/api/v1/vendors", { name, menuItems });
 
-export const createGroupOrder = (page: Page, title: string, rosterId: string, vendorId: string) =>
-  postJson<{ id: string; shareUrl: string }>(page, "/api/v1/group-orders", { title, rosterId, vendorId });
+export const createGroupOrder = (
+  page: Page,
+  title: string,
+  rosterId: string,
+  vendorId: string,
+  options: { sharingGroupId?: string | null; deadlineAt?: string } = {},
+) => postJson<{ id: string; shareUrl: string }>(page, "/api/v1/group-orders", {
+  title, rosterId, vendorId, ...options,
+});
 
 export interface PublicGroup {
   participants: { id: string; name: string; hasOrdered: boolean }[];

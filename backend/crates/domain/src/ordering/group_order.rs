@@ -104,6 +104,7 @@ pub struct VendorSnapshot {
 /// Storage-shaped input for [`GroupOrder::from_parts`].
 #[derive(Debug, Clone)]
 pub struct GroupOrderParts {
+    pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
     pub delivery_address: Option<String>,
     pub id: GroupOrderId,
     pub organizer_id: OrganizerId,
@@ -123,6 +124,10 @@ pub struct GroupOrderParts {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupOrder {
+    pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
+    /// Actor-specific read metadata, never persisted.
+    pub sharing_group_name: Option<String>,
+    pub can_manage: bool,
     delivery_address: Option<String>,
     id: GroupOrderId,
     organizer_id: OrganizerId,
@@ -194,6 +199,9 @@ impl GroupOrder {
             .collect();
         Ok(Self {
             id: GroupOrderId::new(),
+            sharing_group_id: None,
+            sharing_group_name: None,
+            can_manage: true,
             delivery_address: None,
             organizer_id,
             title,
@@ -228,6 +236,9 @@ impl GroupOrder {
         }
         Ok(Self {
             id: p.id,
+            sharing_group_id: p.sharing_group_id,
+            sharing_group_name: None,
+            can_manage: true,
             delivery_address: p.delivery_address,
             organizer_id: p.organizer_id,
             title: p.title,

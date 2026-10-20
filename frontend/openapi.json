@@ -575,7 +575,7 @@
         "tags": [
           "group-orders"
         ],
-        "summary": "My group orders, newest first, with order counts and totals (one query).",
+        "summary": "All accessible orders, newest first, with counts and totals (one query).",
         "operationId": "list_group_orders",
         "parameters": [
           {
@@ -697,7 +697,7 @@
         "tags": [
           "group-orders"
         ],
-        "summary": "A group order of the logged-in organizer.",
+        "summary": "A personal order or a group-owned order accessible through current membership.",
         "operationId": "get_group_order",
         "parameters": [
           {
@@ -794,6 +794,16 @@
               }
             }
           },
+          "403": {
+            "description": "Current member without management permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (also for another organizer's group order)",
             "content": {
@@ -871,6 +881,16 @@
           },
           "401": {
             "description": "Not logged in",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current member without management permission",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1012,6 +1032,16 @@
               }
             }
           },
+          "403": {
+            "description": "Current member without management permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (also for another organizer's group order)",
             "content": {
@@ -1107,8 +1137,28 @@
               }
             }
           },
+          "403": {
+            "description": "Current member without management permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Group order or participant not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Archived order is immutable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -1130,7 +1180,7 @@
         "tags": [
           "group-orders"
         ],
-        "summary": "All submissions of one participant (including cancellations), newest first.",
+        "summary": "All submissions, newest first. Read-only members receive order history with\nclient metadata and shared-device associations redacted.",
         "operationId": "list_submissions",
         "parameters": [
           {
@@ -1248,6 +1298,16 @@
               }
             }
           },
+          "403": {
+            "description": "Current member without management permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Group order, participant or item not found",
             "content": {
@@ -1325,8 +1385,28 @@
               }
             }
           },
+          "403": {
+            "description": "Current member without management permission",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not found (also for another organizer's group order)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Archived order is immutable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -3759,6 +3839,13 @@
           "rosterId": {
             "type": "string"
           },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Omitted/null = personal. Any current member may create in this group;\nsnapshot directory ownership is independent. Immutable after creation."
+          },
           "title": {
             "type": "string"
           },
@@ -3975,6 +4062,9 @@
       "GroupListItemDto": {
         "type": "object",
         "required": [
+          "canManage",
+          "sharingGroupId",
+          "sharingGroupName",
           "id",
           "title",
           "status",
@@ -3985,6 +4075,9 @@
           "totalAmount"
         ],
         "properties": {
+          "canManage": {
+            "type": "boolean"
+          },
           "closedAt": {
             "type": [
               "string",
@@ -4017,6 +4110,18 @@
             "format": "int32",
             "minimum": 0
           },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharingGroupName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/GroupStatusDto"
           },
@@ -4047,6 +4152,9 @@
       "GroupOrderDetail": {
         "type": "object",
         "required": [
+          "canManage",
+          "sharingGroupId",
+          "sharingGroupName",
           "id",
           "title",
           "status",
@@ -4057,6 +4165,10 @@
           "createdAt"
         ],
         "properties": {
+          "canManage": {
+            "type": "boolean",
+            "description": "Current actor's management permission; archived orders remain immutable."
+          },
           "closedAt": {
             "type": [
               "string",
@@ -4105,6 +4217,18 @@
           "shareUrl": {
             "type": "string",
             "description": "`APP_BASE_URL/g/<token>`; the link to post in the chat."
+          },
+          "sharingGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sharingGroupName": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "type": "string",

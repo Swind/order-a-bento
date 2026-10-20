@@ -111,6 +111,7 @@ pub fn directory_error(e: DirectoryError) -> AppError {
 
 pub fn ordering_error(e: OrderingError) -> AppError {
     match e {
+        OrderingError::Forbidden => AppError::Forbidden("group order is read-only".into()),
         OrderingError::NotFound => AppError::NotFound("resource not found".into()),
         OrderingError::Domain(d) => domain_error(d),
         OrderingError::Conflict => {

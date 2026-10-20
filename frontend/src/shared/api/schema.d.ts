@@ -132,7 +132,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** My group orders, newest first, with order counts and totals (one query). */
+        /** All accessible orders, newest first, with counts and totals (one query). */
         get: operations["list_group_orders"];
         put?: never;
         /** Open a group order: snapshots the roster and the vendor's active menu. */
@@ -150,7 +150,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A group order of the logged-in organizer. */
+        /** A personal order or a group-owned order accessible through current membership. */
         get: operations["get_group_order"];
         put?: never;
         post?: never;
@@ -227,7 +227,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** All submissions of one participant (including cancellations), newest first. */
+        /**
+         * All submissions, newest first. Read-only members receive order history with
+         *     client metadata and shared-device associations redacted.
+         */
         get: operations["list_submissions"];
         put?: never;
         /**
@@ -810,6 +813,11 @@ export interface components {
             deliveryAddressId?: string | null;
             note?: string | null;
             rosterId: string;
+            /**
+             * @description Omitted/null = personal. Any current member may create in this group;
+             *     snapshot directory ownership is independent. Immutable after creation.
+             */
+            sharingGroupId?: string | null;
             title: string;
             vendorId: string;
         };
@@ -857,6 +865,7 @@ export interface components {
             order?: components["schemas"]["EffectiveOrderDto"] | null;
         };
         GroupListItemDto: {
+            canManage: boolean;
             /** Format: date-time */
             closedAt?: string | null;
             /** Format: date-time */
@@ -871,6 +880,8 @@ export interface components {
             orderedCount: number;
             /** Format: int32 */
             participantCount: number;
+            sharingGroupId: string | null;
+            sharingGroupName: string | null;
             status: components["schemas"]["GroupStatusDto"];
             title: string;
             /**
@@ -884,6 +895,8 @@ export interface components {
             name: string;
         };
         GroupOrderDetail: {
+            /** @description Current actor's management permission; archived orders remain immutable. */
+            canManage: boolean;
             /** Format: date-time */
             closedAt?: string | null;
             /** Format: date-time */
@@ -897,6 +910,8 @@ export interface components {
             participants: components["schemas"]["ParticipantDto"][];
             /** @description `APP_BASE_URL/g/<token>`; the link to post in the chat. */
             shareUrl: string;
+            sharingGroupId: string | null;
+            sharingGroupName: string | null;
             /** @description `open`, `closed` or `archived`. */
             status: string;
             title: string;
@@ -2121,6 +2136,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Current member without management permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Not found (also for another organizer's group order) */
             404: {
                 headers: {
@@ -2169,6 +2193,15 @@ export interface operations {
             };
             /** @description Not logged in */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Current member without management permission */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2269,6 +2302,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Current member without management permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Not found (also for another organizer's group order) */
             404: {
                 headers: {
@@ -2333,8 +2375,26 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Current member without management permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Group order or participant not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Archived order is immutable */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2421,6 +2481,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Current member without management permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Group order, participant or item not found */
             404: {
                 headers: {
@@ -2480,8 +2549,26 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
+            /** @description Current member without management permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
             /** @description Not found (also for another organizer's group order) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Archived order is immutable */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

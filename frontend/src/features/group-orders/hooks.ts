@@ -1,8 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "@/shared/api/client";
-import type { ParticipantRow, PatchGroupOrderBody } from "@/shared/api/types";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { api, unwrap, ApiError } from "@/shared/api/client";
+import { invalidateSharingAccessOnError } from "@/features/sharing-groups/hooks";
+import type { GroupOrderDetail, GroupSummary, ParticipantRow, PatchGroupOrderBody } from "@/shared/api/types";
 
 export interface CreateGroupOrderInput {
+  sharingGroupId?: string | null;
   deliveryAddressId?: string;
   title: string;
   rosterId: string;
@@ -22,9 +24,30 @@ export const historyKey = (id: string, pid: string) =>
 export const LIVE_REFETCH_MS = 15_000;
 const live = (isOpen: boolean) => (isOpen ? LIVE_REFETCH_MS : false);
 
+// Child reads can discover a removal before the detail query's next refresh.
+async function readOrder<T>(qc: QueryClient, id: string, request: () => Promise<T>, detail = false): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      if (detail) {
+        const children = { queryKey: groupOrderKey(id), predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey.length > 2 };
+        await qc.cancelQueries(children);
+        qc.removeQueries(children);
+      } else {
+        void qc.invalidateQueries({ queryKey: groupOrderKey(id), exact: true });
+      }
+      void qc.invalidateQueries({ queryKey: groupsKey });
+      void qc.invalidateQueries({ queryKey: ["sharing-groups"] });
+    }
+    throw error;
+  }
+}
+
 export function useCreateGroupOrder() {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (body: CreateGroupOrderInput) =>
       unwrap(await api.POST("/api/v1/group-orders", { body })),
     onSuccess: (data) => {
@@ -42,42 +65,51 @@ export function useGroups() {
 }
 
 export function useGroupOrder(id: string) {
-  return useQuery({
+  const qc = useQueryClient();
+  return useQuery<GroupOrderDetail>({
     queryKey: groupOrderKey(id),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/group-orders/{id}", { params: { path: { id } } })),
+    retry: false,
+    refetchInterval: (query) => query.state.error ? false : live(query.state.data?.status === "open"),
+    queryFn: ({ signal }) => readOrder(qc, id, async () =>
+      unwrap(await api.GET("/api/v1/group-orders/{id}", { params: { path: { id } }, signal })), true),
   });
 }
 
 export function useSummary(id: string, isOpen: boolean) {
-  return useQuery({
+  const qc = useQueryClient();
+  return useQuery<GroupSummary>({
     queryKey: summaryKey(id),
-    refetchInterval: live(isOpen),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/group-orders/{id}/summary", { params: { path: { id } } })),
+    retry: false,
+    refetchInterval: (query) => query.state.error ? false : live(isOpen),
+    queryFn: ({ signal }) => readOrder(qc, id, async () =>
+      unwrap(await api.GET("/api/v1/group-orders/{id}/summary", { params: { path: { id } }, signal }))),
   });
 }
 
 export function useParticipants(id: string, isOpen: boolean) {
-  return useQuery({
+  const qc = useQueryClient();
+  return useQuery<ParticipantRow[]>({
     queryKey: participantsKey(id),
-    refetchInterval: live(isOpen),
-    queryFn: async () =>
-      unwrap(await api.GET("/api/v1/group-orders/{id}/participants", { params: { path: { id } } })),
+    retry: false,
+    refetchInterval: (query) => query.state.error ? false : live(isOpen),
+    queryFn: ({ signal }) => readOrder(qc, id, async () =>
+      unwrap(await api.GET("/api/v1/group-orders/{id}/participants", { params: { path: { id } }, signal }))),
   });
 }
 
 export function useHistory(id: string, pid: string | null) {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: historyKey(id, pid ?? ""),
     enabled: !!pid,
     gcTime: 0,
-    queryFn: async () =>
+    retry: false,
+    queryFn: ({ signal }) => readOrder(qc, id, async () =>
       unwrap(
         await api.GET("/api/v1/group-orders/{id}/participants/{pid}/submissions", {
-          params: { path: { id, pid: pid! } },
+          params: { path: { id, pid: pid! } }, signal,
         }),
-      ),
+      )),
   });
 }
 
@@ -95,6 +127,7 @@ export function usePatchGroup(id: string) {
   const qc = useQueryClient();
   const invalidate = useInvalidateAfterChange(id);
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (body: PatchGroupOrderBody) =>
       unwrap(
         await api.PATCH("/api/v1/group-orders/{id}", { params: { path: { id } }, body }),
@@ -109,6 +142,7 @@ export function usePatchGroup(id: string) {
 export function useRotateShareToken(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async () =>
       unwrap(
         await api.POST("/api/v1/group-orders/{id}/share-token/rotate", {
@@ -123,6 +157,7 @@ export function useAddParticipant(id: string) {
   const qc = useQueryClient();
   const invalidate = useInvalidateAfterChange(id);
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (name: string) =>
       unwrap(
         await api.POST("/api/v1/group-orders/{id}/participants", {
@@ -140,6 +175,7 @@ export function useAddParticipant(id: string) {
 export function useSetSoldOut(id: string) {
   const qc = useQueryClient();
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (v: { itemId: string; soldOut: boolean }) =>
       unwrap(
         await api.PATCH("/api/v1/group-orders/{id}/offered-items/{itemId}", {
@@ -180,8 +216,9 @@ export function useSettlement(id: string) {
       );
       return { previous };
     },
-    onError: (_err, _v, ctx) => {
+    onError: (error, _v, ctx) => {
       if (ctx?.previous) qc.setQueryData(participantsKey(id), ctx.previous);
+      return invalidateSharingAccessOnError(qc, error);
     },
     onSettled: () =>
       Promise.all([
@@ -195,6 +232,7 @@ export function useOrganizerSubmit(id: string, pid: string) {
   const qc = useQueryClient();
   const invalidate = useInvalidateAfterChange(id);
   return useMutation({
+    onError: (error) => invalidateSharingAccessOnError(qc, error),
     mutationFn: async (body: {
       lines: { itemId: string; quantity: number; note?: string }[];
       note?: string;

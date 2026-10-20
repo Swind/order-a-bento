@@ -65,6 +65,7 @@ impl SqliteGroupOrderRepo {
 
 #[derive(sqlx::FromRow)]
 struct GroupRow {
+    sharing_group_id: Option<String>,
     id: String,
     organizer_id: String,
     title: String,
@@ -84,7 +85,7 @@ struct GroupRow {
 
 const GROUP_COLUMNS: &str = "id, organizer_id, title, share_token, status, deadline_at, note, \
      source_roster_id, source_vendor_id, vendor_name, vendor_phone, vendor_address, \
-     created_at, closed_at, delivery_address";
+      created_at, closed_at, delivery_address, sharing_group_id";
 
 async fn assemble_group(conn: &mut SqliteConnection, row: GroupRow) -> PortResult<GroupOrder> {
     let participants = sqlx::query_as::<_, (String, String, i32)>(
@@ -139,6 +140,10 @@ async fn assemble_group(conn: &mut SqliteConnection, row: GroupRow) -> PortResul
     )
     .collect::<PortResult<Vec<_>>>()?;
     GroupOrder::from_parts(GroupOrderParts {
+        sharing_group_id: row
+            .sharing_group_id
+            .map(|id| id.parse().map_err(port))
+            .transpose()?,
         id: row.id.parse().map_err(port)?,
         organizer_id: row.organizer_id.parse().map_err(port)?,
         title: GroupTitle::new(&row.title).map_err(port)?,
@@ -176,15 +181,37 @@ async fn load_group_by_id(
     id: GroupOrderId,
 ) -> PortResult<Option<GroupOrder>> {
     let row = sqlx::query_as::<_, GroupRow>(sqlx::AssertSqlSafe(format!(
-        "SELECT {GROUP_COLUMNS} FROM group_orders WHERE id = ? AND organizer_id = ?"
+        "SELECT {GROUP_COLUMNS} FROM group_orders WHERE id = ?"
     )))
     .bind(id.to_string())
-    .bind(org.to_string())
     .fetch_optional(&mut *conn)
     .await
     .map_err(port)?;
     match row {
-        Some(r) => Ok(Some(assemble_group(conn, r).await?)),
+        Some(r) => {
+            let can_manage = match r.sharing_group_id.as_deref() {
+                None if r.organizer_id == org.to_string() => true,
+                None => return Ok(None),
+                Some(id) => match crate::sharing_repo::authorize(conn, org, id, false).await {
+                    Ok(role) => role == "admin" || r.organizer_id == org.to_string(),
+                    Err(application::sharing::SharingError::NotFound) => return Ok(None),
+                    Err(e) => return Err(port(e)),
+                },
+            };
+            let name = if let Some(id) = &r.sharing_group_id {
+                sqlx::query_scalar::<_, String>("SELECT name FROM sharing_groups WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&mut *conn)
+                    .await
+                    .map_err(port)?
+            } else {
+                None
+            };
+            let mut group = assemble_group(conn, r).await?;
+            group.can_manage = can_manage;
+            group.sharing_group_name = name;
+            Ok(Some(group))
+        }
         None => Ok(None),
     }
 }
@@ -207,6 +234,16 @@ async fn insert_participant(
     Ok(())
 }
 
+fn ensure_manager(group: &GroupOrder) -> RepoResult<()> {
+    if !group.can_manage {
+        return Err(RepoError::Forbidden);
+    }
+    if group.status() == GroupOrderStatus::Archived {
+        return Err(domain::shared::DomainError::invalid("status", "團購已封存，無法修改").into());
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl GroupOrderRepo for SqliteGroupOrderRepo {
     async fn create(&self, g: &GroupOrder) -> RepoResult<()> {
@@ -218,6 +255,14 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
             .map_err(port)?;
         // Recheck current membership while holding the write lock: revocation
         // between the snapshot reads and this insert must not open a new order.
+        if let Some(id) = g.sharing_group_id {
+            crate::sharing_repo::authorize(&mut tx, g.organizer_id(), &id.to_string(), false)
+                .await
+                .map_err(|e| match e {
+                    application::sharing::SharingError::Port(p) => RepoError::Port(p),
+                    _ => RepoError::NotFound,
+                })?;
+        }
         if let Some(id) = g.source_roster_id()
             && crate::directory_repo::load_roster(&mut tx, g.organizer_id(), id)
                 .await?
@@ -234,7 +279,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         }
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO group_orders ({GROUP_COLUMNS}) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )))
         .bind(g.id().to_string())
         .bind(g.organizer_id().to_string())
@@ -251,6 +296,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         .bind(to_text(g.created_at()))
         .bind(g.closed_at().map(to_text))
         .bind(g.delivery_address())
+        .bind(g.sharing_group_id.map(|id| id.to_string()))
         .execute(&mut *tx)
         .await
         .map_err(repo)?;
@@ -318,6 +364,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         let before = load_group_by_id(&mut tx, org, id)
             .await?
             .ok_or(RepoError::NotFound)?;
+        ensure_manager(&before)?;
         let mut after = before.clone();
         // On error the transaction is dropped, i.e. rolled back.
         mutation(&mut after)?;
@@ -336,7 +383,7 @@ impl GroupOrderRepo for SqliteGroupOrderRepo {
         .bind(after.closed_at().map(to_text))
         .bind(after.delivery_address())
         .bind(id.to_string())
-        .bind(org.to_string())
+        .bind(before.organizer_id().to_string())
         .execute(&mut *tx)
         .await
         .map_err(repo)?;
@@ -473,7 +520,7 @@ impl SubmissionRepo for SqliteSubmissionRepo {
     async fn append(
         &self,
         s: &OrderSubmission,
-        require_open_for_participant: bool,
+        manager: Option<OrganizerId>,
         now: SystemTime,
     ) -> RepoResult<AppendOutcome> {
         let group = s.group_order_id().to_string();
@@ -485,12 +532,23 @@ impl SubmissionRepo for SqliteSubmissionRepo {
             .await
             .map_err(port)?;
         // (1) idempotent replay.
+        if let Some(actor) = manager {
+            let current = load_group_by_id(&mut tx, actor, s.group_order_id())
+                .await?
+                .ok_or(RepoError::NotFound)?;
+            if !current.can_manage {
+                return Err(RepoError::Forbidden);
+            }
+            if current.status() == GroupOrderStatus::Archived {
+                return Ok(AppendOutcome::Rejected("group_archived"));
+            }
+        }
         if let Some(existing) = existing_by_key(&mut tx, &group, &key).await? {
             return Ok(AppendOutcome::Duplicate(existing));
         }
         // (2) insert only while the group accepts this kind of submission,
         // checked inside the very same statement.
-        let condition = if require_open_for_participant {
+        let condition = if manager.is_none() {
             "status = 'open' AND (deadline_at IS NULL OR deadline_at > ?)"
         } else {
             "status != 'archived' AND ? IS NOT NULL"
@@ -546,7 +604,7 @@ impl SubmissionRepo for SqliteSubmissionRepo {
                     .map_err(port)?;
             let reason = match row.as_ref().map(|r| r.0.as_str()) {
                 Some("open") => "deadline_passed",
-                Some("archived") if !require_open_for_participant => "group_archived",
+                Some("archived") if manager.is_some() => "group_archived",
                 _ => "group_closed",
             };
             return Ok(AppendOutcome::Rejected(reason));
@@ -727,6 +785,9 @@ fn opt_ts(s: Option<String>) -> PortResult<Option<SystemTime>> {
 
 #[derive(sqlx::FromRow)]
 struct GroupListRow {
+    sharing_group_id: Option<String>,
+    sharing_group_name: Option<String>,
+    can_manage: bool,
     id: String,
     title: String,
     status: String,
@@ -778,15 +839,20 @@ impl ManagementReadModel for SqliteOrderReadModel {
         status: Option<GroupOrderStatus>,
     ) -> PortResult<Vec<GroupListItem>> {
         let rows = sqlx::query_as::<_, GroupListRow>(
-            "SELECT g.id, g.title, g.status, g.vendor_name, g.deadline_at, g.created_at, g.closed_at, \
+            "SELECT g.id, g.sharing_group_id, sg.name AS sharing_group_name, \
+               (g.organizer_id = ?1 OR m.role = 'admin') AS can_manage, \
+               g.title, g.status, g.vendor_name, g.deadline_at, g.created_at, g.closed_at, \
                (SELECT COUNT(*) FROM participants p WHERE p.group_order_id = g.id) AS participant_count, \
                (SELECT COUNT(*) FROM effective_submissions es WHERE es.group_order_id = g.id \
                   AND EXISTS (SELECT 1 FROM submission_lines l WHERE l.submission_id = es.id)) AS ordered_count, \
                (SELECT COALESCE(SUM(l.quantity * l.unit_price), 0) FROM effective_submissions es \
                   JOIN submission_lines l ON l.submission_id = es.id \
                   WHERE es.group_order_id = g.id) AS total_amount \
-             FROM group_orders g \
-             WHERE g.organizer_id = ?1 AND (?2 IS NULL OR g.status = ?2) \
+              FROM group_orders g \
+              LEFT JOIN sharing_groups sg ON sg.id = g.sharing_group_id \
+              LEFT JOIN sharing_group_members m ON m.sharing_group_id = g.sharing_group_id AND m.organizer_id = ?1 \
+              WHERE ((g.sharing_group_id IS NULL AND g.organizer_id = ?1) OR m.organizer_id IS NOT NULL) \
+                AND (?2 IS NULL OR g.status = ?2) \
              ORDER BY g.created_at DESC, g.id DESC",
         )
         .bind(org.to_string())
@@ -797,6 +863,12 @@ impl ManagementReadModel for SqliteOrderReadModel {
         rows.into_iter()
             .map(|r| {
                 Ok(GroupListItem {
+                    sharing_group_id: r
+                        .sharing_group_id
+                        .map(|id| id.parse().map_err(port))
+                        .transpose()?,
+                    sharing_group_name: r.sharing_group_name,
+                    can_manage: r.can_manage,
                     id: r.id.parse().map_err(port)?,
                     title: r.title,
                     status: GroupOrderStatus::parse(&r.status).map_err(port)?,
@@ -1057,10 +1129,9 @@ impl SettlementRepo for SqliteSettlementRepo {
             .map_err(port)?;
         let known = sqlx::query_as::<_, (i64,)>(
             "SELECT 1 FROM participants p JOIN group_orders g ON g.id = p.group_order_id \
-             WHERE g.id = ? AND g.organizer_id = ? AND p.id = ?",
+             WHERE g.id = ? AND p.id = ?",
         )
         .bind(&g)
-        .bind(org.to_string())
         .bind(&p)
         .fetch_optional(&mut *tx)
         .await
@@ -1068,6 +1139,10 @@ impl SettlementRepo for SqliteSettlementRepo {
         if known.is_none() {
             return Err(RepoError::NotFound);
         }
+        let current = load_group_by_id(&mut tx, org, group)
+            .await?
+            .ok_or(RepoError::NotFound)?;
+        ensure_manager(&current)?;
         let (amount_due,): (i64,) = sqlx::query_as(
             "SELECT COALESCE(SUM(l.quantity * l.unit_price), 0) \
              FROM effective_submissions es JOIN submission_lines l ON l.submission_id = es.id \
@@ -1237,6 +1312,7 @@ mod tests {
 
     fn cmd(e: &Env, deadline: Option<SystemTime>) -> OpenGroupCmd {
         OpenGroupCmd {
+            sharing_group_id: None,
             delivery_address_id: None,
             title: "午餐".into(),
             roster_id: e.roster,
@@ -1361,6 +1437,259 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ownership_membership_and_manager_checks_are_inside_write_transactions() {
+        use application::sharing::SharingRepo;
+        let e = env(2).await;
+        let other = SqliteOrganizerRepo::new(e.db.clone())
+            .upsert_from_identity(
+                Organizer::new("https://id.example", "other", "b@x.test", "B", None).unwrap(),
+                SystemTime::now(),
+            )
+            .await
+            .unwrap()
+            .id;
+        let sharing = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+        let scope = sharing.create(other, "Target").await.unwrap();
+        sharing.add(other, scope.id, e.org, "member").await.unwrap();
+        let svc = service(&e.db, Arc::new(SystemClock));
+        let mut cmd = cmd(&e, None);
+        cmd.sharing_group_id = Some(scope.id);
+        let g = svc.open_group(e.org, cmd).await.unwrap();
+        assert!(g.can_manage); // Original organizer remains manager as a member.
+        let repo = SqliteGroupOrderRepo::new(e.db.clone());
+        let subs = SqliteSubmissionRepo::new(e.db.clone());
+        let settlements = SqliteSettlementRepo::new(e.db.clone());
+        let make_submission = || {
+            g.new_submission(
+                g.participants()[0].id,
+                &[line(&g, 0, 1)],
+                None,
+                Actor::Organizer,
+                Uuid::now_v7(),
+                None,
+                SystemTime::now(),
+            )
+            .unwrap()
+        };
+        let submission = make_submission();
+        // Stage a duplicate before revocation, to check authorization precedes replay.
+        assert_eq!(
+            subs.append(&submission, Some(other), SystemTime::now())
+                .await
+                .unwrap(),
+            AppendOutcome::Inserted
+        );
+        // The actor read the order and built a submission while still an admin.
+        assert!(
+            repo.find_by_id(other, g.id())
+                .await
+                .unwrap()
+                .unwrap()
+                .can_manage
+        );
+        // Keep one admin so the other admin can be downgraded.
+        sharing
+            .change(other, scope.id, e.org, Some("admin"))
+            .await
+            .unwrap();
+        sharing
+            .change(e.org, scope.id, other, Some("member"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            repo.modify(other, g.id(), Box::new(|g| g.rename("Forbidden")))
+                .await,
+            Err(RepoError::Forbidden)
+        ));
+        assert!(matches!(
+            subs.append(&submission, Some(other), SystemTime::now())
+                .await,
+            Err(RepoError::Forbidden)
+        ));
+        assert!(matches!(
+            settlements
+                .set(
+                    other,
+                    g.id(),
+                    g.participants()[0].id,
+                    true,
+                    true,
+                    SystemTime::now()
+                )
+                .await,
+            Err(RepoError::Forbidden)
+        ));
+        // Remove the original organizer after their earlier read. No fallback ownership.
+        sharing
+            .change(e.org, scope.id, other, Some("admin"))
+            .await
+            .unwrap();
+        sharing.change(other, scope.id, e.org, None).await.unwrap();
+        assert!(matches!(
+            repo.modify(e.org, g.id(), Box::new(|g| g.rename("Forbidden")))
+                .await,
+            Err(RepoError::NotFound)
+        ));
+        assert!(matches!(
+            subs.append(&make_submission(), Some(e.org), SystemTime::now())
+                .await,
+            Err(RepoError::NotFound)
+        ));
+        assert!(matches!(
+            settlements
+                .set(
+                    e.org,
+                    g.id(),
+                    g.participants()[0].id,
+                    true,
+                    true,
+                    SystemTime::now()
+                )
+                .await,
+            Err(RepoError::NotFound)
+        ));
+        // A staged new order using still-accessible personal directories also fails
+        // when target membership is revoked between snapshot reads and insert.
+        let roster = svc.rosters.find(e.org, e.roster).await.unwrap().unwrap();
+        let vendor = svc.vendors.find(e.org, e.vendor).await.unwrap().unwrap();
+        let mut staged = GroupOrder::open(
+            e.org,
+            "Staged",
+            &roster.value,
+            &vendor.value,
+            None,
+            None,
+            ShareToken::from_random_bytes([88; 32]),
+            SystemTime::now(),
+        )
+        .unwrap();
+        staged.sharing_group_id = Some(scope.id);
+        assert!(matches!(
+            repo.create(&staged).await,
+            Err(RepoError::NotFound)
+        ));
+        assert_eq!(count(&e.db, "SELECT count(*) FROM group_orders").await, 1);
+        assert_eq!(
+            count(&e.db, "SELECT count(*) FROM order_submissions").await,
+            1
+        );
+        assert_eq!(count(&e.db, "SELECT count(*) FROM settlements").await, 0);
+        // The remaining admin can still manage, despite not owning the snapshots.
+        repo.modify(other, g.id(), Box::new(|g| g.rename("Allowed")))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ownership_migration_preserves_personal_orders_and_children() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("ownership.db"))
+            .await
+            .unwrap();
+        crate::sqlite::MIGRATOR.run_to(5, &db.write).await.unwrap();
+        let org = SqliteOrganizerRepo::new(db.clone())
+            .upsert_from_identity(
+                Organizer::new("https://id.example", "migration", "a@x.test", "A", None).unwrap(),
+                SystemTime::now(),
+            )
+            .await
+            .unwrap()
+            .id;
+        sqlx::query("INSERT INTO group_orders(id,organizer_id,title,share_token,status,vendor_name,created_at,delivery_address) VALUES('old',?,'Lunch','old-token','open','V','2026-01-01T00:00:00Z','Keep address')").bind(org.to_string()).execute(&db.write).await.unwrap();
+        for sql in [
+            "INSERT INTO participants(id,group_order_id,name) VALUES('p','old','Alice')",
+            "INSERT INTO offered_items(id,group_order_id,name,price) VALUES('i','old','Rice',80)",
+            "INSERT INTO order_submissions(id,group_order_id,participant_id,idempotency_key,submitted_by,submitted_at,client_ip) VALUES('s','old','p','key','participant','2026-01-01T01:00:00Z','1.2.3.4')",
+            "INSERT INTO submission_lines(submission_id,line_no,offered_item_id,quantity,unit_price) VALUES('s',1,'i',2,80)",
+            "INSERT INTO settlements(group_order_id,participant_id,paid_at,paid_amount,updated_at) VALUES('old','p','2026-01-01T02:00:00Z',160,'2026-01-01T02:00:00Z')",
+        ] {
+            sqlx::query(sql).execute(&db.write).await.unwrap();
+        }
+        db.migrate().await.unwrap();
+        let row: (Option<String>, String, String) = sqlx::query_as(
+            "SELECT sharing_group_id,title,delivery_address FROM group_orders WHERE id='old'",
+        )
+        .fetch_one(&db.read)
+        .await
+        .unwrap();
+        assert_eq!(row, (None, "Lunch".into(), "Keep address".into()));
+        assert_eq!(
+            count(&db, "SELECT count(*) FROM participants WHERE id='p'").await,
+            1
+        );
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM offered_items WHERE id='i' AND price=80"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM effective_submissions WHERE id='s' AND client_ip='1.2.3.4'"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM submission_lines WHERE quantity=2 AND unit_price=80"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &db,
+                "SELECT count(*) FROM settlements WHERE paid_amount=160"
+            )
+            .await,
+            1
+        );
+        use application::sharing::SharingRepo;
+        let scope = crate::sharing_repo::SqliteSharingRepo::new(db.clone())
+            .create(org, "G")
+            .await
+            .unwrap();
+        assert!(
+            sqlx::query("UPDATE group_orders SET sharing_group_id=? WHERE id='old'")
+                .bind(scope.id.to_string())
+                .execute(&db.write)
+                .await
+                .is_err()
+        );
+        sqlx::query("INSERT INTO group_orders(id,organizer_id,sharing_group_id,title,share_token,status,vendor_name,created_at) VALUES('shared',?,?,'Shared','new-token','open','V','2026-01-01T00:00:00Z')").bind(org.to_string()).bind(scope.id.to_string()).execute(&db.write).await.unwrap();
+        assert!(
+            sqlx::query("UPDATE group_orders SET sharing_group_id=NULL WHERE id='shared'")
+                .execute(&db.write)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("UPDATE group_orders SET organizer_id='foreign' WHERE id='old'")
+                .execute(&db.write)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("DELETE FROM sharing_groups WHERE id=?")
+                .bind(scope.id.to_string())
+                .execute(&db.write)
+                .await
+                .is_err()
+        );
+        // Unchanged ownership in an UPDATE and normal lifecycle writes are valid.
+        sqlx::query("UPDATE group_orders SET organizer_id=organizer_id,sharing_group_id=sharing_group_id,title='Updated',status='closed' WHERE id='old'").execute(&db.write).await.unwrap();
+        assert_eq!(
+            count(&db, "SELECT count(*) FROM pragma_foreign_key_check").await,
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn open_is_scoped_to_the_organizer() {
         let e = env(2).await;
         let svc = service(&e.db, Arc::new(SystemClock));
@@ -1421,7 +1750,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            subs.append(&dup, true, SystemTime::now()).await.unwrap(),
+            subs.append(&dup, None, SystemTime::now()).await.unwrap(),
             AppendOutcome::Duplicate(v.submission_id)
         );
 
@@ -1495,7 +1824,7 @@ mod tests {
         // Built while valid, appended after the deadline.
         let s = mk(SystemTime::now());
         assert_eq!(
-            subs.append(&s, true, deadline + Duration::from_secs(1))
+            subs.append(&s, None, deadline + Duration::from_secs(1))
                 .await
                 .unwrap(),
             AppendOutcome::Rejected("deadline_passed")
@@ -1505,7 +1834,7 @@ mod tests {
             0
         );
         assert_eq!(
-            subs.append(&s, true, SystemTime::now()).await.unwrap(),
+            subs.append(&s, None, SystemTime::now()).await.unwrap(),
             AppendOutcome::Inserted
         );
 
@@ -1518,7 +1847,7 @@ mod tests {
         assert_eq!(closed.status(), GroupOrderStatus::Closed);
         assert!(closed.closed_at().is_some());
         assert_eq!(
-            subs.append(&mk(SystemTime::now()), true, SystemTime::now())
+            subs.append(&mk(SystemTime::now()), None, SystemTime::now())
                 .await
                 .unwrap(),
             AppendOutcome::Rejected("group_closed")
@@ -1536,7 +1865,7 @@ mod tests {
         ));
         // The organizer may still submit while closed.
         assert_eq!(
-            subs.append(&mk(SystemTime::now()), false, SystemTime::now())
+            subs.append(&mk(SystemTime::now()), Some(e.org), SystemTime::now())
                 .await
                 .unwrap(),
             AppendOutcome::Inserted
@@ -1671,7 +2000,7 @@ mod tests {
                 )
                 .unwrap();
             let subs = subs.clone();
-            tokio::spawn(async move { subs.append(&s, true, SystemTime::now()).await })
+            tokio::spawn(async move { subs.append(&s, None, SystemTime::now()).await })
         };
         // First wave, the close, second wave: the close lands in the middle.
         let mut tasks: Vec<_> = (0..20).map(spawn_append).collect();
@@ -1719,7 +2048,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                subs.append(&s, true, SystemTime::now()).await.unwrap(),
+                subs.append(&s, None, SystemTime::now()).await.unwrap(),
                 AppendOutcome::Rejected("group_closed")
             );
         }

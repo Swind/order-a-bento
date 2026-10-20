@@ -53,7 +53,7 @@ impl From<PortError> for DirectoryError {
 impl From<RepoError> for DirectoryError {
     fn from(e: RepoError) -> Self {
         match e {
-            RepoError::NotFound => Self::NotFound,
+            RepoError::NotFound | RepoError::Forbidden => Self::NotFound,
             RepoError::Domain(d) => d.into(),
             RepoError::UniqueViolation => Self::Conflict,
             RepoError::Port(p) => p.into(),

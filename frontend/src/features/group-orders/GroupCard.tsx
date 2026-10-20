@@ -38,6 +38,7 @@ export function GroupCard({ group }: { group: GroupListItem }) {
         <span className="text-sm text-muted-foreground">
           {group.vendorName} · {whenText(group)}
         </span>
+        <span className="text-sm text-muted-foreground">{group.sharingGroupId ? `共用群組：${group.sharingGroupName ?? group.sharingGroupId}` : "個人"}{!group.canManage ? " · 唯讀" : ""}</span>
         <span className="flex items-center justify-between text-sm">
           <span className="font-medium tabular-nums">
             已訂 {group.orderedCount}/{group.participantCount} 人

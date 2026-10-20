@@ -39,10 +39,12 @@ function BalanceBadge({ balance }: { balance: number | null | undefined }) {
 function ChecklistRow({
   row,
   disabled,
+  canManage,
   onChange,
 }: {
   row: ParticipantRow;
   disabled: boolean;
+  canManage: boolean;
   onChange: (next: { pickedUp: boolean; paid: boolean }) => void;
 }) {
   return (
@@ -50,7 +52,7 @@ function ChecklistRow({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-base font-medium">{row.name}</span>
         {row.submissionCount > 1 && <Badge variant="secondary">改過 {row.submissionCount} 次</Badge>}
-        {row.suspiciousDevice && <Badge variant="destructive">⚠ 同裝置多人</Badge>}
+        {canManage && row.suspiciousDevice && <Badge variant="destructive">⚠ 同裝置多人</Badge>}
         <BalanceBadge balance={row.balance} />
         <span className="ml-auto font-medium">{formatMoney(row.amountDue)}</span>
       </div>
@@ -89,7 +91,7 @@ export function ChecklistTab({ group }: { group: GroupOrderDetail }) {
   const [filter, setFilter] = useState<ChecklistFilter>("all");
   const archived = group.status === "archived";
 
-  if (!query.data) return <QueryGate query={query} />;
+  if (!query.data || query.isError) return <QueryGate query={query} />;
   const { ordered, notOrdered } = splitParticipants(query.data);
   const shown = filterChecklist(ordered, filter);
 
@@ -124,8 +126,9 @@ export function ChecklistTab({ group }: { group: GroupOrderDetail }) {
           {shown.map((r) => (
             <ChecklistRow
               key={r.id}
-              row={r}
-              disabled={archived}
+               row={r}
+               canManage={group.canManage}
+               disabled={archived || !group.canManage || settle.isPending}
               onChange={(next) =>
                 settle.mutate(
                   { pid: r.id, ...next },
@@ -137,7 +140,7 @@ export function ChecklistTab({ group }: { group: GroupOrderDetail }) {
         </ul>
       )}
 
-      {summary.data && (
+      {summary.data && !summary.isError && (
         <div className="space-y-1 rounded-xl bg-muted p-4">
           <p className="text-base font-semibold">
             已收 {formatMoney(summary.data.settlement.paidAmount)} / 應收{" "}

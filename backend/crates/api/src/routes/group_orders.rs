@@ -23,6 +23,9 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateGroupOrderRequest {
+    /// Omitted/null = personal. Any current member may create in this group;
+    /// snapshot directory ownership is independent. Immutable after creation.
+    pub sharing_group_id: Option<String>,
     pub delivery_address_id: Option<String>,
     pub title: String,
     pub roster_id: String,
@@ -64,6 +67,12 @@ pub struct OfferedItemDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupOrderDetail {
+    /// Current actor's management permission; archived orders remain immutable.
+    pub can_manage: bool,
+    #[schema(required = true)]
+    pub sharing_group_id: Option<String>,
+    #[schema(required = true)]
+    pub sharing_group_name: Option<String>,
     pub delivery_address: Option<String>,
     pub id: String,
     pub title: String,
@@ -85,6 +94,9 @@ pub struct GroupOrderDetail {
 
 pub(crate) fn detail(g: &GroupOrder, share_url: String) -> GroupOrderDetail {
     GroupOrderDetail {
+        can_manage: g.can_manage,
+        sharing_group_id: g.sharing_group_id.map(|id| id.to_string()),
+        sharing_group_name: g.sharing_group_name.clone(),
         delivery_address: g.delivery_address().map(str::to_owned),
         id: g.id().to_string(),
         title: g.title().to_string(),
@@ -153,6 +165,7 @@ pub async fn create_group_order(
         .open_group(
             o.id,
             OpenGroupCmd {
+                sharing_group_id: req.sharing_group_id.as_deref().map(parse_id).transpose()?,
                 delivery_address_id: req
                     .delivery_address_id
                     .as_deref()
@@ -171,7 +184,7 @@ pub async fn create_group_order(
     Ok((StatusCode::CREATED, Json(detail(&group, url))))
 }
 
-/// A group order of the logged-in organizer.
+/// A personal order or a group-owned order accessible through current membership.
 #[utoipa::path(get, path = "/group-orders/{id}", tag = TAG_GROUP_ORDERS, security(("cookieAuth" = [])),
     params(("id" = String, Path, description = "Group order id")),
     responses(
@@ -226,6 +239,11 @@ pub struct ListGroupsQuery {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupListItemDto {
+    pub can_manage: bool,
+    #[schema(required = true)]
+    pub sharing_group_id: Option<String>,
+    #[schema(required = true)]
+    pub sharing_group_name: Option<String>,
     pub id: String,
     pub title: String,
     pub status: GroupStatusDto,
@@ -254,6 +272,9 @@ fn status_dto(s: GroupOrderStatus) -> GroupStatusDto {
 impl From<GroupListItem> for GroupListItemDto {
     fn from(g: GroupListItem) -> Self {
         Self {
+            can_manage: g.can_manage,
+            sharing_group_id: g.sharing_group_id.map(|id| id.to_string()),
+            sharing_group_name: g.sharing_group_name,
             id: g.id.to_string(),
             title: g.title,
             status: status_dto(g.status),
@@ -554,7 +575,7 @@ pub struct SettlementRequest {
 const UNAUTH: &str = "Not logged in";
 const NOT_FOUND: &str = "Not found (also for another organizer's group order)";
 
-/// My group orders, newest first, with order counts and totals (one query).
+/// All accessible orders, newest first, with counts and totals (one query).
 #[utoipa::path(get, path = "/group-orders", tag = TAG_GROUP_ORDERS, security(("cookieAuth" = [])),
     params(ListGroupsQuery),
     responses(
@@ -586,6 +607,7 @@ pub async fn list_group_orders(
     request_body = PatchGroupOrderRequest,
     responses(
         (status = 200, body = GroupOrderDetail),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = NOT_FOUND, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 422, description = "invalid_status (illegal transition, or edit of an archived group), invalid_title, invalid_deadlineAt, invalid_note or validation_failed", body = ProblemDetails, content_type = "application/problem+json")))]
@@ -628,6 +650,8 @@ pub async fn patch_group_order(
     params(("id" = String, Path, description = "Group order id")),
     responses(
         (status = 200, description = "Detail with the new shareUrl", body = GroupOrderDetail),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Archived order is immutable", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = NOT_FOUND, body = ProblemDetails, content_type = "application/problem+json")))]
 pub async fn rotate_share_token(
@@ -650,6 +674,7 @@ pub async fn rotate_share_token(
     request_body = AddParticipantRequest,
     responses(
         (status = 201, body = GroupOrderDetail),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = NOT_FOUND, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 409, description = "name_taken: the normalized name already exists in this group", body = ProblemDetails, content_type = "application/problem+json"),
@@ -677,6 +702,7 @@ pub async fn add_participant(
     request_body = SetSoldOutRequest,
     responses(
         (status = 200, body = GroupOrderDetail),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Group order or item not found", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 422, description = "invalid_status (archived) or validation_failed", body = ProblemDetails, content_type = "application/problem+json")))]
@@ -737,7 +763,8 @@ pub async fn list_participants(
     Ok(Json(rows.into_iter().map(Into::into).collect()))
 }
 
-/// All submissions of one participant (including cancellations), newest first.
+/// All submissions, newest first. Read-only members receive order history with
+/// client metadata and shared-device associations redacted.
 #[utoipa::path(get, path = "/group-orders/{id}/participants/{pid}/submissions", tag = TAG_GROUP_ORDERS, security(("cookieAuth" = [])),
     params(
         ("id" = String, Path, description = "Group order id"),
@@ -769,6 +796,7 @@ pub async fn list_submissions(
     request_body = OrganizerSubmitRequest,
     responses(
         (status = 200, body = EffectiveOrderResponse),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Group order, participant or item not found", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 409, description = "group_archived, or sold_out (field offeredItemId)", body = ProblemDetails, content_type = "application/problem+json"),
@@ -809,6 +837,8 @@ pub async fn submit_for_participant(
     request_body = SettlementRequest,
     responses(
         (status = 200, body = ParticipantRowDto),
+        (status = 403, description = "Current member without management permission", body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 422, description = "Archived order is immutable", body = ProblemDetails, content_type = "application/problem+json"),
         (status = 401, description = UNAUTH, body = ProblemDetails, content_type = "application/problem+json"),
         (status = 404, description = "Group order or participant not found", body = ProblemDetails, content_type = "application/problem+json")))]
 pub async fn put_settlement(

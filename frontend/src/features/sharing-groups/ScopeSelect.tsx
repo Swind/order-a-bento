@@ -1,20 +1,24 @@
 import { useSharingGroups } from "./hooks";
 
-export function ScopeSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+export function ScopeSelect({ value, onChange, ownership = false }: { value: string; onChange: (value: string) => void; ownership?: boolean }) {
   const groups = useSharingGroups();
+  const id = ownership ? "order-ownership" : "directory-scope";
   return (
     <div className="space-y-1">
-      <label htmlFor="directory-scope" className="text-sm font-medium">資料範圍</label>
+      <label htmlFor={id} className="text-sm font-medium">{ownership ? "開團歸屬" : "資料範圍"}</label>
       <select
-        id="directory-scope"
+        id={id}
         className="block h-11 w-full rounded-md border bg-background px-3"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
         <option value="">個人</option>
+        {value && groups.isSuccess && !groups.data.some((group) => group.id === value) && (
+          <option value={value} disabled>原共用群組（已無法存取，請重新選擇）</option>
+        )}
         {groups.data?.map((group) => (
           <option key={group.id} value={group.id}>
-            {group.name}（{group.role === "admin" ? "管理員" : "唯讀"}）
+            {group.name}（{group.role === "admin" ? "管理員" : ownership ? "成員" : "唯讀"}）
           </option>
         ))}
       </select>

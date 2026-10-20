@@ -3,16 +3,16 @@ import { describe, expect, it } from "vitest";
 import { ApiError } from "@/shared/api/client";
 import { invalidateSharingAccessOnError } from "./hooks";
 
-const families = ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run"];
+const families = ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run", "group-orders", "group-order"];
 
 describe("sharing access invalidation", () => {
   it.each([403, 404])("invalidates every access-dependent family on %s", async (status) => {
     const qc = new QueryClient();
     for (const family of families) qc.setQueryData([family, "cached"], {});
-    qc.setQueryData(["group-orders"], []);
+    qc.setQueryData(["group-order", "g1", "history", "p1"], []);
     await invalidateSharingAccessOnError(qc, new ApiError({ type: "", title: "", status }));
     for (const family of families) expect(qc.getQueryState([family, "cached"])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(["group-orders"])?.isInvalidated).toBe(false);
+    expect(qc.getQueryState(["group-order", "g1", "history", "p1"])?.isInvalidated).toBe(true);
     qc.clear();
   });
 

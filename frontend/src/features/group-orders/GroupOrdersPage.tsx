@@ -68,7 +68,7 @@ export function GroupOrdersPage() {
           {errorMessage(query.error)}
         </p>
       )}
-      {query.data &&
+      {!query.isError && query.data &&
         (() => {
           const shown = query.data.filter((g) => statuses.includes(g.status));
           if (shown.length === 0)

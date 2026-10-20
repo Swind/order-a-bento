@@ -89,8 +89,8 @@ export function DetailsTab({ group }: { group: GroupOrderDetail }) {
 
   return (
     <div className="space-y-4">
-      {!archived && <AddParticipant groupId={group.id} />}
-      {query.data ? (
+      {!archived && group.canManage && !query.isError && <AddParticipant groupId={group.id} />}
+      {query.data && !query.isError ? (
         <>
           {ordered.length === 0 && (
             <EmptyState title="還沒有人下單" hint="把訂購頁連結分享給大家，下單後會出現在這裡。" />
@@ -108,7 +108,7 @@ export function DetailsTab({ group }: { group: GroupOrderDetail }) {
                     {p.submissionCount > 1 && (
                       <Badge variant="secondary">改過 {p.submissionCount} 次</Badge>
                     )}
-                    {p.suspiciousDevice && <Badge variant="destructive">⚠ 同裝置多人</Badge>}
+                    {group.canManage && p.suspiciousDevice && <Badge variant="destructive">⚠ 同裝置多人</Badge>}
                     <span className="ml-auto font-medium">{formatMoney(p.amountDue)}</span>
                   </span>
                   <span className="break-words text-sm">{p.items.map(itemText).join("、")}</span>
