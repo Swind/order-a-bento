@@ -8,7 +8,7 @@ import { renderApp } from "@/test/render";
 describe("AdminLayout auth gating", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("starts the default server login with returnTo on 401, keeping a backup link", async () => {
+  it("starts default login on 401 without exposing an administrator entry", async () => {
     const replace = vi.fn();
     vi.stubGlobal("location", { ...window.location, replace });
     server.use(
@@ -24,10 +24,11 @@ describe("AdminLayout auth gating", () => {
     renderApp("/rosters?x=1");
     await screen.findByRole("status");
     expect(replace).toHaveBeenCalledWith("/auth/login?returnTo=%2Frosters%3Fx%3D1");
-    expect(screen.getByRole("link", { name: "管理員備援登入" })).toHaveAttribute("href", "/login?returnTo=%2Frosters%3Fx%3D1");
+    expect(screen.getByRole("link", { name: "前往登入頁面" })).toHaveAttribute("href", "/login?returnTo=%2Frosters%3Fx%3D1");
+    expect(screen.queryByText("管理員備援登入")).not.toBeInTheDocument();
   });
 
-  it("opens the account menu and logs out to the backup login page", async () => {
+  it("opens the account menu and logs out to ordinary login", async () => {
     server.use(
       http.get("*/api/v1/me", () => HttpResponse.json(ME)),
       http.get("*/api/v1/rosters", () => HttpResponse.json([])),
@@ -47,7 +48,8 @@ describe("AdminLayout auth gating", () => {
     expect(await screen.findByRole("menuitem", { name: "登出" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: ME.email })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("menuitem", { name: "登出" }));
-    expect(await screen.findByRole("heading", { name: "管理員備援登入" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "使用單一登入（OIDC）" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("密碼")).not.toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/login");
   });
 });

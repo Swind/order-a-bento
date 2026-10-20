@@ -15,6 +15,7 @@ export const routes: RouteObject[] = [
     HydrateFallback: RouteFallback,
     children: [
       { path: "/login", lazy: page(() => import("@/features/auth/LoginPage"), "LoginPage") },
+      { path: "/ops/bento-access", lazy: page(() => import("@/features/auth/LoginPage"), "AdminLoginPage") },
       { path: "/g/:token", lazy: page(() => import("@/features/public-order/PublicOrderPage"), "PublicOrderPage") },
     ],
   },

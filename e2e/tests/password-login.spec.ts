@@ -9,7 +9,12 @@ test("CLI-created admin logs in with email and password, without Google", async 
   await page.goto("/rosters");
   await expect(page).toHaveURL(/\/login\?returnTo=%2Frosters/);
 
-  // Only the enabled methods are offered: no Google button, password form present.
+  // Ordinary login never advertises the independent administrator entry.
+  await expect(page.getByLabel("密碼")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /管理員/ })).toHaveCount(0);
+  await page.goto("/ops/bento-access?returnTo=%2Frosters");
+
+  // Administrator login offers only the configured local password method.
   await expect(page.getByLabel("密碼")).toBeVisible();
   await expect(page.getByRole("button", { name: "使用單一登入（OIDC）" })).toHaveCount(0);
   await expect(page.getByLabel("密碼")).toHaveAttribute("autocomplete", "current-password");
@@ -25,7 +30,7 @@ test("CLI-created admin logs in with email and password, without Google", async 
   await page.fill("#login-password", "not-the-password");
   await page.locator("form[aria-label='本機帳號登入'] button[type=submit]").click();
   await expect(page.getByRole("alert")).toContainText("Email 或密碼不正確");
-  await expect(page).toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/ops\/bento-access/);
 
   // Correct password (email is case-insensitive): lands on the page we were sent from.
   await page.fill("#login-email", E2E_ADMIN_EMAIL.toUpperCase());

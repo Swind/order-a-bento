@@ -17,13 +17,15 @@ beforeEach(() => server.use(http.get("*/api/v1/me", () => problem(401, "unauthor
 afterEach(() => vi.unstubAllGlobals());
 
 describe("LoginPage", () => {
-  it.each(["/login", "/login?error=provider_error"])("keeps %s available for backup without auto-redirecting", async (path) => {
+  it.each(["/login", "/login?error=provider_error"])("keeps %s free of administrator controls without redirect loops", async (path) => {
     const replace = vi.fn();
     vi.stubGlobal("location", { ...window.location, replace });
     mockConfig(false, true, true);
     renderApp(path);
-    expect(await screen.findByLabelText("密碼")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "使用單一登入（OIDC）" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "使用單一登入（OIDC）" })).toBeEnabled();
+    expect(screen.queryByLabelText("密碼")).not.toBeInTheDocument();
+    expect(screen.queryByText(/管理員/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
   it("shows the dev form only when devLoginEnabled", async () => {
@@ -52,9 +54,9 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("shows only the password form when only password login is enabled", async () => {
+  it("shows only the password form at the independent administrator URL", async () => {
     mockConfig(false, false, true);
-    renderApp("/login");
+    renderApp("/ops/bento-access");
     const email = await screen.findByLabelText("Email");
     expect(email).toHaveAttribute("autocomplete", "username");
     expect(screen.getByLabelText("密碼")).toHaveAttribute("autocomplete", "current-password");
@@ -62,11 +64,29 @@ describe("LoginPage", () => {
     expect(screen.queryByRole("form", { name: "開發用登入" })).not.toBeInTheDocument();
   });
 
-  it("shows OIDC and admin backup together, without the dev form", async () => {
-    mockConfig(false, true, true);
+  it("does not expose backup login on the ordinary page even when it is the only enabled method", async () => {
+    mockConfig(false, false, true);
     renderApp("/login");
+    expect(await screen.findByText(/目前沒有可用的登入方式/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("密碼")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByText("管理員備援登入")).not.toBeInTheDocument();
+  });
+
+  it("does not show a password form when backup login is disabled", async () => {
+    mockConfig(true, true, false);
+    renderApp("/ops/bento-access");
+    expect(await screen.findByText(/目前沒有可用的登入方式/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("密碼")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("keeps the administrator page independent even when OIDC and dev login are enabled", async () => {
+    mockConfig(true, true, true);
+    renderApp("/ops/bento-access");
     await screen.findByLabelText("密碼");
-    expect(screen.getByRole("button", { name: "使用單一登入（OIDC）" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "使用單一登入（OIDC）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "開發用登入" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "管理員備援登入" })).toBeInTheDocument();
   });
 
@@ -81,7 +101,7 @@ describe("LoginPage", () => {
       }),
       http.get("*/api/v1/vendors", () => HttpResponse.json([])),
     );
-    const { router } = renderApp("/login?returnTo=%2Fvendors");
+    const { router } = renderApp("/ops/bento-access?returnTo=%2Fvendors");
     await userEvent.type(await screen.findByLabelText("Email"), " admin@example.com ");
     await userEvent.type(screen.getByLabelText("密碼"), "correct horse");
     await userEvent.click(screen.getByRole("button", { name: "登入" }));
@@ -97,7 +117,7 @@ describe("LoginPage", () => {
         status === 401 ? problem(401, "invalid_credentials") : problem(429, "rate_limited"),
       ),
     );
-    renderApp("/login");
+    renderApp("/ops/bento-access");
     await userEvent.type(await screen.findByLabelText("Email"), "a@b.co");
     await userEvent.type(screen.getByLabelText("密碼"), "wrong password");
     await userEvent.click(screen.getByRole("button", { name: "登入" }));
@@ -134,13 +154,13 @@ describe("LoginPage", () => {
     expect(body).toEqual({ email: "a@b.co" });
   });
 
-  it("honours a safe returnTo when already logged in", async () => {
+  it.each(["/login", "/ops/bento-access"])("honours a safe returnTo at %s when already logged in", async (path) => {
     mockConfig(false);
     server.use(
       http.get("*/api/v1/me", () => HttpResponse.json(ME)),
       http.get("*/api/v1/vendors", () => HttpResponse.json([])),
     );
-    const { router } = renderApp("/login?returnTo=%2Fvendors");
+    const { router } = renderApp(`${path}?returnTo=%2Fvendors`);
     await screen.findByRole("heading", { name: "店家" });
     expect(router.state.location.pathname).toBe("/vendors");
   });

@@ -174,7 +174,7 @@ function LoginMethods({
   );
 }
 
-export function LoginPage() {
+function LoginScreen({ admin }: { admin: boolean }) {
   const [params] = useSearchParams();
   const returnTo = safeReturnTo(params.get("returnTo"));
   const errorCode = params.get("error");
@@ -187,7 +187,7 @@ export function LoginPage() {
     <Card className="mt-8">
       <CardHeader>
         <CardTitle className="text-2xl">🍱 訂便當</CardTitle>
-        <CardDescription>請先登入主辦人帳號</CardDescription>
+        <CardDescription>{admin ? "本機管理員備援入口" : "請先登入主辦人帳號"}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {errorCode && (
@@ -209,12 +209,20 @@ export function LoginPage() {
         {config.data && (
           <LoginMethods
             returnTo={returnTo}
-            password={config.data.passwordLoginEnabled}
-            oidc={config.data.oidcEnabled}
-            dev={config.data.devLoginEnabled}
+            password={admin && config.data.passwordLoginEnabled}
+            oidc={!admin && config.data.oidcEnabled}
+            dev={!admin && config.data.devLoginEnabled}
           />
         )}
       </CardContent>
     </Card>
   );
+}
+
+export function LoginPage() {
+  return <LoginScreen admin={false} />;
+}
+
+export function AdminLoginPage() {
+  return <LoginScreen admin />;
 }

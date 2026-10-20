@@ -154,6 +154,8 @@ docker run -d --name bento --restart unless-stopped \
 
 本機登入只允許 `ADMIN_EMAIL` 指定的帳號，不開放一般使用者註冊。用同一個執行檔的 CLI 建立備援管理員，密碼不會留在環境變數或 shell 歷史：
 
+管理員登入請直接開啟 `/ops/bento-access`；一般 `/login` 頁面不顯示管理員入口，請自行收藏備援登入網址。
+
 ```sh
 docker exec -it bento server admin create --email you@example.com --name "你的名字"
 docker exec -it bento server admin set-password --email you@example.com

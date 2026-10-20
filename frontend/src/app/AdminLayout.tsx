@@ -39,7 +39,7 @@ function LoginRedirect({ returnTo }: { returnTo: string }) {
     <div className="mx-auto max-w-md space-y-4 p-6 text-center">
       <p role="status">正在前往登入頁面…</p>
       <Link to={`/login?returnTo=${encodeURIComponent(returnTo)}`} className="underline">
-        管理員備援登入
+        前往登入頁面
       </Link>
     </div>
   );
