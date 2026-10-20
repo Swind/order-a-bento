@@ -196,7 +196,7 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <TitleEditor key={group.title} group={group} readOnly={archived} />
-        <StatusBadge status={group.status} />
+        <StatusBadge status={group.status} deadlineAt={group.deadlineAt} />
       </div>
       <p className="text-muted-foreground">
         {group.vendor.name}

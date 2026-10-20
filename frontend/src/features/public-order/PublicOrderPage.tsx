@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import type { PublicGroup, PublicParticipant } from "@/shared/api/types";
 import { formatDeadline, formatHHmm } from "@/shared/lib/datetime";
 import { cn } from "@/shared/lib/utils";
+import { useNow } from "@/shared/lib/useNow";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { Input } from "@/shared/ui/input";
@@ -12,16 +13,6 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import { useEffectiveOrder, usePublicGroup } from "./hooks";
 import { matchesName, readLastParticipant, writeLastParticipant } from "./lib";
 import { OrderEditor } from "./OrderEditor";
-
-/** Re-renders every `ms` so countdowns stay fresh. */
-function useNow(ms: number): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), ms);
-    return () => clearInterval(t);
-  }, [ms]);
-  return now;
-}
 
 function GroupHeader({ group, closedBanner }: { group: PublicGroup; closedBanner: string | null }) {
   const now = useNow(30_000);

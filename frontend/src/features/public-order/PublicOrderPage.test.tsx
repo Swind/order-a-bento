@@ -172,6 +172,16 @@ describe("PublicOrderPage", () => {
     expect(screen.getByRole("button", { name: "增加 雞腿飯" })).toBeDisabled();
   });
 
+  it("an expired open group is read-only even with stale acceptingOrders", async () => {
+    group = { ...base, deadlineAt: "2000-01-01T11:00:00+08:00", acceptingOrders: true };
+    localStorage.setItem(`bento:last:${TOKEN}`, "p1");
+    renderApp(`/g/${TOKEN}`);
+    expect(await screen.findByRole("status")).toHaveTextContent("已截止");
+    await screen.findByText(/已於 .* 送出/);
+    expect(screen.getByRole("button", { name: "增加 雞腿飯" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /送出訂單|更新訂單|取消我的訂單/ })).not.toBeInTheDocument();
+  });
+
   it("cancel sends empty lines after inline confirmation", async () => {
     localStorage.setItem(`bento:last:${TOKEN}`, "p1");
     renderApp(`/g/${TOKEN}`);

@@ -283,7 +283,8 @@ describe("DetailsTab + history sheet", () => {
     expect(screen.getByRole("button", { name: "代為修改訂單" })).toBeInTheDocument();
   });
 
-  it("organizer edit posts lines with an idempotency key", async () => {
+  it.each([null, "2000-01-01T11:00:00+08:00"])("organizer can edit with deadline %s", async (deadlineAt) => {
+    group = { ...group, deadlineAt };
     let body: Record<string, unknown> | undefined;
     server.use(
       http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () =>
@@ -295,6 +296,7 @@ describe("DetailsTab + history sheet", () => {
       }),
     );
     renderApp("/group-orders/g1?tab=details");
+    if (deadlineAt) expect(await screen.findByText("已截止")).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: /陳美麗/ }));
     await userEvent.click(await screen.findByRole("button", { name: "代為修改訂單" }));
     await userEvent.click(screen.getByRole("button", { name: "增加 雞腿飯" }));

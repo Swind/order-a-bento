@@ -2,13 +2,16 @@ import { Link } from "react-router";
 import type { GroupListItem } from "@/shared/api/types";
 import { formatHHmm, formatMD } from "@/shared/lib/datetime";
 import { formatMoney } from "@/shared/lib/format";
+import { useNow } from "@/shared/lib/useNow";
 import { Badge } from "@/shared/ui/badge";
 import { STATUS_LABEL } from "./lib";
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status, deadlineAt }: { status: string; deadlineAt?: string | null }) {
+  const now = useNow();
+  const expired = status === "open" && !!deadlineAt && new Date(deadlineAt).getTime() <= now.getTime();
   return (
-    <Badge variant={status === "open" ? "default" : "secondary"}>
-      {STATUS_LABEL[status] ?? status}
+    <Badge variant={status === "open" && !expired ? "default" : "secondary"}>
+      {expired ? "已截止" : STATUS_LABEL[status] ?? status}
     </Badge>
   );
 }
@@ -30,7 +33,7 @@ export function GroupCard({ group }: { group: GroupListItem }) {
       >
         <span className="flex items-start justify-between gap-2">
           <span className="min-w-0 break-words text-lg font-semibold">{group.title}</span>
-          <StatusBadge status={group.status} />
+          <StatusBadge status={group.status} deadlineAt={group.deadlineAt} />
         </span>
         <span className="text-sm text-muted-foreground">
           {group.vendorName} · {whenText(group)}
