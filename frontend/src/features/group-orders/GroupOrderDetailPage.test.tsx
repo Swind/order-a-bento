@@ -277,6 +277,43 @@ describe("StatsTab", () => {
   });
 });
 
+describe("DetailsTab confirmation list", () => {
+  it("previews and copies the current person-by-person orders for LINE", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderApp("/group-orders/g1?tab=details");
+    const preview = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "訂餐確認列表" });
+    expect(preview).toHaveAttribute("readonly");
+    expect(preview.value).toContain("王小明：排骨飯 ×1");
+    expect(preview.value).toContain("陳美麗：雞腿飯 ×1（不要辣）");
+    expect(preview.value).toContain("未訂餐：李大華");
+    expect(preview.value).toContain("已訂 2 人，共 2 個");
+    await user.click(screen.getByRole("button", { name: "複製訂餐確認列表" }));
+    expect(writeText).toHaveBeenCalledWith(preview.value);
+    expect(await screen.findByText("已複製訂餐確認列表")).toBeInTheDocument();
+  });
+
+  it("selects text for manual copying on clipboard failure, including archived orders", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    group = { ...group, status: "archived" };
+    renderApp("/group-orders/g1?tab=details");
+    const preview = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "訂餐確認列表" });
+    await user.click(screen.getByRole("button", { name: "複製訂餐確認列表" }));
+    expect(await screen.findByText("無法自動複製，已選取文字，請手動複製")).toBeInTheDocument();
+    expect(preview).toHaveFocus();
+    expect(preview.selectionStart).toBe(0);
+    expect(preview.selectionEnd).toBe(preview.value.length);
+  });
+
+  it("does not offer copying when nobody has ordered", async () => {
+    server.use(http.get("*/api/v1/group-orders/g1/participants", () => HttpResponse.json([row({ items: [] })])));
+    renderApp("/group-orders/g1?tab=details");
+    await screen.findByText("還沒有人下單");
+    expect(screen.queryByRole("button", { name: "複製訂餐確認列表" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ChecklistTab", () => {
   it("optimistically flips 繳費 and rolls back with a toast on 500", async () => {
     server.use(

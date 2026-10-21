@@ -10,6 +10,7 @@ import {
 } from "../helpers";
 
 test("stats, checklist, history, close and rotate", async ({ page, browser }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await devLogin(page, "management");
   const r = await createRoster(page, "業務部", ["王小明", "李大華", "陳美麗"]);
   const v = await createVendor(page, "好吃便當", [
@@ -51,6 +52,15 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   await page.getByRole("tab", { name: "明細" }).click();
   await expect(page.getByText(/改過 2 次/).first()).toBeVisible();
   await expect(page.getByText(/同裝置/).first()).toBeVisible();
+  const confirmation = page.getByRole("textbox", { name: "訂餐確認列表" });
+  await expect(confirmation).toHaveValue(/王小明：排骨飯 ×3/);
+  await expect(confirmation).toHaveValue(/李大華：雞腿飯 ×1/);
+  await expect(confirmation).toHaveValue(/陳美麗：排骨飯 ×1/);
+  await expect(confirmation).toHaveValue(/已訂 3 人，共 5 個/);
+  await page.getByRole("button", { name: "複製訂餐確認列表" }).click();
+  await expect(page.getByText("已複製訂餐確認列表", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(await confirmation.inputValue());
+  await expectNoHorizontalOverflow(page);
   await page.getByText("王小明").first().click();
   await expect(page.getByText("目前有效").first()).toBeVisible();
   await expect(page.getByText(/此裝置也替.*陳美麗/).first()).toBeVisible();

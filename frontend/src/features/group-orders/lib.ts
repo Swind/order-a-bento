@@ -60,6 +60,26 @@ export function splitParticipants(rows: ParticipantRow[]) {
   };
 }
 
+/** Person-by-person confirmation for the group's chat, using current effective orders. */
+export function buildConfirmationText(input: {
+  title: string;
+  vendorName: string;
+  participants: ParticipantRow[];
+}): string {
+  const { ordered, notOrdered } = splitParticipants(input.participants);
+  return [
+    `【${input.title}】訂餐確認`,
+    `店家：${input.vendorName}`,
+    "",
+    ...ordered.map((p) => `${p.name}：${p.items.map(itemText).join("、")}${p.orderNote ? `（訂單備註：${p.orderNote}）` : ""}`),
+    "",
+    `已訂 ${ordered.length} 人，共 ${ordered.reduce((sum, p) => sum + p.items.reduce((n, i) => n + i.quantity, 0), 0)} 個`,
+    ...(notOrdered.length ? [`未訂餐：${notOrdered.map((p) => p.name).join("、")}`] : []),
+    "",
+    "請大家確認自己的餐點與數量是否正確，謝謝！",
+  ].join("\n");
+}
+
 export function filterChecklist(rows: ParticipantRow[], filter: ChecklistFilter): ParticipantRow[] {
   switch (filter) {
     case "unpicked":

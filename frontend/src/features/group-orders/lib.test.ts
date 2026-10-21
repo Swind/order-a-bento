@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { row } from "./fixtures";
 import {
   balanceTag,
+  buildConfirmationText,
   buildOrderText,
   deviceColor,
   filterChecklist,
@@ -37,6 +38,24 @@ describe("balanceTag", () => {
     expect(balanceTag(-1200)).toEqual({ tone: "refund", text: "應退 $1,200" });
     expect(balanceTag(0)).toBeNull();
     expect(balanceTag(null)).toBeNull();
+  });
+});
+
+describe("buildConfirmationText", () => {
+  it("includes current orders, quantities, item/order notes and non-orderers without client data", () => {
+    const text = buildConfirmationText({
+      title: "週五午餐",
+      vendorName: "好吃便當",
+      participants: [
+        row({ name: "小明", items: [{ itemId: "i1", name: "排骨飯", quantity: 2, note: "少飯" }, { itemId: "i2", name: "雞腿飯", quantity: 1 }], orderNote: "分開裝" }),
+        row({ name: "小美", items: [], orderNote: "取消的舊備註" }),
+      ],
+    });
+    expect(text).toBe("【週五午餐】訂餐確認\n店家：好吃便當\n\n小明：排骨飯 ×2（少飯）、雞腿飯 ×1（訂單備註：分開裝）\n\n已訂 1 人，共 3 個\n未訂餐：小美\n\n請大家確認自己的餐點與數量是否正確，謝謝！");
+  });
+
+  it("omits the non-orderer line when everyone ordered", () => {
+    expect(buildConfirmationText({ title: "午餐", vendorName: "店家", participants: [row({})] })).not.toContain("未訂餐");
   });
 });
 

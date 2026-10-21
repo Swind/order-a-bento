@@ -1,5 +1,5 @@
 import { EmptyState } from "@/shared/components/EmptyState";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { errorMessage, fieldError } from "@/shared/api/errors";
 import type { GroupOrderDetail } from "@/shared/api/types";
@@ -9,9 +9,10 @@ import { formatMoney } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
+import { Textarea } from "@/shared/ui/textarea";
 import { HistorySheet } from "./HistorySheet";
 import { useAddParticipant, useParticipants } from "./hooks";
-import { itemText, splitParticipants } from "./lib";
+import { buildConfirmationText, itemText, splitParticipants } from "./lib";
 import { QueryGate } from "./ParticipantsQuery";
 
 function AddParticipant({ groupId }: { groupId: string }) {
@@ -83,9 +84,23 @@ export function DetailsTab({ group }: { group: GroupOrderDetail }) {
   const query = useParticipants(group.id, group.status === "open");
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
   const archived = group.status === "archived";
+  const areaRef = useRef<HTMLTextAreaElement>(null);
 
   const gate = <QueryGate query={query} />;
   const { ordered, notOrdered } = splitParticipants(query.data ?? []);
+  const text = buildConfirmationText({ title: group.title, vendorName: group.vendor.name, participants: query.data ?? [] });
+
+  async function copy() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(text);
+      toast.success("已複製訂餐確認列表");
+    } catch {
+      areaRef.current?.focus();
+      areaRef.current?.select();
+      toast.message("無法自動複製，已選取文字，請手動複製");
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -124,6 +139,22 @@ export function DetailsTab({ group }: { group: GroupOrderDetail }) {
               </li>
             ))}
           </ul>
+
+          {ordered.length > 0 && (
+            <section className="space-y-2" aria-labelledby="confirmation-preview">
+              <h2 id="confirmation-preview" className="font-semibold">LINE 訂餐確認列表</h2>
+              <p className="text-sm text-muted-foreground">列出目前每人餐點、數量與備註，複製後可貼到 LINE 請大家確認。</p>
+              <Textarea
+                ref={areaRef}
+                readOnly
+                rows={Math.min(12, text.split("\n").length)}
+                className="max-h-80 leading-relaxed"
+                aria-label="訂餐確認列表"
+                value={text}
+              />
+              <Button type="button" className="h-11" onClick={copy}>複製訂餐確認列表</Button>
+            </section>
+          )}
 
           {notOrdered.length > 0 && (
             <section aria-label="未訂餐" className="space-y-2 text-muted-foreground">
