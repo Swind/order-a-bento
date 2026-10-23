@@ -48,3 +48,13 @@ export function writeLastParticipant(token: string, pid: string): void {
 export const MAX_QTY = 20;
 export const ITEM_NOTE_MAX = 50;
 export const ORDER_NOTE_MAX = 200;
+
+/** Match submission semantics; display snapshots and line ordering are not edits. */
+export function orderContent(lines: readonly { itemId: string; quantity: number; note?: string | null }[], note?: string | null) {
+  return JSON.stringify([
+    lines.filter((line) => line.quantity > 0)
+      .map((line) => ({ itemId: line.itemId, quantity: line.quantity, note: line.note?.trim() || "" }))
+      .sort((a, b) => a.itemId.localeCompare(b.itemId)),
+    note?.trim() || "",
+  ]);
+}

@@ -49,6 +49,35 @@ beforeEach(() => {
 
 describe("GroupOrderDetailPage header", () => {
   it.each([
+    { status: "open", deadlineAt: null, collapsed: false },
+    { status: "open", deadlineAt: "2000-01-01T00:00:00Z", collapsed: true },
+    { status: "closed", deadlineAt: null, collapsed: true },
+    { status: "archived", deadlineAt: null, collapsed: true },
+  ])("positions sharing by phase $status / $deadlineAt independently of permission", async ({ status, deadlineAt, collapsed }) => {
+    group = { ...GROUP, status, deadlineAt, canManage: false };
+    const { router } = renderApp("/group-orders/g1?tab=checklist");
+    await screen.findByRole("switch", { name: "王小明 繳費" });
+    const fold = screen.queryByText("分享與訂購連結");
+    expect(!!fold).toBe(collapsed);
+    if (fold) {
+      expect(fold.closest("details")).not.toHaveAttribute("open");
+      expect(screen.getByRole("tabpanel").compareDocumentPosition(fold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(router.state.location.search).toBe("?tab=checklist");
+    expect(screen.getByRole("switch", { name: "王小明 繳費" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("restores expanded sharing when reopened without changing tab", async () => {
+    group = { ...GROUP, status: "closed" };
+    const { queryClient, router } = renderApp("/group-orders/g1?tab=checklist");
+    await screen.findByText("分享與訂購連結");
+    group = { ...GROUP, deadlineAt: "2099-01-01T00:00:00Z" };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["group-order", "g1"], exact: true }));
+    await waitFor(() => expect(screen.queryByText("分享與訂購連結")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "複製連結" })).toBeVisible();
+    expect(router.state.location.search).toBe("?tab=checklist");
+  });
+  it.each([
     { status: "open", canManage: false },
     { status: "closed", canManage: false },
     { status: "archived", canManage: true },
@@ -194,7 +223,7 @@ describe("StatsTab", () => {
     renderApp("/group-orders/g1");
     expect(await screen.findByText("共 11 個 · $1,140")).toBeInTheDocument();
     expect(screen.getByText("已訂 2 / 未訂 1")).toBeInTheDocument();
-    expect(screen.getByText("×7")).toBeInTheDocument();
+    expect(screen.getByText("$100 × 7")).toBeInTheDocument();
     expect(
       within(screen.getByRole("list", { name: "品項統計" })).queryByText("素食"),
     ).not.toBeInTheDocument();
@@ -315,6 +344,16 @@ describe("DetailsTab confirmation list", () => {
 });
 
 describe("ChecklistTab", () => {
+  it("keeps settlement usable when the independent summary fails", async () => {
+    server.use(http.get("*/api/v1/group-orders/g1/summary", () => problem(500, "internal_error")));
+    renderApp("/group-orders/g1?tab=checklist");
+    expect(await screen.findByRole("switch", { name: "王小明 繳費" })).not.toHaveAttribute("aria-disabled", "true");
+    expect(await screen.findByText("金額摘要載入失敗，不影響下方領取與繳費操作。")).toBeInTheDocument();
+    server.use(http.get("*/api/v1/group-orders/g1/summary", () => HttpResponse.json(SUMMARY)));
+    await userEvent.click(screen.getByRole("button", { name: "重試金額摘要" }));
+    const totals = await screen.findByText("已收 $520 / 應收 $1,140");
+    expect(totals.compareDocumentPosition(screen.getByRole("group", { name: "篩選" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it("optimistically flips 繳費 and rolls back with a toast on 500", async () => {
     server.use(
       http.put("*/api/v1/group-orders/g1/participants/p1/settlement", async () => {

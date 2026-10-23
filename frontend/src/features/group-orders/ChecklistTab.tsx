@@ -97,6 +97,13 @@ export function ChecklistTab({ group }: { group: GroupOrderDetail }) {
 
   return (
     <div className="space-y-4">
+      {summary.data && !summary.isError && (
+        <div className="space-y-1 rounded-xl bg-muted p-4">
+          <p className="text-base font-semibold tabular-nums">已收 {formatMoney(summary.data.settlement.paidAmount)} / 應收 {formatMoney(summary.data.totalAmount)}</p>
+          <p className="text-sm text-muted-foreground">未繳 {formatMoney(summary.data.settlement.unpaidAmount)}</p>
+        </div>
+      )}
+      {summary.isError && <div className="text-sm"><p role="alert">金額摘要載入失敗，不影響下方領取與繳費操作。</p><Button variant="outline" className="h-11" onClick={() => summary.refetch()}>重試金額摘要</Button></div>}
       <div className="flex flex-wrap gap-2" role="group" aria-label="篩選">
         {CHECKLIST_FILTERS.map((f) => (
           <Button
@@ -138,18 +145,6 @@ export function ChecklistTab({ group }: { group: GroupOrderDetail }) {
             />
           ))}
         </ul>
-      )}
-
-      {summary.data && !summary.isError && (
-        <div className="space-y-1 rounded-xl bg-muted p-4">
-          <p className="text-base font-semibold">
-            已收 {formatMoney(summary.data.settlement.paidAmount)} / 應收{" "}
-            {formatMoney(summary.data.totalAmount)}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            未繳 {formatMoney(summary.data.settlement.unpaidAmount)}
-          </p>
-        </div>
       )}
 
       {notOrdered.length > 0 && (

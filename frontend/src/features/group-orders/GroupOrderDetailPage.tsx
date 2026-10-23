@@ -10,12 +10,14 @@ import { useGroupOrder } from "./hooks";
 import { parseTab } from "./lib";
 import { SharePanel } from "./SharePanel";
 import { StatsTab } from "./StatsTab";
+import { useNow } from "@/shared/lib/useNow";
 
 export function GroupOrderDetailPage() {
   const { id = "" } = useParams();
   const query = useGroupOrder(id);
   const [params, setParams] = useSearchParams();
   const tab = parseTab(params.get("tab"));
+  const now = useNow(30_000);
 
   if (query.isPending)
     return (
@@ -37,11 +39,13 @@ export function GroupOrderDetailPage() {
     );
 
   const group = query.data;
+  const collecting = group.status === "open" && (!group.deadlineAt || new Date(group.deadlineAt).getTime() > now.getTime());
   const triggerClass = "h-11 min-w-24 flex-none px-4 text-base";
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <GroupHeader group={group} />
-      <SharePanel title={group.title} shareUrl={group.shareUrl} />
+      {collecting && <SharePanel title={group.title} shareUrl={group.shareUrl} />}
+      {group.status === "archived" && <p className="text-sm text-muted-foreground">此團已封存，僅供查看既有訂單。</p>}
 
       <Tabs
         value={tab}
@@ -80,6 +84,7 @@ export function GroupOrderDetailPage() {
           <ChecklistTab group={group} />
         </TabsContent>
       </Tabs>
+      {!collecting && <details className="rounded-xl border p-4"><summary className="min-h-11 cursor-pointer content-center font-medium">分享與訂購連結</summary><SharePanel title={group.title} shareUrl={group.shareUrl} /></details>}
     </div>
   );
 }

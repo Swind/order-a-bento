@@ -69,12 +69,16 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   // Close
   await page.getByRole("button", { name: "關閉收單" }).click();
   await expect(page.getByRole("button", { name: "重新開放" })).toBeVisible();
+  await expect(page.getByText("分享與訂購連結", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "明細" })).toHaveAttribute("aria-selected", "true");
 
   const pubCtx = await browser.newContext();
   const p = await pubCtx.newPage();
   await p.goto(g.shareUrl);
   await expect(p.getByText("已關閉").first()).toBeVisible();
   await p.getByRole("button", { name: /李大華/ }).click();
+  await p.getByRole("dialog").getByRole("button", { name: "是我" }).click();
+  await expect(p.getByRole("region", { name: "已送出訂單" })).toContainText("雞腿飯 ×1");
   const submit = p.getByRole("button", { name: /送出訂單|更新訂單/ });
   if (await submit.count()) await expect(submit.first()).toBeDisabled();
 
@@ -83,6 +87,7 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   await expectNoHorizontalOverflow(page);
   await page.getByRole("button", { name: "重新產生連結" }).click();
   await page.getByRole("button", { name: "確定重新產生連結" }).click();
+  await page.getByText("分享與訂購連結", { exact: true }).click();
   await page.getByText("顯示完整連結", { exact: true }).click();
   await expect(page.getByLabel("分享連結", { exact: true })).not.toHaveValue(g.shareUrl);
 

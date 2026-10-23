@@ -44,7 +44,7 @@ export default defineConfig({
     },
     {
       name: "desktop",
-      testMatch: ["auth-directory.spec.ts", "management.spec.ts", "sharing-groups.spec.ts"],
+      testMatch: ["auth-directory.spec.ts", "management.spec.ts", "sharing-groups.spec.ts", "ordering.spec.ts", "ui-improvements.spec.ts"],
       use: {
         browserName: "chromium",
         viewport: { width: 1280, height: 800 },

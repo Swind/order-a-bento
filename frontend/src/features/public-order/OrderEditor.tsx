@@ -18,6 +18,7 @@ import {
   ITEM_NOTE_MAX,
   MAX_QTY,
   ORDER_NOTE_MAX,
+  orderContent,
   resolveIdempotencyKey,
   type PendingKey,
 } from "./lib";
@@ -44,6 +45,8 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   );
   const [orderNote, setOrderNote] = useState(effective?.note ?? "");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const sending = useRef(false);
   const pendingKey = useRef<PendingKey | null>(null);
   const submit = useSubmitOrder(token, participantId);
   const qc = useQueryClient();
@@ -58,6 +61,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   const count = lines.reduce((n, l) => n + l.quantity, 0);
   const total = group.menu.reduce((s, i) => s + i.price * (qty[i.id] ?? 0), 0);
   const soldOutSelected = group.menu.some((i) => i.soldOut && (qty[i.id] ?? 0) > 0);
+  const dirty = orderContent(lines, orderNote) !== orderContent(effective?.lines ?? [], effective?.note);
 
   // Publish the sticky bar's real height (incl. safe-area inset) as --order-bar-h so the page can
   // reserve exactly that much bottom padding and the footer scrolls clear of the bar.
@@ -82,45 +86,50 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   }
 
   async function send(payloadLines: typeof lines, note: string, cancelling: boolean) {
-    const trimmedNote = note.trim();
-    const fingerprint = JSON.stringify([participantId, payloadLines, trimmedNote]);
-    pendingKey.current = resolveIdempotencyKey(pendingKey.current, fingerprint);
-    const body = {
-      lines: payloadLines,
-      ...(trimmedNote ? { note: trimmedNote } : {}),
-      idempotencyKey: pendingKey.current.key,
-      client: await collectClientInfo(),
-    };
-    submit.mutate(body, {
-      onSuccess: () => {
-        pendingKey.current = null;
-        setConfirmCancel(false);
-        if (cancelling) {
-          setQty({});
-          setNotes({});
-          setNoteOpen({});
-          setOrderNote("");
-          toast.success("已取消你的訂單");
-        } else toast.success(effective ? "已更新訂單" : "訂單已送出");
-      },
-      onError: (err) => {
-        if (err instanceof ApiError && err.status === 409) {
-          if (err.code === "group_closed" || err.code === "deadline_passed") {
-            onClosed(err.code);
-            return;
-          }
-          if (err.code === "sold_out") qc.invalidateQueries({ queryKey: publicGroupKey(token) });
+    if (sending.current || readOnly) return;
+    sending.current = true;
+    setBusy(true);
+    try {
+      const trimmedNote = note.trim();
+      const fingerprint = JSON.stringify([participantId, payloadLines, trimmedNote]);
+      pendingKey.current = resolveIdempotencyKey(pendingKey.current, fingerprint);
+      const body = {
+        lines: payloadLines,
+        ...(trimmedNote ? { note: trimmedNote } : {}),
+        idempotencyKey: pendingKey.current.key,
+        client: await collectClientInfo(),
+      };
+      const data = await submit.mutateAsync(body);
+      const saved = data.order && !data.order.cancelled ? data.order : null;
+      setQty(Object.fromEntries((saved?.lines ?? []).map((l) => [l.itemId, l.quantity])));
+      setNotes(Object.fromEntries((saved?.lines ?? []).map((l) => [l.itemId, l.note ?? ""])));
+      setNoteOpen(Object.fromEntries((saved?.lines ?? []).filter((l) => l.note).map((l) => [l.itemId, true])));
+      setOrderNote(saved?.note ?? "");
+      pendingKey.current = null;
+      setConfirmCancel(false);
+      toast.success(cancelling ? "已取消你的訂單" : effective ? "已更新訂單" : "訂單已送出");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        if (err.code === "group_closed" || err.code === "deadline_passed") {
+          onClosed(err.code);
+          return;
         }
-        toast.error(errorMessage(err));
-      },
-    });
+        if (err.code === "sold_out") qc.invalidateQueries({ queryKey: publicGroupKey(token) });
+      }
+      toast.error(errorMessage(err));
+    } finally {
+      sending.current = false;
+      setBusy(false);
+    }
   }
+
+  if (readOnly) return <SavedOrder order={order} />;
 
   return (
     <div className="space-y-4">
       {effective ? (
         <div className="space-y-1 rounded-xl border border-primary/20 bg-accent p-4">
-          <p className="text-sm font-semibold text-accent-foreground">✓ 已於 {formatHHmm(effective.submittedAt)} 送出</p>
+          <p className="text-sm font-semibold text-accent-foreground">上次送出的訂單 · 已於 {formatHHmm(effective.submittedAt)} 送出</p>
           <p className="text-sm text-accent-foreground">{effective.lines.map((line) => `${line.name} ×${line.quantity}`).join("、")}</p>
           <p className="text-sm text-muted-foreground">{readOnly ? "這是你最後送出的訂單。" : "截止前都可以修改，修改後請再次送出。"}</p>
         </div>
@@ -131,7 +140,11 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
           </p>
         )
       )}
+      <p role="status" className="text-sm font-medium">
+        {!effective && count === 0 ? "請先選擇餐點" : dirty ? (effective ? "有尚未送出的修改" : "尚未送出") : effective ? "訂單已送出" : "尚未送出"}
+      </p>
 
+      <fieldset disabled={busy} className="min-w-0 space-y-4" aria-busy={busy}>
       {group.menu.length === 0 && (
         <EmptyState title="這個團還沒有菜單品項" hint="請向開團的人確認，菜單補上後重新整理頁面即可點餐。" />
       )}
@@ -237,6 +250,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
           onChange={(e) => setOrderNote(e.target.value)}
         />
       </div>
+      </fieldset>
 
       {!readOnly && (
         <div
@@ -250,18 +264,18 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
             <Button
               type="button"
               className="h-12 w-full text-base"
-              disabled={submit.isPending || count === 0 || soldOutSelected}
-              aria-busy={submit.isPending}
+              disabled={busy || count === 0 || soldOutSelected || (!!effective && !dirty)}
+              aria-busy={busy}
               onClick={() => send(lines, orderNote, false)}
             >
-              {submit.isPending ? "送出中…" : effective ? "更新訂單（取代上一次）" : "送出訂單"}
+              {busy ? "送出中…" : effective ? dirty ? "儲存修改" : "訂單已送出" : "送出訂單"}
             </Button>
             {effective && !confirmCancel && (
               <Button
                 type="button"
                 variant="ghost"
                 className="h-11 w-full text-destructive"
-                disabled={submit.isPending}
+                disabled={busy}
                 onClick={() => setConfirmCancel(true)}
               >
                 取消我的訂單
@@ -274,7 +288,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
                   type="button"
                   variant="destructive"
                   className="h-11"
-                  disabled={submit.isPending}
+                  disabled={busy}
                   onClick={() => send([], "", true)}
                 >
                   確定取消
@@ -283,6 +297,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
                   type="button"
                   variant="outline"
                   className="h-11"
+                  disabled={busy}
                   onClick={() => setConfirmCancel(false)}
                 >
                   保留
@@ -293,5 +308,27 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
         </div>
       )}
     </div>
+  );
+}
+
+function SavedOrder({ order }: { order: EffectiveOrder | null }) {
+  if (!order) return <p className="rounded-xl border bg-card p-4">你沒有訂餐</p>;
+  if (order.cancelled) return <p className="rounded-xl border bg-card p-4">你的訂單已取消 · {formatHHmm(order.submittedAt)}</p>;
+  return (
+    <section aria-label="已送出訂單" className="space-y-3 rounded-xl border bg-card p-4">
+      <h3 className="font-semibold">上次送出的訂單</h3>
+      <p className="text-sm text-muted-foreground">已於 {formatHHmm(order.submittedAt)} 送出</p>
+      <ul className="divide-y">
+        {order.lines.map((line) => (
+          <li key={line.itemId} className="space-y-1 py-3">
+            <p className="break-words font-medium">{line.name} ×{line.quantity}</p>
+            <p className="flex flex-wrap justify-between gap-2 text-sm tabular-nums"><span>{formatMoney(line.unitPrice)} × {line.quantity}</span><span>小計 {formatMoney(line.subtotal)}</span></p>
+            {line.note && <p className="whitespace-pre-wrap break-words text-sm">備註：{line.note}</p>}
+          </li>
+        ))}
+      </ul>
+      {order.note && <p className="whitespace-pre-wrap break-words">訂單備註：{order.note}</p>}
+      <p className="text-lg font-bold tabular-nums">總額 {formatMoney(order.total)}</p>
+    </section>
   );
 }

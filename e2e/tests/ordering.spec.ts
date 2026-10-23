@@ -17,6 +17,9 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
   await page.getByRole("button", { name: /好吃便當/ }).click();
   await page.getByRole("button", { name: "下一步" }).click();
   await page.fill("#go-title", "週五午餐");
+  await expect(page.getByRole("region", { name: "開團選擇摘要" })).toContainText("名單：業務部 · 3 人");
+  await expect(page.getByRole("region", { name: "開團選擇摘要" })).toContainText("店家：好吃便當");
+  await expect(page.getByRole("region", { name: "開團選擇摘要" })).toContainText("開團歸屬：個人");
   await page.getByRole("button", { name: "開團", exact: true }).click();
   await expect(page).toHaveURL(/group-orders\/[0-9a-f-]+$/);
   const shareUrl = await page.locator("input[readonly]").first().inputValue();
@@ -28,7 +31,7 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
 
   // The two participants use separate browser contexts (separate devices) with the same phone settings.
   const mk = async () => {
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext({ viewport: page.viewportSize()! });
     return { ctx, p: await ctx.newPage() };
   };
 
@@ -44,12 +47,14 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
 
   // Revisit: remembered, prefilled
   await a.reload();
-  await expect(a.getByRole("button", { name: /更新訂單/ })).toBeVisible();
+  await expect(a.getByRole("button", { name: "訂單已送出" })).toBeDisabled();
   await expect(a.getByRole("group", { name: "排骨飯 數量" })).toContainText("1");
   await a.getByRole("button", { name: "減少 排骨飯" }).click();
   await a.getByRole("button", { name: "增加 雞腿飯" }).click();
   await a.getByRole("button", { name: "增加 雞腿飯" }).click();
-  await a.getByRole("button", { name: /更新訂單/ }).click();
+  await expect(a.getByRole("status")).toContainText("有尚未送出的修改");
+  await a.getByRole("button", { name: "儲存修改" }).click();
+  await expect(a.getByRole("button", { name: "訂單已送出" })).toBeDisabled();
   await expect(a.getByText(/\$220/).first()).toBeVisible();
 
   // Participant B picks the same person: impersonation confirm
@@ -57,7 +62,7 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
   const b = B.p;
   await b.goto(shareUrl);
   await b.getByRole("button", { name: /王小明/ }).click();
-  const dlg = b.getByRole("alertdialog", { name: "確認身分" });
+  const dlg = b.getByRole("dialog", { name: "確認身分" });
   await expect(dlg).toContainText("你確定是本人嗎");
   await dlg.getByRole("button", { name: /選錯了/ }).click();
 
@@ -74,7 +79,7 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
   await b.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   const foot = await b.getByText("為核對訂單，系統會記錄 IP 與裝置資訊").boundingBox();
   const barTop = await b
-    .getByRole("button", { name: /更新訂單|送出訂單/ })
+    .getByRole("button", { name: /訂單已送出|送出訂單/ })
     .first()
     .evaluate((el) => {
       let e: Element | null = el;
@@ -98,6 +103,14 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
       return Object.fromEntries(pub.participants.map((p) => [p.name, p.hasOrdered]));
     })
     .toEqual({ 王小明: false, 李大華: true, "Amy 林": false });
+
+  // A draft is discarded at cutoff; only the last persisted order remains.
+  await b.getByRole("button", { name: "增加 排骨飯" }).click();
+  await page.getByRole("button", { name: "關閉收單" }).click();
+  await b.reload();
+  await expect(b.getByRole("region", { name: "已送出訂單" })).toContainText("素食便當 ×1");
+  await expect(b.getByRole("region", { name: "已送出訂單" })).toContainText("總額 $90");
+  await expect(b.getByRole("button", { name: "增加 排骨飯" })).toHaveCount(0);
 
   await A.ctx.close();
   await B.ctx.close();

@@ -72,6 +72,20 @@ describe("NewGroupOrderPage", () => {
     await userEvent.clear(title);
     await userEvent.type(title, "週五午餐");
     await userEvent.click(screen.getByRole("button", { name: "1 小時後" }));
+    const deadline = (screen.getByLabelText("截止時間（選填）") as HTMLInputElement).value;
+    await userEvent.type(screen.getByLabelText("備註（選填）"), "保留備註");
+    expect(screen.getByRole("region", { name: "開團選擇摘要" })).toHaveTextContent("名單：業務部 · 5 人");
+    expect(screen.getByRole("region", { name: "開團選擇摘要" })).toHaveTextContent("店家：好吃便當");
+    expect(screen.getByRole("region", { name: "開團選擇摘要" })).toHaveTextContent("開團歸屬：個人");
+    await userEvent.click(screen.getByRole("button", { name: "修改名單" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    await userEvent.click(screen.getByRole("button", { name: "修改店家" }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByLabelText("標題")).toHaveValue("週五午餐");
+    expect(screen.getByLabelText("截止時間（選填）")).toHaveValue(deadline);
+    expect(screen.getByLabelText("備註（選填）")).toHaveValue("保留備註");
+    expect(screen.getByLabelText("送餐地址（選填）")).toHaveValue("a1");
     await userEvent.click(screen.getByRole("button", { name: "開團" }));
     expect(await screen.findByText("分享連結")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/group-orders/g1");
@@ -121,6 +135,7 @@ describe("NewGroupOrderPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "下一步" }));
     await userEvent.click(await screen.findByRole("button", { name: /私人店家/ }));
     await userEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("region", { name: "開團選擇摘要" })).toHaveTextContent(`開團歸屬：${ownership ? "共用群組 · 共同教室" : "個人"}`);
     await userEvent.click(screen.getByRole("button", { name: "開團" }));
     await screen.findByText("分享連結");
     expect(posted).toMatchObject({ rosterId: "shared-r", vendorId: "personal-v" });

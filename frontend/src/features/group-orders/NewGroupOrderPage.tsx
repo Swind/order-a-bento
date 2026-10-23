@@ -2,7 +2,7 @@ import { Check } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { useAccessibleDirectory } from "@/features/sharing-groups/hooks";
+import { useAccessibleDirectory, useSharingGroups } from "@/features/sharing-groups/hooks";
 import { ScopeSelect } from "@/features/sharing-groups/ScopeSelect";
 import type { RosterSummary, VendorSummary } from "@/shared/api/types";
 import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
@@ -133,6 +133,7 @@ export function NewGroupOrderPage() {
   const rosters = useAccessibleDirectory<RosterSummary>("rosters");
   const vendors = useAccessibleDirectory<VendorSummary>("vendors");
   const create = useCreateGroupOrder();
+  const sharingGroups = useSharingGroups();
 
   const [step, setStep] = useState(0);
   const [sharingGroupId, setSharingGroupId] = useState("");
@@ -145,6 +146,8 @@ export function NewGroupOrderPage() {
   const [errors, setErrors] = useState<{ title?: string; deadlineAt?: string }>({});
 
   const vendor = vendors.data?.find((v) => v.id === vendorId);
+  const roster = rosters.data?.find((r) => r.id === rosterId);
+  const ownership = !sharingGroupId ? "個人" : sharingGroups.isError ? "共用群組名稱載入失敗，請重試" : sharingGroups.isPending ? "共用群組載入中…" : sharingGroups.data?.find((g) => g.id === sharingGroupId)?.name ?? "共用群組已無法存取，請重新選擇";
   const defaultTitle = `${formatMD(new Date())} 午餐${vendor ? ` · ${vendor.name}` : ""}`;
   const title = titleOverride ?? defaultTitle;
 
@@ -216,7 +219,8 @@ export function NewGroupOrderPage() {
       <StepIndicator step={step} />
       <div className="space-y-2 rounded-xl border p-3">
         <ScopeSelect ownership value={sharingGroupId} onChange={setSharingGroupId} />
-        <p className="text-sm text-muted-foreground">歸屬與名單、店家的來源無關，開團後無法變更。群組成員可查看，管理員與仍在群組內的開團者可管理。</p>
+        <p className="text-sm text-muted-foreground">開團後無法變更。</p>
+        <details className="text-sm text-muted-foreground"><summary className="min-h-11 cursor-pointer content-center">誰可以查看與管理？</summary><p>歸屬與名單、店家的來源無關。個人團單由開團者管理；共用群組成員可查看，管理員與仍在群組內的開團者可管理。</p></details>
       </div>
 
       {step === 0 && (
@@ -273,6 +277,13 @@ export function NewGroupOrderPage() {
 
       {step === 2 && (
         <form onSubmit={submit} className="space-y-4 rounded-xl border bg-card p-5" aria-label="設定">
+          <section aria-label="開團選擇摘要" className="space-y-3 rounded-xl bg-muted p-3">
+            <h2 className="font-semibold">確認開團選擇</h2>
+            <div className="flex items-start justify-between gap-2"><div className="min-w-0 break-words"><p>名單：{roster?.name ?? "名單無法載入"} · {roster?.memberCount ?? 0} 人</p><p className="text-sm text-muted-foreground">名單來源：{roster?.sourceLabel ?? "無法載入"}</p></div><Button type="button" variant="outline" className="h-11 shrink-0" onClick={() => setStep(0)} aria-label="修改名單">修改</Button></div>
+            <div className="flex items-start justify-between gap-2"><div className="min-w-0 break-words"><p>店家：{vendor?.name ?? "店家無法載入"}</p><p className="text-sm text-muted-foreground">店家來源：{vendor?.sourceLabel ?? "無法載入"}</p></div><Button type="button" variant="outline" className="h-11 shrink-0" onClick={() => setStep(1)} aria-label="修改店家">修改</Button></div>
+            <p className="break-words">開團歸屬：{sharingGroupId ? "共用群組 · " : ""}{ownership}</p>
+            {sharingGroups.isError && <Button type="button" variant="outline" className="h-11" onClick={() => sharingGroups.refetch()}>重試群組名稱</Button>}
+          </section>
           <h2 className="text-lg font-semibold">設定</h2>
           <DeliveryAddressSelect value={deliveryAddressId} onChange={setDeliveryAddressId} />
           <div className="space-y-1.5">

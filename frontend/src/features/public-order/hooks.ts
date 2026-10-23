@@ -5,6 +5,8 @@ import type { SubmitOrderBody } from "@/shared/api/types";
 export const publicGroupKey = (token: string) => ["public-group", token] as const;
 export const effectiveOrderKey = (token: string, pid: string) =>
   ["public-order", token, pid] as const;
+export const orderSubmissionKey = (token: string, pid: string) =>
+  ["public-order-submit", token, pid] as const;
 
 export function usePublicGroup(token: string) {
   return useQuery({
@@ -23,10 +25,11 @@ export function useEffectiveOrder(token: string, pid: string | null) {
     refetchOnWindowFocus: false,
     staleTime: 0,
     gcTime: 0,
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       unwrap(
         await api.GET("/api/v1/public/g/{token}/participants/{pid}/order", {
           params: { path: { token, pid: pid! } },
+          signal,
         }),
       ),
   });
@@ -34,7 +37,10 @@ export function useEffectiveOrder(token: string, pid: string | null) {
 
 export function useSubmitOrder(token: string, pid: string) {
   const qc = useQueryClient();
+  const queryKey = effectiveOrderKey(token, pid);
   return useMutation({
+    mutationKey: orderSubmissionKey(token, pid),
+    onMutate: () => qc.cancelQueries({ queryKey, exact: true }),
     mutationFn: async (body: SubmitOrderBody) =>
       unwrap(
         await api.POST("/api/v1/public/g/{token}/participants/{pid}/submissions", {
@@ -42,9 +48,18 @@ export function useSubmitOrder(token: string, pid: string) {
           body,
         }),
       ),
-    onSuccess: (data) => {
-      qc.setQueryData(effectiveOrderKey(token, pid), data);
-      return qc.invalidateQueries({ queryKey: publicGroupKey(token) });
+    onSuccess: async (data) => {
+      // Cutoff can start another GET while POST is pending. Cancel it before publishing success.
+      await qc.cancelQueries({ queryKey, exact: true });
+      qc.setQueryData(queryKey, data);
+    },
+    onSettled: async () => {
+      // Revalidate after either outcome, never reuse a read started before the write settled.
+      await qc.cancelQueries({ queryKey, exact: true });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey, exact: true }),
+        qc.invalidateQueries({ queryKey: publicGroupKey(token) }),
+      ]);
     },
   });
 }

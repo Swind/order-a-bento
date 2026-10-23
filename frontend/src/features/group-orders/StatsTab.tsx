@@ -51,27 +51,33 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
     }
   }
 
+  const totals = <div className="space-y-1 rounded-xl bg-muted p-4">
+    <p className="text-base font-semibold tabular-nums">共 {s.totalQuantity} 個 · {formatMoney(s.totalAmount)}</p>
+    <p className="text-sm text-muted-foreground">已訂 {s.participants.ordered} / 未訂 {s.participants.notOrdered}</p>
+  </div>;
   if (orderedItems.length === 0)
     return (
+      <div className="space-y-4">{totals}
       <EmptyState title="還沒有人下單" hint="把訂購頁連結分享給大家，下單後這裡會自動統計品項與金額。" />
+      </div>
     );
 
   return (
     <div className="space-y-4">
+      {totals}
       <ul className="divide-y rounded-xl border" aria-label="品項統計">
         {orderedItems.map((i) => {
           const isSoldOut = soldOutById.get(i.itemId) ?? false;
           return (
-            <li key={i.itemId} className="flex items-center gap-3 px-4 py-2">
-              <span className="min-w-0 flex-1">
+            <li key={i.itemId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-4 py-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+              <span className="min-w-0">
                 <span className="block break-words text-base">{i.name}</span>
-                <span className="text-sm text-muted-foreground">{formatMoney(i.price)}</span>
               </span>
-              <span className="w-10 shrink-0 text-right tabular-nums">×{i.quantity}</span>
-              <span className="w-16 shrink-0 text-right tabular-nums">
+              <span className="col-start-2 row-start-1 text-right tabular-nums sm:col-start-3">
                 {formatMoney(i.subtotal)}
               </span>
-              <label className="flex min-h-11 shrink-0 items-center gap-1.5 text-xs">
+              <span className="col-start-1 row-start-2 text-sm text-muted-foreground tabular-nums sm:col-start-2 sm:row-start-1">{formatMoney(i.price)} × {i.quantity}</span>
+              <label className="col-start-2 row-start-2 flex min-h-11 items-center justify-end gap-1.5 text-xs sm:col-start-4 sm:row-start-1">
                 <Switch
                   size="sm"
                   aria-label={`${i.name} 售完`}
@@ -90,15 +96,6 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
           );
         })}
       </ul>
-
-      <div className="space-y-1 rounded-xl bg-muted p-4">
-        <p className="text-base font-semibold">
-          共 {s.totalQuantity} 個 · {formatMoney(s.totalAmount)}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          已訂 {s.participants.ordered} / 未訂 {s.participants.notOrdered}
-        </p>
-      </div>
 
       <section className="space-y-2" aria-labelledby="order-text-preview">
         <h2 id="order-text-preview" className="font-semibold">
