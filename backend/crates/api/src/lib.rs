@@ -111,5 +111,6 @@ pub fn router_with_assets(state: AppState, assets: web::Assets) -> Router {
             HeaderValue::from_static("no-referrer"),
         ))
         .layer(logging::trace_layer())
+        .layer(axum::middleware::from_fn(routes::vendor_images::no_store))
         .with_state(state)
 }

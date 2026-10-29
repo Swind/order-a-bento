@@ -65,6 +65,8 @@ pub struct MenuItemDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VendorDetail {
+    #[schema(required = true)]
+    pub image: Option<super::vendor_images::VendorImageDto>,
     pub sharing_group_id: Option<String>,
     pub can_manage: bool,
     pub id: String,
@@ -85,6 +87,7 @@ impl From<&Stored<Vendor>> for VendorDetail {
         menu.sort_by_key(|m| m.sort_order);
         Self {
             id: v.id().to_string(),
+            image: v.image.as_ref().map(Into::into),
             sharing_group_id: v.sharing_group_id.map(|g| g.to_string()),
             can_manage: v.can_manage,
             name: v.name().to_string(),
@@ -439,6 +442,7 @@ pub async fn delete_menu_item(
 /// Mounted under `/api/v1`.
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
+        .merge(super::vendor_images::router())
         .routes(routes!(list_vendors, create_vendor))
         .routes(routes!(get_vendor, patch_vendor, delete_vendor))
         .routes(routes!(upsert_menu_items))

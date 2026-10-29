@@ -15,6 +15,16 @@ pub struct MenuItemMarker;
 pub type VendorId = Id<VendorMarker>;
 pub type MenuItemId = Id<MenuItemMarker>;
 
+/// Private reference image metadata; bytes are loaded only by the image port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VendorImage {
+    pub revision: String,
+    pub size_bytes: u32,
+    pub width: u32,
+    pub height: u32,
+    pub updated_at: std::time::SystemTime,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub id: MenuItemId,
@@ -66,6 +76,7 @@ pub struct MenuItemEdit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vendor {
+    pub image: Option<VendorImage>,
     pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
     pub can_manage: bool,
     id: VendorId,
@@ -94,6 +105,7 @@ impl Vendor {
     pub fn new(organizer_id: OrganizerId, name: &str) -> Result<Self, DomainError> {
         Ok(Self {
             id: VendorId::new(),
+            image: None,
             sharing_group_id: None,
             can_manage: true,
             organizer_id,
@@ -132,6 +144,7 @@ impl Vendor {
         }
         Ok(Self {
             id,
+            image: None,
             sharing_group_id: None,
             can_manage: true,
             organizer_id,

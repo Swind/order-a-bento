@@ -8,6 +8,7 @@ import { Skeleton } from "@/shared/ui/skeleton";
 import { useDeleteVendor, useVendor } from "./hooks";
 import { MenuSection } from "./MenuSection";
 import { VendorInfoForm } from "./VendorInfoForm";
+import { VendorImageSection } from "./VendorImageSection";
 import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
 
 export function VendorDetailPage() {
@@ -70,11 +71,12 @@ export function VendorDetailPage() {
         </div>}
       </div>
       <ScopeBadge sharingGroupId={v.sharingGroupId} canManage={v.canManage} />
-      {v.canManage !== false ? <VendorInfoForm key={`${v.updatedAt}`} vendor={v} /> : <dl className="space-y-2">
+      {v.canManage !== false ? <VendorInfoForm key={JSON.stringify([v.id, v.name, v.phone, v.address, v.note])} vendor={v} /> : <dl className="space-y-2">
         <div><dt className="text-sm text-muted-foreground">電話</dt><dd>{v.phone || "未填"}</dd></div>
         <div><dt className="text-sm text-muted-foreground">地址</dt><dd>{v.address || "未填"}</dd></div>
         <div><dt className="text-sm text-muted-foreground">備註</dt><dd>{v.note || "未填"}</dd></div>
       </dl>}
+      <VendorImageSection vendor={v} />
       <MenuSection vendorId={id} items={v.menuItems} canManage={v.canManage !== false} sharingGroupId={v.sharingGroupId ?? undefined} />
     </div>
   );

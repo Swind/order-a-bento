@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAuthConfig } from "@/features/auth/hooks";
 import { useRoster } from "@/features/rosters/hooks";
 import { DeliveryAddressImportConfirmation } from "@/features/delivery-addresses/ImportConfirmation";
 import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
+import { sharingRequest } from "@/features/sharing-groups/hooks";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
-import type { ImportRun } from "@/shared/api/types";
+import type { ImportRun, VendorDetail } from "@/shared/api/types";
 import { ConfirmActionButton } from "@/shared/components/ConfirmActionButton";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -90,15 +92,37 @@ function RosterTitle({
   );
 }
 
-function ConfirmView({ run, demo }: { run: ImportRun; demo: boolean }) {
+function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun; demo: boolean; verificationFailed?: boolean }) {
   const navigate = useNavigate();
-  const apply = useApplyImport(run.id);
+  const expiresAt = run.pendingPhotoExpiresAt ? Date.parse(run.pendingPhotoExpiresAt) : 0;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const delay = expiresAt - Date.now();
+    if (delay <= 0) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.min(delay + 1, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [expiresAt]);
+  const photoAvailable = run.hasPendingPhoto && expiresAt > now;
+  const [savePhoto, setSavePhoto] = useState(() => run.mode === "vendor" && photoAvailable);
+  const apply = useApplyImport(run.id, run.mode === "vendor" ? savePhoto : undefined);
   const discard = useDiscardImport(run.id);
   const [state, setState] = useState<TargetState[]>(() => initState(run.proposal));
   const [serverErrors, setServerErrors] = useState<MappedErrors>({ rows: {}, unmapped: [] });
 
   const n = countChanges(state);
   const blocked = hasBlockingIssues(state);
+  const vendorTargets = state.filter((t) => t.type === "vendor");
+  const acceptedVendors = buildApplyBody(state).accepted.filter((t) => t.type === "vendor");
+  const singleVendor = vendorTargets.length === 1 && acceptedVendors.length === 1;
+  const photoBlocked = savePhoto && (!photoAvailable || !singleVendor);
+  const photoTarget = vendorTargets.length === 1 ? vendorTargets[0].ref : undefined;
+  const existingId = photoTarget?.kind === "existing" ? photoTarget.existingId : "";
+  const vendor = useQuery({
+    queryKey: ["vendor", existingId],
+    queryFn: () => sharingRequest<VendorDetail>(`vendors/${existingId}`),
+    enabled: run.mode === "vendor" && !!existingId,
+  });
+  const busy = apply.isPending || discard.isPending || verificationFailed;
 
   function clearErr(key: string) {
     if (!serverErrors.rows[key]) return;
@@ -126,6 +150,7 @@ function ConfirmView({ run, demo }: { run: ImportRun; demo: boolean }) {
   }
 
   function submit() {
+    if (busy || n === 0 || blocked || photoBlocked) return;
     const { accepted, map } = buildApplyBody(state);
     setServerErrors({ rows: {}, unmapped: [] });
     apply.mutate(accepted, {
@@ -145,6 +170,7 @@ function ConfirmView({ run, demo }: { run: ImportRun; demo: boolean }) {
   }
 
   function doDiscard() {
+    if (busy) return;
     discard.mutate(undefined, {
       onSuccess: () => {
         toast.success("已放棄");
@@ -266,14 +292,31 @@ function ConfirmView({ run, demo }: { run: ImportRun; demo: boolean }) {
         );
       })}
 
+      {run.mode === "vendor" && (
+        <section aria-label="菜單照片" className="space-y-1 rounded-lg border p-3 text-sm">
+          <label className="flex min-h-11 cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={savePhoto} disabled={busy || (!photoAvailable && !savePhoto)} onChange={(e) => setSavePhoto(e.target.checked)} />
+            確認匯入後，同時儲存菜單照片
+          </label>
+          {photoAvailable ? (
+            <p className="text-muted-foreground">辨識用壓縮圖片確認前暫存 24 小時；請於 {new Date(expiresAt).toLocaleString("zh-TW")} 前確認保存。確認前不會改動店家照片。</p>
+          ) : (
+            <p role="status">沒有待存照片（未暫存或已到期）。若仍勾選，請取消同時儲存照片，只匯入資料；也可重新辨識。</p>
+          )}
+          {vendor.data?.image && <p>將取代目前參考照片，可取消勾選。</p>}
+          {vendor.isError && <p>無法確認店家目前是否有照片；保存可能取代原照片，可取消勾選。</p>}
+          {!singleVendor && <p role="status">本次並非單一已勾選的店家（可能有多個店家），請取消同時儲存照片後匯入。不會自動選擇第一家。</p>}
+        </section>
+      )}
+
       <div className="sticky bottom-0 z-10 -mx-4 flex flex-wrap items-center justify-end gap-2 border-t bg-background px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <ConfirmActionButton
           label="放棄"
           message="放棄後這次辨識結果會被丟棄，不會寫入任何資料。"
-          pending={discard.isPending}
+          pending={busy}
           onConfirm={doDiscard}
         />
-        <Button className="h-11" disabled={n === 0 || blocked || apply.isPending} onClick={submit}>
+        <Button className="h-11" disabled={n === 0 || blocked || photoBlocked || busy} onClick={submit}>
           套用 {n} 筆變更
         </Button>
       </div>
@@ -332,7 +375,8 @@ export function AiImportPage() {
       </div>
     );
   }
-  if (run.isError) {
+  const accessLost = run.error instanceof ApiError && [401, 403, 404].includes(run.error.status);
+  if (run.isError && (!run.data || accessLost)) {
     return (
       <div className="space-y-2">
         <p role="alert" className="text-destructive">{errorMessage(run.error)}</p>
@@ -347,7 +391,17 @@ export function AiImportPage() {
   switch (r.status) {
     case "proposed":
       if (r.mode === "deliveryAddress") return <DeliveryAddressImportConfirmation key={r.id} run={r} demo={demo} />;
-      return <ConfirmView run={r} demo={demo} />;
+      return (
+        <div className="space-y-4">
+          {run.isError && (
+            <div role="alert" className="space-y-2 rounded-lg border border-destructive p-3">
+              <p>目前無法確認匯入結果，請重試查詢；不要重新辨識或重複套用。{errorMessage(run.error)}</p>
+              <Button className="h-11" variant="outline" disabled={run.isFetching} onClick={() => run.refetch()}>重試查詢</Button>
+            </div>
+          )}
+          <ConfirmView key={r.id} run={r} demo={demo} verificationFailed={run.isError} />
+        </div>
+      );
     case "applied":
     case "discarded":
       return <Finished run={r} />;

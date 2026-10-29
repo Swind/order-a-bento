@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, toApiError, unwrap } from "@/shared/api/client";
+import { api, ApiError, toApiError, unwrap } from "@/shared/api/client";
 import type { AcceptedChange, ImportMode, ImportRun } from "@/shared/api/types";
 import { invalidateSharingAccessOnError, sharingRequest } from "@/features/sharing-groups/hooks";
 
@@ -20,6 +20,7 @@ export interface StartImportInput {
   targetVendorId?: string;
   sharingGroupId?: string;
   signal?: AbortSignal;
+  savePhoto?: boolean;
 }
 
 /** Multipart upload; non-ok responses become `ApiError` (with `runId` / `errors`). */
@@ -28,6 +29,7 @@ export async function startImport(input: StartImportInput): Promise<ImportRun> {
   fd.append("image", input.image, "photo.jpg");
   if (input.instruction) fd.append("instruction", input.instruction);
   fd.append("mode", input.mode);
+  if (input.mode === "vendor" && input.savePhoto !== undefined) fd.append("savePhoto", String(input.savePhoto));
   if (input.sharingGroupId && input.mode !== "deliveryAddress") fd.append("sharingGroupId", input.sharingGroupId);
   if (input.targetRosterId) fd.append("targetRosterId", input.targetRosterId);
   if (input.targetVendorId) fd.append("targetVendorId", input.targetVendorId);
@@ -50,15 +52,21 @@ export function useStartImport() {
   });
 }
 
-export function useApplyImport(runId: string) {
+export function useApplyImport(runId: string, savePhoto?: boolean) {
   const qc = useQueryClient();
   return useMutation({
-    onError: (error) => invalidateSharingAccessOnError(qc, error),
+    onError: async (error) => {
+      void invalidateSharingAccessOnError(qc, error);
+      // A lost response may have committed. Only a fresh run can confirm the outcome.
+      if (!(error instanceof ApiError) || error.status === 409 || error.status >= 500 || error.code === "invalid_save_photo") {
+        await qc.invalidateQueries({ queryKey: runKey(runId) });
+      }
+    },
     mutationFn: async (accepted: AcceptedChange[]) =>
       unwrap(
         await api.POST("/api/v1/ai/import-runs/{runId}/apply", {
           params: { path: { runId } },
-          body: { accepted },
+          body: { accepted, ...(savePhoto === undefined ? {} : { savePhoto }) },
         }),
       ),
     onSuccess: () => {

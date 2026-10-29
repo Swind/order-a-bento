@@ -405,16 +405,27 @@ describe("DetailsTab confirmation list", () => {
   it("previews and copies the current person-by-person orders for LINE", async () => {
     const user = userEvent.setup();
     const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    server.use(
+      http.get("*/api/v1/group-orders/g1/participants", () => HttpResponse.json([
+        ...ROWS,
+        row({ id: "p4", name: "已取消者", items: [], amountDue: 0, submissionCount: 2, orderNote: "取消的舊備註" }),
+      ])),
+      http.get("*/api/v1/group-orders/g1/participants/p3/submissions", () => HttpResponse.json([])),
+    );
     renderApp("/group-orders/g1?tab=details");
     const preview = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "訂餐確認列表" });
     expect(preview).toHaveAttribute("readonly");
     expect(preview.value).toContain("王小明：排骨飯 ×1");
     expect(preview.value).toContain("陳美麗：雞腿飯 ×1（不要辣）");
-    expect(preview.value).toContain("未訂餐：李大華");
+    expect(preview.value).not.toMatch(/未訂餐|李大華|已取消者|取消的舊備註/);
     expect(preview.value).toContain("已訂 2 人，共 2 個");
     await user.click(screen.getByRole("button", { name: "複製訂餐確認列表" }));
     expect(writeText).toHaveBeenCalledWith(preview.value);
     expect(await screen.findByText("已複製訂餐確認列表")).toBeInTheDocument();
+    const notOrdered = screen.getByRole("region", { name: "未訂餐" });
+    expect(within(notOrdered).getByRole("button", { name: "已取消者" })).toBeInTheDocument();
+    await user.click(within(notOrdered).getByRole("button", { name: "李大華" }));
+    expect(await screen.findByRole("button", { name: "代為修改訂單" })).toBeInTheDocument();
   });
 
   it("selects text for manual copying on clipboard failure, including archived orders", async () => {
@@ -434,6 +445,7 @@ describe("DetailsTab confirmation list", () => {
     server.use(http.get("*/api/v1/group-orders/g1/participants", () => HttpResponse.json([row({ items: [] })])));
     renderApp("/group-orders/g1?tab=details");
     await screen.findByText("還沒有人下單");
+    expect(screen.queryByRole("textbox", { name: "訂餐確認列表" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "複製訂餐確認列表" })).not.toBeInTheDocument();
   });
 });

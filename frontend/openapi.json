@@ -253,7 +253,7 @@
             }
           },
           "422": {
-            "description": "Invalid changes (invalid_changes, with errors[])",
+            "description": "Invalid changes (invalid_changes, with errors[]) or unavailable/ambiguous pending photo (invalid_save_photo, field savePhoto); nothing is committed",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -2936,6 +2936,261 @@
         ]
       }
     },
+    "/api/v1/vendors/{vendorId}/image": {
+      "get": {
+        "tags": [
+          "directory"
+        ],
+        "summary": "Read the current JPEG using current parent permissions, never a public URL.",
+        "operationId": "get_image",
+        "parameters": [
+          {
+            "name": "vendorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageBinary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found (including no image)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal_error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "directory"
+        ],
+        "summary": "Atomically replace the image; last successful commit wins. 5 MiB image,\n6 MiB body, at most two processing jobs; busy requests are not queued.\nOnly static JPEG/PNG inputs are supported; WebP and animated formats are rejected.",
+        "operationId": "put_image",
+        "parameters": [
+          {
+            "name": "vendorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/VendorImageForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VendorImageDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_multipart",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "bad_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "image_too_large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_image",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited; Retry-After",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal_error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "directory"
+        ],
+        "summary": "Idempotent for an existing, manageable vendor (including no image).",
+        "operationId": "delete_image",
+        "parameters": [
+          {
+            "name": "vendorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "bad_origin",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal_error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/vendors/{vendorId}/menu-items/upsert": {
       "post": {
         "tags": [
@@ -3645,6 +3900,13 @@
               "$ref": "#/components/schemas/AcceptedChangeDto"
             },
             "description": "The changes the user confirmed (possibly edited); anything not listed is ignored."
+          },
+          "savePhoto": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Omitted defaults to the currently available pending photo. False imports data only."
           }
         }
       },
@@ -4344,6 +4606,16 @@
           }
         }
       },
+      "ImageBinary": {
+        "type": "string",
+        "format": "binary"
+      },
+      "ImageContentType": {
+        "type": "string",
+        "enum": [
+          "image/jpeg"
+        ]
+      },
       "ImportModeDto": {
         "type": "string",
         "enum": [
@@ -4355,6 +4627,8 @@
       "ImportRunDto": {
         "type": "object",
         "required": [
+          "hasPendingPhoto",
+          "pendingPhotoExpiresAt",
           "id",
           "status",
           "proposal",
@@ -4385,6 +4659,10 @@
               "null"
             ]
           },
+          "hasPendingPhoto": {
+            "type": "boolean",
+            "description": "True only while running/proposed with an unexpired pending JPEG."
+          },
           "id": {
             "type": "string"
           },
@@ -4407,6 +4685,12 @@
           },
           "model": {
             "type": "string"
+          },
+          "pendingPhotoExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "proposal": {
             "$ref": "#/components/schemas/ProposalDto"
@@ -5843,6 +6127,13 @@
               "vendor"
             ]
           },
+          "savePhoto": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Opt-in, default false. Only vendor mode; requires static JPEG/PNG."
+          },
           "sharingGroupId": {
             "type": [
               "string",
@@ -6168,6 +6459,7 @@
       "VendorDetail": {
         "type": "object",
         "required": [
+          "image",
           "canManage",
           "id",
           "name",
@@ -6186,6 +6478,16 @@
           },
           "id": {
             "type": "string"
+          },
+          "image": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VendorImageDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "menuItems": {
             "type": "array",
@@ -6217,6 +6519,59 @@
           },
           "updatedAt": {
             "type": "string"
+          }
+        }
+      },
+      "VendorImageDto": {
+        "type": "object",
+        "required": [
+          "revision",
+          "contentType",
+          "sizeBytes",
+          "width",
+          "height",
+          "updatedAt"
+        ],
+        "properties": {
+          "contentType": {
+            "$ref": "#/components/schemas/ImageContentType"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1568,
+            "minimum": 1
+          },
+          "revision": {
+            "type": "string",
+            "description": "Server-generated UUID, not an authorization token or conditional-write version."
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 5242880,
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1568,
+            "minimum": 1
+          }
+        }
+      },
+      "VendorImageForm": {
+        "type": "object",
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "image": {
+            "type": "string",
+            "format": "binary"
           }
         }
       },

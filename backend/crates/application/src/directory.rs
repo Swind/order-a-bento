@@ -82,6 +82,48 @@ pub struct DirectoryService {
 }
 
 impl DirectoryService {
+    pub async fn check_image_manager(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+    ) -> Result<(), DirectoryError> {
+        let vendor = self.get_vendor(actor, id).await?;
+        if !vendor.value.can_manage {
+            return Err(DirectoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub async fn read_vendor_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+    ) -> Result<crate::ports::StoredVendorImage, DirectoryError> {
+        Ok(self.vendors.read_image(actor, id).await?)
+    }
+
+    pub async fn put_vendor_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+        image: crate::ports::NormalizedVendorImage,
+    ) -> Result<domain::directory::VendorImage, DirectoryError> {
+        Ok(self
+            .vendors
+            .put_image(actor, id, image, self.clock.now())
+            .await?)
+    }
+
+    pub async fn delete_vendor_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+    ) -> Result<(), DirectoryError> {
+        Ok(self
+            .vendors
+            .delete_image(actor, id, self.clock.now())
+            .await?)
+    }
     pub async fn save_delivery_address(
         &self,
         org: OrganizerId,

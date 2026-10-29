@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImportRun } from "@/shared/api/types";
 import { renderApp } from "@/test/render";
 import { ME, problem, server } from "@/test/server";
 import { AUTH_CONFIG, ROSTER_RUN, VENDOR_RUN } from "./fixtures";
@@ -30,6 +31,190 @@ const useRun = (run: object) =>
   server.use(http.get("*/api/v1/ai/import-runs/run1", () => HttpResponse.json(run)));
 
 describe("AiImportPage vendor proposal", () => {
+  const pendingRun = (): ImportRun => ({
+    ...VENDOR_RUN,
+    hasPendingPhoto: true,
+    pendingPhotoExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    proposal: {
+      warnings: [],
+      targets: VENDOR_RUN.proposal.targets.map((t) => t.type === "vendor" ? { ...t, menu: t.menu.filter((m) => m.price !== null) } : t),
+    },
+  });
+
+  it.each([false, true])("reloads pending metadata and applies an explicit photo choice (optOut=%s)", async (optOut) => {
+    const run = pendingRun();
+    useRun(run);
+    let body: { savePhoto: boolean } | undefined;
+    const put = vi.fn(() => HttpResponse.json({}));
+    server.use(
+      http.get("*/api/v1/vendors/v1", () => HttpResponse.json({ ...vendorDetail, image: { revision: "old" } })),
+      http.put("*/api/v1/vendors/v1/image", put),
+      http.post("*/api/v1/ai/import-runs/run1/apply", async ({ request }) => {
+        body = await request.json() as typeof body;
+        return HttpResponse.json({ rosterIds: [], vendorIds: ["v1"] });
+      }),
+    );
+    const first = renderApp("/ai-import/run1");
+    expect(await screen.findByRole("checkbox", { name: /儲存菜單照片/ })).toBeChecked();
+    first.unmount();
+    // A fresh app/query client has no File or local store: GET alone restores the choice.
+    const { router } = renderApp("/ai-import/run1");
+    const choice = await screen.findByRole("checkbox", { name: /儲存菜單照片/ });
+    expect(choice).toBeChecked();
+    expect(await screen.findByText("將取代目前參考照片，可取消勾選。")).toBeInTheDocument();
+    if (optOut) await userEvent.click(choice);
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/vendors/v1"));
+    expect(body!.savePhoto).toBe(!optOut);
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("initializes a new vendor's pending photo without requiring an existing vendor", async () => {
+    const run = pendingRun();
+    run.targetVendorId = null;
+    run.proposal.targets = run.proposal.targets.map((t) => t.type === "vendor" ? { ...t, vendor: { kind: "new", name: "新店" } } : t);
+    useRun(run);
+    renderApp("/ai-import/run1");
+    expect(await screen.findByRole("checkbox", { name: /儲存菜單照片/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeEnabled();
+    expect(screen.queryByText("將取代目前參考照片，可取消勾選。")).not.toBeInTheDocument();
+  });
+
+  it("uses the actual proposal vendor, not the upload entry vendor, for replacement warnings", async () => {
+    const run = pendingRun();
+    run.targetVendorId = "unrelated";
+    useRun(run);
+    server.use(http.get("*/api/v1/vendors/v1", () => HttpResponse.json({ ...vendorDetail, image: { revision: "old" } })));
+    renderApp("/ai-import/run1");
+    expect(await screen.findByText("將取代目前參考照片，可取消勾選。")).toBeInTheDocument();
+  });
+
+  it("blocks expired photo saving while allowing data-only import after unchecking", async () => {
+    const run = pendingRun();
+    // Exercise expiry after the page is already open, without fake-timing userEvent/MSW.
+    run.pendingPhotoExpiresAt = new Date(Date.now() + 800).toISOString();
+    useRun(run);
+    let body: { savePhoto: boolean } | undefined;
+    server.use(http.post("*/api/v1/ai/import-runs/run1/apply", async ({ request }) => {
+      body = await request.json() as typeof body;
+      return HttpResponse.json({ rosterIds: [], vendorIds: ["v1"] });
+    }));
+    renderApp("/ai-import/run1");
+    const choice = await screen.findByRole("checkbox", { name: /儲存菜單照片/ });
+    expect(choice).toBeChecked();
+    await screen.findByText(/沒有待存照片/);
+    expect(screen.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeDisabled();
+    await userEvent.click(choice);
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await waitFor(() => expect(body?.savePhoto).toBe(false));
+  });
+
+  it.each([false, true])("does not offer expired metadata as a saveable photo on refresh (hasPending=%s)", async (hasPendingPhoto) => {
+    useRun({ ...pendingRun(), hasPendingPhoto, pendingPhotoExpiresAt: hasPendingPhoto ? new Date(Date.now() - 1).toISOString() : null });
+    renderApp("/ai-import/run1");
+    const choice = await screen.findByRole("checkbox", { name: /儲存菜單照片/ });
+    expect(choice).not.toBeChecked();
+    expect(choice).toBeDisabled();
+    expect(screen.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeEnabled();
+  });
+
+  it("requires explicit opt-out for multiple targets, even with just one target accepted", async () => {
+    const run = pendingRun();
+    const t = run.proposal.targets[0];
+    if (t.type !== "vendor") throw new Error("fixture");
+    run.proposal.targets.push({ ...t, vendor: { kind: "existing", existingId: "v2" }, info: { ...t.info, action: "unchanged" }, menu: [] });
+    useRun(run);
+    let body: { savePhoto: boolean; accepted: unknown[] } | undefined;
+    server.use(http.post("*/api/v1/ai/import-runs/run1/apply", async ({ request }) => {
+      body = await request.json() as typeof body;
+      return HttpResponse.json({ rosterIds: [], vendorIds: ["v1"] });
+    }));
+    renderApp("/ai-import/run1");
+    const choice = await screen.findByRole("checkbox", { name: /儲存菜單照片/ });
+    expect(choice).toBeChecked();
+    expect(screen.getByText(/不會自動選擇第一家/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeDisabled();
+    await userEvent.click(choice);
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await waitFor(() => expect(body?.savePhoto).toBe(false));
+    expect(body?.accepted).toHaveLength(1);
+  });
+
+  it("does not apply photo-only when every data change is unchecked", async () => {
+    useRun(pendingRun());
+    renderApp("/ai-import/run1");
+    await screen.findByRole("checkbox", { name: /儲存菜單照片/ });
+    for (const label of ["套用店家資訊", "套用 滷肉飯", "套用 排骨飯"]) {
+      await userEvent.click(screen.getByLabelText(label));
+    }
+    expect(screen.getByRole("button", { name: "套用 0 筆變更" })).toBeDisabled();
+  });
+
+  it("keeps edits after invalid_save_photo, refetches metadata, and never fakes success", async () => {
+    const run = pendingRun();
+    let calls = 0;
+    let reads = 0;
+    let body: { savePhoto: boolean } | undefined;
+    server.use(
+      http.get("*/api/v1/ai/import-runs/run1", () => {
+        reads++;
+        return HttpResponse.json(calls ? { ...run, hasPendingPhoto: false, pendingPhotoExpiresAt: null } : run);
+      }),
+      http.post("*/api/v1/ai/import-runs/run1/apply", async ({ request }) => {
+        calls++;
+        body = await request.json() as typeof body;
+        return calls === 1 ? problem(422, "invalid_save_photo", { field: "savePhoto" }) : HttpResponse.json({ rosterIds: [], vendorIds: ["v1"] });
+      }),
+    );
+    const { router } = renderApp("/ai-import/run1");
+    const price = await screen.findByLabelText("排骨飯 價格");
+    await userEvent.clear(price);
+    await userEvent.type(price, "120");
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await screen.findByText(/沒有待存照片/);
+    expect(reads).toBeGreaterThan(1);
+    expect(router.state.location.pathname).toBe("/ai-import/run1");
+    expect(screen.getByLabelText("排骨飯 價格")).toHaveValue("120");
+    expect(screen.queryByRole("heading", { name: "已套用" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: /儲存菜單照片/ }));
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/vendors/v1"));
+    expect(body?.savePhoto).toBe(false);
+  });
+
+  it("reconciles a lost apply response through GET applied without reapplying", async () => {
+    const run = pendingRun();
+    let applied = false;
+    const post = vi.fn(() => { applied = true; return HttpResponse.error(); });
+    server.use(
+      http.get("*/api/v1/ai/import-runs/run1", () => HttpResponse.json(applied ? { ...run, status: "applied", hasPendingPhoto: false, pendingPhotoExpiresAt: null } : run)),
+      http.post("*/api/v1/ai/import-runs/run1/apply", post),
+    );
+    renderApp("/ai-import/run1");
+    await userEvent.click(await screen.findByRole("button", { name: /套用 \d+ 筆變更/ }));
+    expect(await screen.findByRole("heading", { name: "已套用" })).toBeInTheDocument();
+    expect(post).toHaveBeenCalledOnce();
+  });
+
+  it("does not claim success if both apply and the result query fail", async () => {
+    const run = pendingRun();
+    let applied = false;
+    server.use(
+      http.get("*/api/v1/ai/import-runs/run1", () => applied ? HttpResponse.error() : HttpResponse.json(run)),
+      http.post("*/api/v1/ai/import-runs/run1/apply", () => { applied = true; return HttpResponse.error(); }),
+    );
+    const { router } = renderApp("/ai-import/run1");
+    const price = await screen.findByLabelText("排骨飯 價格");
+    await userEvent.clear(price);
+    await userEvent.type(price, "120");
+    await userEvent.click(await screen.findByRole("button", { name: /套用 \d+ 筆變更/ }));
+    expect(await screen.findByText(/目前無法確認匯入結果/)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/ai-import/run1");
+    expect(screen.queryByRole("heading", { name: "已套用" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeDisabled();
+    expect(screen.getByLabelText("排骨飯 價格")).toHaveValue("120");
+  });
+
   it("disables apply until the missing price is filled, and posts the expected body", async () => {
     useRun(VENDOR_RUN);
     let body: unknown;
@@ -58,6 +243,7 @@ describe("AiImportPage vendor proposal", () => {
     await userEvent.click(apply);
     await waitFor(() => expect(router.state.location.pathname).toBe("/vendors/v1"));
     expect(body).toEqual({
+      savePhoto: false,
       accepted: [
         {
           type: "vendor",
@@ -135,6 +321,7 @@ describe("AiImportPage roster proposal", () => {
     );
     const { router } = renderApp("/ai-import/run1");
     const name = await screen.findByDisplayValue("業務部");
+    expect(screen.queryByRole("checkbox", { name: /儲存菜單照片/ })).not.toBeInTheDocument();
     expect(screen.getByText("1 筆不變")).toBeInTheDocument();
     expect(screen.getByText(/備註：會計 → 財務/)).toBeInTheDocument();
     await userEvent.clear(name);

@@ -657,9 +657,9 @@ HAVING names > 1;
 **AI Import（需登入；速率限制每人每分鐘 3 次、每日額度見設定）**
 | Method | Path | 說明 |
 |--------|------|------|
-| POST | `/ai/import-runs` | `multipart/form-data`：`image`、`mode`（**必填**，`roster` 或 `vendor`：使用者上傳的是名單或菜單／傳單）、`instruction?`、`targetRosterId?`、`targetVendorId?`。`mode` 缺少或不是這兩個值回 `422`（`code: "invalid_mode"`、`field: "mode"`）。同步執行 agent（≤ 90 秒），回傳 `ImportRun`（含 proposal 與 summary；`mode` 為上傳時選的類型，只有此欄位加入前建立的舊 run 為 `null`） |
-| GET | `/ai/import-runs/{runId}` | 讀取匯入作業（重新整理頁面時用） |
-| POST | `/ai/import-runs/{runId}/apply` | `{ accepted: [...使用者確認／修改後的變更] }`；重新驗證後在單一 transaction 內 upsert；回傳受影響的 rosterId / vendorId |
+| POST | `/ai/import-runs` | `multipart/form-data`：`image`、`mode`（**必填**，`roster`／`vendor`／`deliveryAddress`）、`instruction?`、`targetRosterId?`、`targetVendorId?`、`savePhoto?`（省略 false，只有 vendor 可 true）。非法 mode 回 `422 invalid_mode`；非法 savePhoto／非 vendor true 回 `422 invalid_save_photo`。同步執行 agent（逾時依 provider 設定），回傳 `ImportRun`（含 proposal、summary、照片 metadata；舊 run 的 mode 可為 `null`） |
+| GET | `/ai/import-runs/{runId}` | 讀取匯入作業（重新整理頁面時用）；必回 `hasPendingPhoto` 與 nullable `pendingPhotoExpiresAt`，不回圖片 bytes／URL |
+| POST | `/ai/import-runs/{runId}/apply` | `{ accepted: [...使用者確認／修改後的變更], savePhoto?: boolean }`；省略依未到期 pending 預設。重新驗證後同一 transaction upsert 資料、可選存圖並清 pending；true 缺圖／到期／非單一 vendor 回 `422 invalid_save_photo` 並 rollback。成功 response 不變 |
 | POST | `/ai/import-runs/{runId}/discard` | 放棄 |
 
 **Group Orders（需登入）**
@@ -1108,7 +1108,10 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 ### 9.6 圖片處理、成本與錯誤
 - 前端上傳前壓縮：長邊縮至 ≤ 1568px、JPEG quality 0.85。
 - 後端限制：≤ 5 MB、MIME 僅 `image/jpeg|png|webp`（以 magic bytes 驗證，不信任 Content-Type）。
-- 圖片**不落地保存**（只在記憶體中轉送）；`ai_import_runs` 只存提案、摘要、tool 呼叫紀錄與 token 用量。
+- 未勾選保存照片時，辨識圖片**不落地保存**（只在記憶體中轉送）；名單、送餐地址與未指定類型不提供保存照片。`ai_import_runs` 不含圖片 BLOB。
+- 菜單匯入預設勾選「確認匯入後，同時儲存菜單照片」，可在開始辨識前取消；只有 vendor 且 multipart `savePhoto=true` 才會把正規化的辨識用 JPEG 存入私有 `ai_import_photos`，不典藏原檔。前端支援 JPEG／PNG／WebP 經 Canvas 白底壓縮成 JPEG（非空、最多 5 MiB）；店家獨立直接上傳端點仍只收靜態 JPEG／PNG 原檔，不擴支援 WebP。
+- 待確認圖固定在 run 建立後 24 小時到期，GET run 必回 `hasPendingPhoto` 與 nullable `pendingPhotoExpiresAt`，重新整理確認頁不需保留 File 或本機持久儲存。僅唯一 proposed／accepted 店家且有資料變更時可保存；已有照片會被取代，可取消。apply 明確送 `{accepted, savePhoto}`，同一 DB 交易套用資料、保存照片及清 pending；false 僅匯入資料並清 pending。缺圖／到期／多目標的 true 回 422 `invalid_save_photo`，整筆 rollback，不存在「菜單成功、照片失敗」的部分成功。
+- 24 小時是嚴格可用期限，非精準磁碟刪除承諾：到期後 apply 即拒絕保存，待下一輪既有 maintenance 邏輯刪除（啟動約 30 秒後首跑、預設每 24 小時，停機可更久）；failed／discard／成功 apply 也清 pending。不保證 DB 空間立即回收、WAL／磁碟頁面／舊備份安全抹除。保存後的店家照片沿用店家權限，不公開至點餐／OG／LINE。
 - 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、compatible provider 預設 300 秒）；失敗回 `502`（`code: "ai_unavailable"`），前端顯示「辨識失敗，請重試或手動輸入」。
 - Claude 可能回傳 `stop_reason: "refusal"`（照片觸發安全分類器）。由 9.3 的 hook 判定為 `AiError::Refused`，回 `422`（`code: "ai_refused"`），前端提示改用手動輸入。
 - 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 計數。

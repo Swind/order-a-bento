@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { scaledSize } from "./compressImage";
+import { describe, expect, it, vi } from "vitest";
+import { compressImage, scaledSize } from "./compressImage";
 
 describe("scaledSize", () => {
   it("scales landscape by width", () => {
@@ -14,5 +14,34 @@ describe("scaledSize", () => {
   });
   it("keeps at least 1px on extreme panoramas", () => {
     expect(scaledSize(20000, 1)).toEqual({ width: 1568, height: 1 });
+  });
+});
+
+describe("compressImage", () => {
+  it.each(["image/png", "image/webp"])("paints white before drawing %s and encodes JPEG", async (type) => {
+    const calls: string[] = [];
+    const close = vi.fn();
+    const ctx = {
+      fillStyle: "",
+      fillRect: vi.fn(() => { calls.push(`fill:${ctx.fillStyle}`); }),
+      drawImage: vi.fn(() => { calls.push("draw"); }),
+    };
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 2, height: 1, close })));
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as unknown as CanvasRenderingContext2D);
+    const blob = vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((cb, mime) => {
+      expect(mime).toBe("image/jpeg");
+      cb(new Blob(["jpeg"], { type: mime }));
+    });
+    try {
+      const result = await compressImage(new Blob(["transparent"], { type }));
+      expect(calls).toEqual(["fill:#ffffff", "draw"]);
+      expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 2, 1);
+      expect(result.type).toBe("image/jpeg");
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      context.mockRestore();
+      blob.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });

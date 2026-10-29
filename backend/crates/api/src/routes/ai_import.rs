@@ -262,6 +262,10 @@ pub struct UsageDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportRunDto {
+    /// True only while running/proposed with an unexpired pending JPEG.
+    pub has_pending_photo: bool,
+    #[schema(required = true)]
+    pub pending_photo_expires_at: Option<String>,
     pub sharing_group_id: Option<String>,
     pub id: String,
     pub status: ImportRunStatusDto,
@@ -287,6 +291,8 @@ pub struct ImportRunDto {
 impl From<&ImportRunView> for ImportRunDto {
     fn from(r: &ImportRunView) -> Self {
         Self {
+            has_pending_photo: r.pending_photo_expires_at.is_some(),
+            pending_photo_expires_at: r.pending_photo_expires_at.map(time_text),
             id: r.id.to_string(),
             sharing_group_id: r.sharing_group_id.map(|g| g.to_string()),
             status: match r.status {
@@ -325,6 +331,8 @@ impl From<&ImportRunView> for ImportRunDto {
 #[allow(dead_code)]
 #[schema(rename_all = "camelCase")]
 pub struct StartImportForm {
+    /// Opt-in, default false. Only vendor mode; requires static JPEG/PNG.
+    save_photo: Option<bool>,
     sharing_group_id: Option<String>,
     /// JPEG, PNG or WebP, at most 5 MB (detected from the bytes, not the file name).
     #[schema(value_type = String, format = Binary)]
@@ -340,7 +348,10 @@ pub struct StartImportForm {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyRequest {
+    /// Omitted defaults to the currently available pending photo. False imports data only.
+    pub save_photo: Option<bool>,
     /// The changes the user confirmed (possibly edited); anything not listed is ignored.
     #[schema(value_type = Vec<AcceptedChangeDto>)]
     pub accepted: Vec<AcceptedChange>,
@@ -439,6 +450,10 @@ fn ai_error(e: AiImportError) -> AppError {
                 })
                 .collect(),
         },
+        AiImportError::Domain(domain::shared::DomainError::Invalid {
+            field: "savePhoto",
+            reason,
+        }) => invalid_field("savePhoto", "invalid_save_photo", reason),
         AiImportError::Domain(d) => domain_error(d),
         AiImportError::Conflict => {
             AppError::Conflict("The resource was modified concurrently; retry.".into())
@@ -540,9 +555,32 @@ pub async fn start_import(
     let mut target_roster = None;
     let mut target_vendor = None;
     let mut sharing_group = None;
+    let mut save_photo = None;
     while let Some(field) = mp.next_field().await.map_err(multipart_error)? {
         let name = field.name().unwrap_or_default().to_owned();
         match name.as_str() {
+            "savePhoto" => {
+                if save_photo.is_some() {
+                    return Err(coded(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_multipart",
+                        "Duplicate savePhoto field.",
+                    ));
+                }
+                save_photo = Some(
+                    match field.text().await.map_err(multipart_error)?.as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(invalid_field(
+                                "savePhoto",
+                                "invalid_save_photo",
+                                "savePhoto must be true or false.",
+                            ));
+                        }
+                    },
+                );
+            }
             "image" => {
                 let bytes = field.bytes().await.map_err(multipart_error)?;
                 if bytes.len() > MAX_IMAGE_BYTES {
@@ -600,15 +638,37 @@ pub async fn start_import(
     let target_roster_id = target_roster.map(|s| parse_id(&s)).transpose()?;
     let target_vendor_id = target_vendor.map(|s| parse_id(&s)).transpose()?;
 
+    let pending_photo = if save_photo == Some(true) {
+        if mode != ImportMode::Vendor {
+            return Err(invalid_field(
+                "savePhoto",
+                "invalid_save_photo",
+                "Only vendor imports can save a photo.",
+            ));
+        }
+        let Ok(permit) = state.image_processing.clone().try_acquire_owned() else {
+            return Ok(crate::client::rate_limited(std::time::Duration::from_secs(
+                1,
+            )));
+        };
+        Some(super::vendor_images::start_normalization(image.clone(), permit).await
+            .map_err(|_| AppError::Internal("image processing task failed".into()))?
+            .map_err(|_| invalid_field("image", "invalid_image", "Saving a photo requires a valid static JPEG or PNG; convert WebP to JPEG first."))?)
+    } else {
+        None
+    };
+    let image = ImageInput {
+        bytes: image,
+        media_type: media_type.into(),
+    };
+
     let run = ai
         .start(
             o.id,
             StartImportCmd {
+                pending_photo,
                 sharing_group_id: sharing_group.as_deref().map(parse_id).transpose()?,
-                image: ImageInput {
-                    bytes: image,
-                    media_type: media_type.into(),
-                },
+                image,
                 instruction,
                 mode,
                 target_roster_id,
@@ -674,7 +734,7 @@ pub async fn get_import(
          content_type = "application/problem+json"),
         (status = 409, description = "The run is not in the proposed state (invalid_state)",
          body = ProblemDetails, content_type = "application/problem+json"),
-        (status = 422, description = "Invalid changes (invalid_changes, with errors[])",
+        (status = 422, description = "Invalid changes (invalid_changes, with errors[]) or unavailable/ambiguous pending photo (invalid_save_photo, field savePhoto); nothing is committed",
          body = ProblemDetails, content_type = "application/problem+json"),
         (status = 503, description = "AI import is not configured", body = ProblemDetails,
          content_type = "application/problem+json"),
@@ -692,6 +752,7 @@ pub async fn apply_import(
             org(&o),
             parse_id(&run_id)?,
             ApplyCmd {
+                save_photo: body.save_photo,
                 accepted: body.accepted,
             },
         )

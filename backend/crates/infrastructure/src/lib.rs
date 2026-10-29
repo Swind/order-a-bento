@@ -13,6 +13,7 @@ pub mod sqlite;
 pub mod timefmt;
 pub mod tokens;
 pub mod ua;
+pub mod vendor_image;
 
 #[cfg(test)]
 mod ai_import_tests;

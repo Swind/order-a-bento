@@ -21,6 +21,8 @@ const base = {
   createdAt: "2026-01-01T00:00:00Z",
   finishedAt: null,
   appliedAt: null,
+  hasPendingPhoto: false,
+  pendingPhotoExpiresAt: null,
 };
 
 export const VENDOR_RUN: ImportRun = {

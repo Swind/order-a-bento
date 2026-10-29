@@ -22,3 +22,6 @@ mod ordering_tests;
 pub mod sharing_groups;
 #[cfg(test)]
 mod sharing_tests;
+#[cfg(test)]
+mod vendor_image_tests;
+pub mod vendor_images;

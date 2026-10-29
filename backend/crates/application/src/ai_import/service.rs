@@ -53,6 +53,7 @@ impl AiImportConfig {
 
 #[derive(Debug, Clone)]
 pub struct StartImportCmd {
+    pub pending_photo: Option<crate::ports::NormalizedVendorImage>,
     pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
     pub image: ImageInput,
     pub instruction: Option<String>,
@@ -142,6 +143,7 @@ pub struct AcceptedMenuItem {
 
 #[derive(Debug, Clone, Default)]
 pub struct ApplyCmd {
+    pub save_photo: Option<bool>,
     pub accepted: Vec<AcceptedChange>,
 }
 
@@ -232,6 +234,11 @@ impl AiImportService {
         org: OrganizerId,
         cmd: StartImportCmd,
     ) -> Result<ImportRunView, AiImportError> {
+        if cmd.pending_photo.is_some() && cmd.mode != ImportMode::Vendor {
+            return Err(
+                DomainError::invalid("savePhoto", "Only vendor imports can save a photo").into(),
+            );
+        }
         self.rosters
             .check_scope(org, cmd.sharing_group_id, true)
             .await?;
@@ -278,7 +285,17 @@ impl AiImportService {
             now,
         );
         run.sharing_group_id = cmd.sharing_group_id;
-        self.runs.create(&run).await?;
+        if cmd.pending_photo.is_some() {
+            run.pending_photo_expires_at = Some(now + Duration::from_secs(24 * 3600));
+        }
+        let image = match &cmd.pending_photo {
+            Some(photo) => ImageInput {
+                bytes: photo.data.clone(),
+                media_type: "image/jpeg".into(),
+            },
+            None => cmd.image,
+        };
+        self.runs.create(&run, cmd.pending_photo).await?;
 
         let mut ctx = ImportToolContext::new(
             org,
@@ -290,7 +307,7 @@ impl AiImportService {
         ctx.sharing_group_id = cmd.sharing_group_id;
         let ctx = Arc::new(ctx);
         let input = AgentInput {
-            image: cmd.image,
+            image,
             instruction,
             mode: cmd.mode,
             target_roster_id: cmd.target_roster_id,
@@ -318,6 +335,7 @@ impl AiImportService {
                 self.rosters
                     .check_scope(org, run.sharing_group_id, true)
                     .await?;
+                self.hide_unavailable_photo(&mut run);
                 Ok(run)
             }
             Err(e) => {
@@ -365,7 +383,7 @@ impl AiImportService {
         org: OrganizerId,
         id: ImportRunId,
     ) -> Result<ImportRunView, AiImportError> {
-        let run = self
+        let mut run = self
             .runs
             .find(org, id)
             .await?
@@ -373,7 +391,20 @@ impl AiImportService {
         self.rosters
             .check_scope(org, run.sharing_group_id, false)
             .await?;
+        self.hide_unavailable_photo(&mut run);
         Ok(run)
+    }
+
+    fn hide_unavailable_photo(&self, run: &mut ImportRun) {
+        if !matches!(
+            run.status,
+            ImportRunStatus::Running | ImportRunStatus::Proposed
+        ) || run
+            .pending_photo_expires_at
+            .is_some_and(|t| t <= self.clock.now())
+        {
+            run.pending_photo_expires_at = None;
+        }
     }
 
     pub async fn discard(
@@ -591,8 +622,36 @@ impl AiImportService {
             return Err(AiImportError::InvalidChanges(errors));
         }
 
+        let save_photo = cmd
+            .save_photo
+            .unwrap_or(run.pending_photo_expires_at.is_some());
+        let photo_target = if save_photo {
+            let proposal_vendors = run
+                .proposal
+                .targets
+                .iter()
+                .filter(|t| matches!(t, domain::ai_import::ProposalTarget::Vendor(_)))
+                .count();
+            if run.mode != Some(ImportMode::Vendor) || run.pending_photo_expires_at.is_none() {
+                return Err(DomainError::invalid(
+                    "savePhoto",
+                    "No available pending photo; retry recognition or uncheck savePhoto",
+                )
+                .into());
+            }
+            if proposal_vendors != 1 || result.vendor_ids.len() != 1 {
+                return Err(DomainError::invalid(
+                    "savePhoto",
+                    "Exactly one proposed and accepted vendor is required; uncheck savePhoto",
+                )
+                .into());
+            }
+            Some(result.vendor_ids[0])
+        } else {
+            None
+        };
         run.apply(self.clock.now())?;
-        self.apply_repo.apply(&run, steps).await?;
+        self.apply_repo.apply(&run, steps, photo_target).await?;
         Ok(result)
     }
 }

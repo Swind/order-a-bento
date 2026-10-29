@@ -6,9 +6,11 @@ import { renderApp } from "@/test/render";
 import { ME, problem, server } from "@/test/server";
 import { AUTH_CONFIG, ROSTER_RUN } from "./fixtures";
 import { startImport } from "./hooks";
+import { compressImage, MAX_UPLOAD_BYTES } from "@/shared/lib/compressImage";
 
-vi.mock("@/shared/lib/compressImage", () => ({
-  compressImage: async () => new Blob(["jpegdata"], { type: "image/jpeg" }),
+vi.mock("@/shared/lib/compressImage", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/shared/lib/compressImage")>(),
+  compressImage: vi.fn(async () => new Blob(["jpegdata"], { type: "image/jpeg" })),
 }));
 
 const roster = { id: "r1", name: "午餐團", updatedAt: "2026-01-01T00:00:00Z", members: [] };
@@ -26,9 +28,85 @@ function setup(config: Partial<typeof AUTH_CONFIG> = {}) {
 
 const photo = () => new File(["x"], "menu.png", { type: "image/png" });
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(compressImage).mockResolvedValue(new Blob(["jpegdata"], { type: "image/jpeg" }));
+});
 
 describe("ImportDialog", () => {
+  it("closing the vendor upload dialog does not start or save anything", async () => {
+    setup();
+    const post = vi.fn(() => HttpResponse.json(ROSTER_RUN));
+    server.use(
+      http.get("*/api/v1/vendors", () => HttpResponse.json([])),
+      http.post("*/api/v1/ai/import-runs", post),
+    );
+    renderApp("/vendors");
+    await userEvent.click(await screen.findByRole("button", { name: "從傳單建立店家" }));
+    await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(post).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "從傳單建立店家" }));
+    expect(screen.getByRole("checkbox", { name: /儲存菜單照片/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "開始辨識" })).toBeDisabled();
+  });
+
+  it.each([false, true])("defaults to saving a vendor photo (existing=%s) and allows opt-out", async (existing) => {
+    setup();
+    let form: FormData | undefined;
+    server.use(
+      http.get("*/api/v1/vendors", () => HttpResponse.json([])),
+      http.get("*/api/v1/vendors/v1", () => HttpResponse.json({ id: "v1", name: "便當", menuItems: [], image: null })),
+      http.post("*/api/v1/ai/import-runs", async ({ request }) => {
+        form = await request.formData();
+        return problem(422, "ai_refused");
+      }),
+    );
+    renderApp(existing ? "/vendors/v1" : "/vendors");
+    await userEvent.click(await screen.findByRole("button", { name: existing ? "從傳單匯入" : "從傳單建立店家" }));
+    const checkbox = screen.getByRole("checkbox", { name: "確認匯入後，同時儲存菜單照片" });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText(/未勾選不暫存照片/)).toBeInTheDocument();
+    expect(screen.getByText(/確認保存將取代原照片/)).toBeInTheDocument();
+    await userEvent.upload(screen.getByLabelText("選擇照片檔案"), new File(["webp"], "menu.webp", { type: "image/webp" }));
+    await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
+    await screen.findByRole("alert");
+    expect(form!.get("savePhoto")).toBe("true");
+    expect((form!.get("image") as File).type).toBe("image/jpeg");
+    await userEvent.click(screen.getByRole("checkbox", { name: "確認匯入後，同時儲存菜單照片" }));
+    await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
+    await waitFor(() => expect(form!.get("savePhoto")).toBe("false"));
+  });
+
+  it.each([
+    [new Blob([], { type: "image/jpeg" }), "無法讀取"],
+    [new Blob(["png"], { type: "image/png" }), "無法讀取"],
+    [new Blob([new Uint8Array(MAX_UPLOAD_BYTES + 1)], { type: "image/jpeg" }), "圖片太大"],
+  ])("rejects invalid compressed output without starting a run", async (blob, message) => {
+    setup();
+    vi.mocked(compressImage).mockResolvedValueOnce(blob);
+    const post = vi.fn(() => HttpResponse.json(ROSTER_RUN));
+    server.use(http.post("*/api/v1/ai/import-runs", post));
+    renderApp("/rosters/r1");
+    await userEvent.click(await screen.findByRole("button", { name: "從照片匯入" }));
+    expect(screen.queryByRole("checkbox", { name: /儲存菜單照片/ })).not.toBeInTheDocument();
+    await userEvent.upload(screen.getByLabelText("選擇照片檔案"), photo());
+    await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each(["roster", "deliveryAddress", null] as const)("never submits savePhoto for mode %s", async (mode) => {
+    let form: FormData | undefined;
+    server.use(http.post("*/api/v1/ai/import-runs", async ({ request }) => {
+      form = await request.formData();
+      return HttpResponse.json(ROSTER_RUN);
+    }));
+    await startImport({ image: photo(), mode, savePhoto: true });
+    expect(form!.get("savePhoto")).toBeNull();
+  });
+
   it("shows a disabled 尚未設定 AI button when AI import is off", async () => {
     setup({ aiImportEnabled: false });
     renderApp("/rosters/r1");
@@ -56,6 +134,7 @@ describe("ImportDialog", () => {
     expect(form!.get("targetRosterId")).toBe("r1");
     expect(form!.get("instruction")).toBe("加到業務部名單");
     expect(form!.get("targetVendorId")).toBeNull();
+    expect(form!.get("savePhoto")).toBeNull();
     expect((form!.get("image") as File).type).toBe("image/jpeg");
   });
 
@@ -104,6 +183,7 @@ describe("ImportDialog", () => {
     await startImport({ image: photo(), mode: "deliveryAddress", sharingGroupId: "s1" });
     expect(form!.get("mode")).toBe("deliveryAddress");
     expect(form!.get("sharingGroupId")).toBeNull();
+    expect(form!.get("savePhoto")).toBeNull();
   });
 
   it("offers retry when the AI is unavailable and shows the demo badge", async () => {

@@ -14,6 +14,7 @@ infrastructure = { path = "crates/infrastructure" }
 api = { path = "crates/api" }
 
 anyhow = "1"
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 axum = "0.8"
 dotenvy = "0.15"
 http-body-util = "0.1"

@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+tokio.workspace = true
 async-trait.workspace = true
 application.workspace = true
 domain.workspace = true
@@ -27,6 +28,8 @@ mime_guess = "2"
 url = "2"
 
 [dev-dependencies]
+futures-util = "0.3"
+image.workspace = true
 http-body-util.workspace = true
 tokio.workspace = true
 tower.workspace = true

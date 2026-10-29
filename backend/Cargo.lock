@@ -144,7 +144,9 @@ dependencies = [
  "async-trait",
  "axum",
  "domain",
+ "futures-util",
  "http-body-util",
+ "image",
  "infrastructure",
  "ipnet",
  "mime_guess",
@@ -3431,7 +3433,9 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "crc32fast",
  "domain",
+ "image",
  "openidconnect",
  "rand 0.9.5",
  "reqwest 0.13.5",
@@ -3447,6 +3451,8 @@ dependencies = [
  "url",
  "uuid",
  "woothee",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

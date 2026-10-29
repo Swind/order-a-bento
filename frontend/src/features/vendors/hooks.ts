@@ -1,10 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, unwrap } from "@/shared/api/client";
+import { api, unwrap, ApiError } from "@/shared/api/client";
 import type { MenuItemInput, VendorSummary, VendorDetail } from "@/shared/api/types";
 import { invalidateSharingAccessOnError, scopePath, sharingRequest } from "@/features/sharing-groups/hooks";
 
 const listKey = ["vendors"] as const;
 const detailKey = (id: string) => ["vendor", id] as const;
+
+export function useVendorImageMutation(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ file, signal }: { file?: File; signal: AbortSignal }) => {
+      const params = { path: { vendorId: id } };
+      if (!file) return unwrap(await api.DELETE("/api/v1/vendors/{vendorId}/image", { params, signal }));
+      const body = new FormData();
+      body.append("image", file);
+      return unwrap(await api.PUT("/api/v1/vendors/{vendorId}/image", {
+        params, signal,
+        // Generated binary fields are strings; send the original bytes unchanged.
+        body: { image: "" }, bodySerializer: () => body,
+      }));
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 401) void qc.invalidateQueries({ queryKey: detailKey(id) });
+      // Let the section withdraw private bytes immediately, without waiting for refetches.
+      void invalidateSharingAccessOnError(qc, error);
+    },
+    onSuccess: () => Promise.all([
+      qc.invalidateQueries({ queryKey: detailKey(id) }),
+      qc.invalidateQueries({ queryKey: listKey }),
+    ]),
+  });
+}
 
 export interface VendorFields {
   name: string;

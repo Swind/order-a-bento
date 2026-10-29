@@ -13,6 +13,16 @@
 
 升級前請依備份章節備份 SQLite 資料庫；啟動新版會執行資料庫 migration。原有名單、店家菜單、地址及訂單不會自動公開或加入群組。同 Email 的本機／OIDC 帳號仍以不同本站使用者 ID 管理，加入成員時需確認選對身分。
 
+### 店家參考照片
+
+每家已建立的店家可保存一張管理端私有參考照片，與店家沿用相同的個人／群組權限；一般群組成員只能查看，管理者可替換或刪除。獨立上傳僅接受靜態 JPEG／PNG 原檔，最多 5 MiB（不支援 WebP／動畫）；後端轉為白底 JPEG、長邊最多 1568 px，移除原始 EXIF 等 metadata，不典藏原檔。獨立照片功能未設定 AI key 也能使用。
+
+AI 菜單匯入預設勾選「確認匯入後，同時儲存菜單照片」，使用者可在開始前取消。**伺服器預設不存圖**（start 的 `savePhoto` 省略或 false）；僅 vendor 明確傳 true 才暫存正規化辨識圖 JPEG 至 `ai_import_photos`（每 run 最多 5 MiB），不是原檔典藏。瀏覽器的 AI WebP 輸入會經 Canvas 轉 JPEG，不代表獨立上傳也支援 WebP。名單／地址不存圖。確認前不改店家照片；apply 同交易匯入資料、保存／取代照片並刪 pending，取消照片選項則只匯入資料並清 pending；放棄／辨識失敗也清 pending。資料或圖片失敗皆 rollback，沒有部分成功。
+
+暫存固定在 run 建立後 **24 小時失去可用資格**，apply 嚴格驗到期，即使 row 尚在也不能保存；實際邏輯刪除等下一輪 maintenance（啟動約 30 秒首跑，預設間隔 24 小時，可能再等近 24 小時，停機更久）。不是準時 24 小時實體抹除，也沒有每人三張限制；沿用既有 AI quota／限流與 request 大小限制。不新增排程、volume 或環境變數。
+
+照片存在同一 SQLite 的 `vendor_images` BLOB 子表，無需新增 volume、環境變數或 uploads 目錄。禁止把 `/data` 或 DB 備份掛成公開靜態檔；照片只經登入與店家授權的 API 讀取（private/no-store），不出現在公開點餐、OG 或 LINE 分享。多位管理者同時替換／刪除時，以最後成功提交為準，沒有版本衝突保護。
+
 ## 2. 建置映像
 
 ```sh
@@ -105,7 +115,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `SESSION_TTL_DAYS` | `14` | 登入 session 有效天數（過半後滑動延長） |
 | `TRUSTED_PROXIES` | 空 | 可信反向代理 IP／CIDR（逗號分隔，如 `127.0.0.1,172.16.0.0/12`）。僅來自這些位址的連線才採信 `X-Forwarded-For`；**放在反向代理後面時必須設定**，否則所有人的 IP 都會是代理的 IP，且公開端點的 rate limit 會共用同一桶 |
 | `CLIENT_INFO_RETENTION_DAYS` | `90` | 團關閉超過此天數後，該團送出紀錄的 IP／UA／裝置資訊清為 NULL |
-| `MAINTENANCE_INTERVAL_HOURS` | `24` | 背景清理工作週期（啟動後 30 秒先跑一次）：刪除過期 session／oauth_states、清除過期 ClientInfo、把卡住超過 10 分鐘的 AI 匯入標為 `failed`（`interrupted`） |
+| `MAINTENANCE_INTERVAL_HOURS` | `24` | 背景清理工作週期（啟動後 30 秒先跑一次）：刪除過期 session／oauth_states、清除過期 ClientInfo、把卡住超過 10 分鐘的 AI 匯入標為 `failed`（`interrupted`），並刪除到期或 terminal AI run 的待存照片（不刪已保存店家照片） |
 | `PUBLIC_RATE_LIMIT_BURST` / `PUBLIC_RATE_LIMIT_PER_SEC` | `30` / `2` | 公開端點每個 client IP 的 token bucket |
 | `DISPLAY_UTC_OFFSET` | `+08:00` | 連結預覽（OG）中截止時間顯示的時區 |
 | `RUST_LOG` | `info,tower_http=info` | 日誌等級 |
@@ -224,6 +234,8 @@ docker start bento
 - **只能有一個應用程式實例，且不可有其他程式寫入該 DB 檔**。
 - 不要在服務執行中直接複製 `bento.db` 單檔當備份（會漏掉 `-wal`）。
 - 備份檔請存放到另一台主機或異地；定期（例如每季）實際演練一次還原。
+- 店家照片與 AI opt-in 暫存辨識圖均包含在 SQLite／整個 volume 備份內，不需另備份圖片目錄；DB、WAL 與備份容量會隨照片增加（每店／每個 opt-in run 最多各 5 MiB，另有 SQLite／WAL overhead）。備份含私有照片，應加密、限制存取及設定保留期限；還原舊備份可能還原當時尚未清除的 pending bytes，但已到期照片仍不可 apply。
+- 刪除照片是邏輯刪除，不代表 DB 空間立即縮小，也不保證磁碟頁面、WAL 或歷史備份安全抹除。容量回收請另行安排停機維護，不在每次請求執行 VACUUM；還原舊備份也會還原當時的照片與權限。
 
 ## 8. 健康檢查
 

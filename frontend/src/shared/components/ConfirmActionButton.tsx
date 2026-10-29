@@ -21,7 +21,7 @@ export function ConfirmActionButton({
   const [confirming, setConfirming] = useState(false);
   if (!confirming) {
     return (
-      <Button type="button" variant={variant} className="h-11" onClick={() => setConfirming(true)}>
+      <Button type="button" variant={variant} className="h-11" disabled={pending} onClick={() => setConfirming(true)}>
         {label}
       </Button>
     );
@@ -45,7 +45,7 @@ export function ConfirmActionButton({
       >
         確定{label}
       </Button>
-      <Button type="button" variant="outline" className="h-11" onClick={() => setConfirming(false)}>
+      <Button type="button" variant="outline" className="h-11" disabled={pending} onClick={() => setConfirming(false)}>
         取消
       </Button>
     </div>

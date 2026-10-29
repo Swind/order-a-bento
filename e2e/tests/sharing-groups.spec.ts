@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import {
   createGroupOrder, createRoster, createVendor, devLogin,
-  expectNoHorizontalOverflow, getPublicGroup, submitOrder,
+  expectNoHorizontalOverflow, getPublicGroup, submitOrder, writeTestPng,
 } from "../helpers";
 
 async function create(page: Page, url: string, data: unknown) {
@@ -37,6 +38,25 @@ test("shared directory is read-only for members and orders remain personal after
     const vendor = await create(page, "/api/v1/vendors", {
       name: "共用便當店", sharingGroupId: group.id, menuItems: [{ name: "便當", price: 100 }],
     });
+    const imageUrl = `/api/v1/vendors/${vendor.id}/image`;
+    const upload = { image: { name: "menu.png", mimeType: "image/png", buffer: fs.readFileSync(writeTestPng(800, 600)) } };
+    const saved = await page.request.put(imageUrl, { multipart: upload });
+    expect(saved.status()).toBe(200);
+    const metadata = await saved.json();
+    await member.goto(`/vendors/${vendor.id}`);
+    const photo = member.getByRole("region", { name: "店家參考照片" });
+    await expect(photo.getByAltText("店家參考照片", { exact: true })).toBeVisible();
+    await expect(photo.getByRole("button", { name: /選擇照片|刪除照片|確認替換/ })).toHaveCount(0);
+    await photo.getByRole("button", { name: "參考照片預覽", exact: true }).click();
+    await expect(member.getByRole("dialog").getByAltText("參考照片預覽")).toBeVisible();
+    await member.keyboard.press("Escape");
+    await member.screenshot({ path: test.info().outputPath("vendor-image-readonly.png"), fullPage: true });
+    const read = await member.request.get(imageUrl);
+    expect(read.status()).toBe(200);
+    expect(read.headers()["cache-control"]).toBe("private, no-store");
+    expect(read.headers()["content-type"]).toBe("image/jpeg");
+    expect((await member.request.put(imageUrl, { multipart: upload })).status()).toBe(404);
+    expect((await member.request.delete(imageUrl)).status()).toBe(404);
 
     expect((await member.request.get(`/api/v1/rosters/${privateRoster.id}`)).status()).toBe(404);
     const visible = await member.request.get(`/api/v1/rosters/${roster.id}`);
@@ -64,6 +84,22 @@ test("shared directory is read-only for members and orders remain personal after
     await member.getByRole("button", { name: "開團", exact: true }).click();
     await expect(member).toHaveURL(/group-orders\/[0-9a-f-]+$/);
     const order = { id: new URL(member.url()).pathname.split("/").pop()! };
+    const detail = await (await member.request.get(`/api/v1/group-orders/${order.id}`)).json();
+    const token = detail.shareUrl.split("/g/")[1];
+    const anonymous = await browser.newContext({ baseURL: test.info().project.use.baseURL });
+    try {
+      const publicPage = await anonymous.newPage();
+      const publicResponse = await publicPage.request.get(`/api/v1/public/g/${token}`);
+      expect(publicResponse.status()).toBe(200);
+      expect(await publicResponse.text()).not.toMatch(/"image"\s*:|vendor_images|image\/jpeg|sizeBytes|revision|\/image/);
+      const html = await publicPage.request.get(`/g/${token}`);
+      const publicHtml = await html.text();
+      expect(publicHtml).not.toContain(metadata.revision);
+      expect(publicHtml).not.toContain(imageUrl);
+      expect((await publicPage.request.get(imageUrl)).status()).toBe(401);
+      await publicPage.goto(`/g/${token}`);
+      await expect(publicPage.getByRole("region", { name: "店家參考照片" })).toHaveCount(0);
+    } finally { await anonymous.close(); }
     expect(await (await member.request.get(`/api/v1/group-orders/${order.id}`)).json()).toMatchObject({
       sharingGroupId: null, sharingGroupName: null, canManage: true,
     });
@@ -72,6 +108,9 @@ test("shared directory is read-only for members and orders remain personal after
     expect(removal.ok()).toBeTruthy();
     expect((await member.request.get(`/api/v1/rosters/${roster.id}`)).status()).toBe(404);
     expect((await member.request.get(`/api/v1/vendors/${vendor.id}`)).status()).toBe(404);
+    expect((await member.request.get(imageUrl)).status()).toBe(404);
+    await member.goto(`/vendors/${vendor.id}`);
+    await expect(member.getByAltText("店家參考照片", { exact: true })).toHaveCount(0);
     expect((await member.request.get(`/api/v1/group-orders/${order.id}`)).ok()).toBeTruthy();
     await member.goto(`/group-orders/${order.id}`);
     await expect(member.getByText("成員自己的午餐").first()).toBeVisible();

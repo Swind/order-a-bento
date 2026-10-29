@@ -6,7 +6,8 @@ import { renderApp } from "@/test/render";
 import { ME, server } from "@/test/server";
 import { AUTH_CONFIG, ROSTER_RUN } from "@/features/ai-import/fixtures";
 
-vi.mock("@/shared/lib/compressImage", () => ({
+vi.mock("@/shared/lib/compressImage", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/shared/lib/compressImage")>(),
   compressImage: async () => new Blob(["jpegdata"], { type: "image/jpeg" }),
 }));
 
@@ -70,6 +71,7 @@ describe("delivery addresses", () => {
         const form = await request.formData();
         expect(form.get("mode")).toBe("deliveryAddress");
         expect(form.get("targetVendorId")).toBeNull();
+        expect(form.get("savePhoto")).toBeNull();
         return HttpResponse.json(run, { status: 201 });
       }),
       http.get("*/api/v1/ai/import-runs/run1", () => HttpResponse.json(run)),
@@ -81,9 +83,11 @@ describe("delivery addresses", () => {
     const { router } = renderApp("/delivery-addresses");
     await userEvent.click(await screen.findByRole("button", { name: "從照片匯入地址" }));
     expect(screen.getByRole("heading", { name: "從照片匯入送餐地址" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /儲存菜單照片/ })).not.toBeInTheDocument();
     await userEvent.upload(screen.getByLabelText("選擇照片檔案"), new File(["x"], "classroom.png", { type: "image/png" }));
     await userEvent.click(screen.getByRole("button", { name: "開始辨識" }));
     expect(await screen.findByRole("heading", { name: "送餐地址匯入確認" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /儲存菜單照片/ })).not.toBeInTheDocument();
     expect(screen.getByText(/請核對完整地址/)).toBeInTheDocument();
     expect(applied).toBeUndefined();
     expect(screen.getByRole("button", { name: "確認匯入 1 個地址" })).toBeDisabled();

@@ -48,15 +48,24 @@ impl MaintenanceRepo for SqliteMaintenanceRepo {
         created_before: SystemTime,
         now: SystemTime,
     ) -> PortResult<u64> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(err)?;
         let r = sqlx::query(
             "UPDATE ai_import_runs SET status = 'failed', error = 'interrupted', finished_at = ? \
              WHERE status = 'running' AND created_at <= ?",
         )
         .bind(to_text(now))
         .bind(to_text(created_before))
-        .execute(&self.db.write)
+        .execute(&mut *tx)
         .await
         .map_err(err)?;
+        sqlx::query("DELETE FROM ai_import_photos WHERE expires_at <= ? OR run_id IN (SELECT id FROM ai_import_runs WHERE status IN ('failed','discarded','applied'))")
+            .bind(to_text(now)).execute(&mut *tx).await.map_err(err)?;
+        tx.commit().await.map_err(err)?;
         Ok(r.rows_affected())
     }
 }

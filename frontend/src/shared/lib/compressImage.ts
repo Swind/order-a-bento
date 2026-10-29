@@ -72,6 +72,8 @@ export async function compressImage(file: Blob): Promise<Blob> {
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas unsupported");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
     ctx.drawImage(dec.source, 0, 0, width, height);
     let quality = START_QUALITY;
     let blob = await toBlob(canvas, quality);

@@ -65,6 +65,7 @@ struct RunRow {
     created_at: String,
     finished_at: Option<String>,
     applied_at: Option<String>,
+    pending_photo_expires_at: Option<String>,
 }
 
 macro_rules! columns {
@@ -82,6 +83,7 @@ fn opt_ts(s: Option<String>) -> PortResult<Option<SystemTime>> {
 impl RunRow {
     fn into_run(self) -> PortResult<ImportRun> {
         Ok(ImportRun {
+            pending_photo_expires_at: opt_ts(self.pending_photo_expires_at)?,
             sharing_group_id: self
                 .sharing_group_id
                 .map(|s| s.parse().map_err(port))
@@ -129,7 +131,17 @@ impl RunRow {
 
 #[async_trait]
 impl ImportRunRepo for SqliteImportRunRepo {
-    async fn create(&self, run: &ImportRun) -> PortResult<()> {
+    async fn create(
+        &self,
+        run: &ImportRun,
+        photo: Option<application::ports::NormalizedVendorImage>,
+    ) -> PortResult<()> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(port)?;
         let proposal = serde_json::to_string(&run.proposal).map_err(port)?;
         sqlx::query(concat!(
             "INSERT INTO ai_import_runs (",
@@ -154,9 +166,16 @@ impl ImportRunRepo for SqliteImportRunRepo {
         .bind(run.finished_at.map(to_text))
         .bind(run.applied_at.map(to_text))
         .bind(run.sharing_group_id.map(|g| g.to_string()))
-        .execute(&self.db.write)
+        .execute(&mut *tx)
         .await
         .map_err(port)?;
+        if let Some(photo) = photo {
+            sqlx::query("INSERT INTO ai_import_photos(run_id,data,width,height,expires_at) VALUES(?,?,?,?,?)")
+                .bind(run.id.to_string()).bind(photo.data).bind(photo.width).bind(photo.height)
+                .bind(to_text(run.created_at + std::time::Duration::from_secs(24 * 3600)))
+                .execute(&mut *tx).await.map_err(port)?;
+        }
+        tx.commit().await.map_err(port)?;
         Ok(())
     }
 
@@ -164,7 +183,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
         sqlx::query_as::<_, RunRow>(concat!(
             "SELECT ",
             columns!(),
-            " FROM ai_import_runs WHERE id = ? AND organizer_id = ?"
+            ", (SELECT expires_at FROM ai_import_photos p WHERE p.run_id=ai_import_runs.id) AS pending_photo_expires_at FROM ai_import_runs WHERE id = ? AND organizer_id = ?"
         ))
         .bind(id.to_string())
         .bind(org.to_string())
@@ -176,6 +195,12 @@ impl ImportRunRepo for SqliteImportRunRepo {
     }
 
     async fn save(&self, run: &ImportRun, expected: ImportRunStatus) -> RepoResult<()> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(port)?;
         let proposal = serde_json::to_string(&run.proposal).map_err(port)?;
         let done = sqlx::query(
             "UPDATE ai_import_runs SET status = ?, proposal_json = ?, summary = ?, model = ?, \
@@ -195,12 +220,24 @@ impl ImportRunRepo for SqliteImportRunRepo {
         .bind(run.id.to_string())
         .bind(run.organizer_id.to_string())
         .bind(expected.as_str())
-        .execute(&self.db.write)
+        .execute(&mut *tx)
         .await
         .map_err(port)?;
         if done.rows_affected() == 1 {
+            if matches!(
+                run.status,
+                ImportRunStatus::Failed | ImportRunStatus::Discarded | ImportRunStatus::Applied
+            ) {
+                sqlx::query("DELETE FROM ai_import_photos WHERE run_id=?")
+                    .bind(run.id.to_string())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(port)?;
+            }
+            tx.commit().await.map_err(port)?;
             return Ok(());
         }
+        drop(tx);
         miss(&self.db, run).await
     }
 
@@ -235,7 +272,12 @@ async fn miss(db: &Db, run: &ImportRun) -> RepoResult<()> {
 
 #[async_trait]
 impl ImportApplyRepo for SqliteImportRunRepo {
-    async fn apply(&self, run: &ImportRun, steps: Vec<ImportApplyStep>) -> RepoResult<()> {
+    async fn apply(
+        &self,
+        run: &ImportRun,
+        steps: Vec<ImportApplyStep>,
+        photo_target: Option<domain::directory::VendorId>,
+    ) -> RepoResult<()> {
         let now = run.applied_at.unwrap_or(run.created_at);
         let mut tx = self
             .db
@@ -259,6 +301,7 @@ impl ImportApplyRepo for SqliteImportRunRepo {
         }
         let org = run.organizer_id;
         crate::directory_repo::scope_admin(&mut tx, org, run.sharing_group_id).await?;
+        let mut photo_target_written = false;
         for step in steps {
             match step {
                 ImportApplyStep::CreateDeliveryAddress(a) => {
@@ -289,7 +332,9 @@ impl ImportApplyRepo for SqliteImportRunRepo {
                     if v.sharing_group_id != run.sharing_group_id || v.organizer_id() != org {
                         return Err(RepoError::NotFound);
                     }
+                    let id = v.id();
                     create_vendor_tx(&mut tx, v, now).await?;
+                    photo_target_written |= photo_target == Some(id);
                 }
                 ImportApplyStep::ModifyVendor { id, mutation } => {
                     let scope: Option<(Option<String>,)> =
@@ -302,9 +347,57 @@ impl ImportApplyRepo for SqliteImportRunRepo {
                         return Err(RepoError::NotFound);
                     }
                     modify_vendor_tx(&mut tx, org, id, now, mutation).await?;
+                    photo_target_written |= photo_target == Some(id);
                 }
             }
         }
+        if let Some(target) = photo_target {
+            if !photo_target_written {
+                return Err(DomainError::invalid(
+                    "savePhoto",
+                    "Photo target must be an accepted vendor in this scope",
+                )
+                .into());
+            }
+            let photo: Option<(Vec<u8>, u32, u32, String)> = sqlx::query_as(
+                "SELECT data,width,height,expires_at FROM ai_import_photos WHERE run_id=?",
+            )
+            .bind(run.id.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(port)?;
+            let Some((data, width, height, expiry)) = photo else {
+                return Err(DomainError::invalid(
+                    "savePhoto",
+                    "Pending photo missing; uncheck savePhoto or retry recognition",
+                )
+                .into());
+            };
+            if from_text(&expiry).map_err(port)? <= now {
+                return Err(DomainError::invalid(
+                    "savePhoto",
+                    "Pending photo expired; uncheck savePhoto or retry recognition",
+                )
+                .into());
+            }
+            crate::directory_repo::put_image_tx(
+                &mut tx,
+                org,
+                target,
+                application::ports::NormalizedVendorImage {
+                    data,
+                    width,
+                    height,
+                },
+                now,
+            )
+            .await?;
+        }
+        sqlx::query("DELETE FROM ai_import_photos WHERE run_id=?")
+            .bind(run.id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(port)?;
         tx.commit().await.map_err(port)?;
         Ok(())
     }

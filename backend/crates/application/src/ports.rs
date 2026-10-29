@@ -312,9 +312,38 @@ pub trait RosterRepo: Send + Sync {
     async fn delete(&self, organizer_id: OrganizerId, id: RosterId) -> PortResult<bool>;
 }
 
+/// Trusted output of the image normalizer, never raw multipart bytes.
+#[derive(Debug, Clone)]
+pub struct NormalizedVendorImage {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub struct StoredVendorImage {
+    pub metadata: domain::directory::VendorImage,
+    pub data: Vec<u8>,
+}
+
 /// Vendor persistence; same contract as [`RosterRepo`].
 #[async_trait]
 pub trait VendorRepo: Send + Sync {
+    /// Authorize and read bytes in the same read snapshot.
+    async fn read_image(&self, actor: OrganizerId, id: VendorId) -> RepoResult<StoredVendorImage>;
+    /// Reauthorize inside the write transaction; last successful commit wins.
+    async fn put_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+        image: NormalizedVendorImage,
+        now: SystemTime,
+    ) -> RepoResult<domain::directory::VendorImage>;
+    async fn delete_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+        now: SystemTime,
+    ) -> RepoResult<()>;
     async fn list_scoped(
         &self,
         organizer_id: OrganizerId,
@@ -608,7 +637,8 @@ pub trait UaParser: Send + Sync {
 /// `ai_import_runs` persistence. Every lookup is scoped by `organizer_id`.
 #[async_trait]
 pub trait ImportRunRepo: Send + Sync {
-    async fn create(&self, run: &ImportRun) -> PortResult<()>;
+    async fn create(&self, run: &ImportRun, photo: Option<NormalizedVendorImage>)
+    -> PortResult<()>;
     async fn find(
         &self,
         organizer_id: OrganizerId,
@@ -647,5 +677,10 @@ pub trait ImportApplyRepo: Send + Sync {
     /// `RepoError::Domain(Invalid { field: "status" })` if it is not
     /// `proposed` any more, which makes concurrent/double applies safe), then
     /// runs the steps in order. Any error rolls everything back.
-    async fn apply(&self, run: &ImportRun, steps: Vec<ImportApplyStep>) -> RepoResult<()>;
+    async fn apply(
+        &self,
+        run: &ImportRun,
+        steps: Vec<ImportApplyStep>,
+        photo_target: Option<VendorId>,
+    ) -> RepoResult<()>;
 }

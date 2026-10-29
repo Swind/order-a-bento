@@ -136,6 +136,148 @@ async fn client() -> Client {
     client_with(test_app_ai(fake_vendor_agent(), 30, None, false).await).await
 }
 
+fn real_png() -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(3, 2)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
+#[tokio::test]
+async fn pending_photo_opt_in_validation_preserves_legacy_webp() {
+    let c = client().await;
+    let webp = b"RIFF0000WEBP";
+    let (s, run) = upload(&c, webp, &[]).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(run["hasPendingPhoto"], false);
+    assert!(run["pendingPhotoExpiresAt"].is_null());
+    for (image, fields) in [
+        (webp.as_slice(), vec![("savePhoto", "true")]),
+        (JPEG, vec![("savePhoto", "true")]),
+        (JPEG, vec![("savePhoto", "yes")]),
+        (JPEG, vec![("mode", "roster"), ("savePhoto", "true")]),
+        (
+            JPEG,
+            vec![("mode", "deliveryAddress"), ("savePhoto", "true")],
+        ),
+    ] {
+        assert_eq!(
+            upload(&c, image, &fields).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    assert_eq!(
+        upload(&c, JPEG, &[("savePhoto", "false"), ("savePhoto", "true")])
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (s, run) = upload(&c, JPEG, &[("savePhoto", "false")]).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(run["hasPendingPhoto"], false);
+}
+
+#[tokio::test]
+async fn pending_photo_reload_apply_and_opt_out_contract() {
+    let c = client().await;
+    let image = real_png();
+    let accepted = json!([{"type":"vendor","vendor":{"kind":"new","name":"阿財便當"},"info":{"name":"阿財便當"},"menu":[{"name":"排骨飯","price":85}]}]);
+    for save in [true, false] {
+        let (s, run) = upload(&c, &image, &[("savePhoto", "true")]).await;
+        assert_eq!(s, StatusCode::CREATED, "{run}");
+        assert_eq!(run["hasPendingPhoto"], true);
+        let id = run["id"].as_str().unwrap();
+        let path = format!("/ai/import-runs/{id}");
+        let refreshed = c.get(&path).await.1;
+        assert_eq!(refreshed["hasPendingPhoto"], true);
+        assert_eq!(
+            refreshed["pendingPhotoExpiresAt"],
+            run["pendingPhotoExpiresAt"]
+        );
+        assert!(refreshed.get("data").is_none());
+        let (s, result) = c
+            .post(
+                &format!("{path}/apply"),
+                json!({"accepted":accepted,"savePhoto":save}),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{result}");
+        let vid = result["vendorIds"][0].as_str().unwrap();
+        let vendor = c.get(&format!("/vendors/{vid}")).await.1;
+        assert!(!vendor["image"].is_null()); // opt-out preserves the first saved photo
+        assert_eq!(c.get(&path).await.1["hasPendingPhoto"], false);
+        assert_eq!(
+            c.post(
+                &format!("{path}/apply"),
+                json!({"accepted":accepted,"savePhoto":save})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+    let (_, run) = upload(&c, JPEG, &[]).await;
+    assert_eq!(
+        c.post(
+            &format!("/ai/import-runs/{}/apply", run["id"].as_str().unwrap()),
+            json!({"accepted":accepted,"savePhoto":true})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn pending_photo_processing_budget_and_invalid_input_do_not_create_runs() {
+    let t = test_app_ai(fake_vendor_agent(), 1, None, false).await;
+    let permit = t
+        .state
+        .image_processing
+        .clone()
+        .acquire_many_owned(2)
+        .await
+        .unwrap();
+    let c = client_with(t).await;
+    assert_eq!(
+        upload(&c, &real_png(), &[("savePhoto", "true")]).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    drop(permit);
+    assert_eq!(
+        upload(&c, JPEG, &[("savePhoto", "true")]).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let (s, run) = upload(&c, &real_png(), &[("savePhoto", "true")]).await;
+    assert_eq!(s, StatusCode::CREATED, "{run}");
+    let path = format!("/ai/import-runs/{}", run["id"].as_str().unwrap());
+    assert_eq!(
+        c.post(&format!("{path}/discard"), json!({})).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(c.get(&path).await.1["hasPendingPhoto"], false);
+}
+
+#[test]
+fn pending_photo_openapi_contract() {
+    let (_, api) = super::ai_import::router().split_for_parts();
+    let api = serde_json::to_value(api).unwrap();
+    let schemas = &api["components"]["schemas"];
+    let run = &schemas["ImportRunDto"];
+    let required = run["required"].as_array().unwrap();
+    assert!(required.contains(&json!("hasPendingPhoto")));
+    assert!(required.contains(&json!("pendingPhotoExpiresAt")));
+    assert_eq!(
+        schemas["ApplyRequest"]["properties"]["savePhoto"]["type"],
+        json!(["boolean", "null"])
+    );
+    assert_eq!(
+        schemas["StartImportForm"]["properties"]["savePhoto"]["type"],
+        json!(["boolean", "null"])
+    );
+}
+
 #[tokio::test]
 async fn sharing_scope_multipart_and_revoked_apply_are_enforced() {
     let c = client().await;

@@ -5,7 +5,7 @@ import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import type { ImportMode } from "@/shared/api/types";
 import { FieldError } from "@/shared/components/FieldError";
-import { compressImage } from "@/shared/lib/compressImage";
+import { compressImage, MAX_UPLOAD_BYTES } from "@/shared/lib/compressImage";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
@@ -47,6 +47,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
+  const [savePhoto, setSavePhoto] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<{ message: string; retry: boolean } | null>(null);
   const abort = useRef<AbortController | null>(null);
@@ -67,6 +68,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
   function reset() {
     setFile(null);
     setInstruction("");
+    setSavePhoto(true);
     setError(null);
   }
 
@@ -89,14 +91,21 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
       let image: Blob;
       try {
         image = await compressImage(file);
+        if (image.type !== "image/jpeg" || image.size === 0) throw new Error("invalid JPEG");
       } catch {
         setError({ message: errorMessage(new ApiError({ type: "", title: "", status: 422, code: "invalid_image" })), retry: false });
         return;
       }
+      if (image.size > MAX_UPLOAD_BYTES) {
+        setError({ message: errorMessage(new ApiError({ type: "", title: "", status: 413, code: "image_too_large" })), retry: false });
+        return;
+      }
+      if (ctrl.signal.aborted) return;
       const run = await startImport({
         image,
         instruction: instruction.trim() || undefined,
         ...target,
+        savePhoto: target.mode === "vendor" ? savePhoto : undefined,
         signal: ctrl.signal,
       });
       onOpenChange(false);
@@ -119,7 +128,7 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
 
   return (
     <Dialog open={open} onOpenChange={change}>
-      <DialogContent showCloseButton={!pending} className="max-h-[90dvh] overflow-y-auto">
+      <DialogContent showCloseButton={!pending} className="max-h-[90dvh] overflow-y-auto [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11">
         {pending ? (
           <div role="status" className="flex flex-col items-center gap-4 py-8 text-center">
             <DialogTitle className="sr-only">AI 辨識中</DialogTitle>
@@ -194,6 +203,16 @@ function ImportDialogContent({ open, onOpenChange, aiDemo, ...target }: DialogPr
               </p>
               {tooLong && <FieldError message="指示文字不可超過 200 字" />}
             </div>
+            {target.mode === "vendor" && (
+              <div className="space-y-1 rounded-lg border p-3 text-sm">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                  <input type="checkbox" checked={savePhoto} onChange={(e) => setSavePhoto(e.target.checked)} />
+                  確認匯入後，同時儲存菜單照片
+                </label>
+                <p className="text-muted-foreground">勾選時，辨識用壓縮圖片會於伺服器暫存 24 小時；確認前不會改動店家照片，逾期無法自動保存。未勾選不暫存照片。</p>
+                <p className="text-muted-foreground">若店家已有參考照片，確認保存將取代原照片，可取消勾選。</p>
+              </div>
+            )}
             {error && (
               <div className="space-y-2">
                 <p role="alert" className="text-sm text-destructive">{error.message}</p>

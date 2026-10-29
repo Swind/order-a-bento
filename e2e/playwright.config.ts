@@ -4,6 +4,7 @@ import path from "node:path";
 import { E2E_ADMIN_EMAIL, E2E_ADMIN_NAME, E2E_ADMIN_PASSWORD } from "./admin-account";
 
 const PORT = 3990;
+const SERVER = process.env.E2E_SERVER_BINARY ?? "../backend/target/release/server";
 export const BASE_URL = `http://localhost:${PORT}`;
 // Fresh DB directory per run: removed before the server starts and again in globalTeardown.
 export const DB_DIR = path.join(os.tmpdir(), `bento-e2e-${PORT}`);
@@ -20,7 +21,8 @@ export default defineConfig({
   outputDir: "./test-results",
   globalTeardown: "./global-teardown.ts",
   fullyParallel: true,
-  workers: process.env.CI ? 2 : 4,
+  // The real server admits two image processing jobs; avoid unrelated uploads racing for that budget.
+  workers: 2,
   retries: process.env.CI ? 1 : 0,
   forbidOnly: !!process.env.CI,
   reporter: [["list"], ["html", { open: "never" }]],
@@ -44,7 +46,7 @@ export default defineConfig({
     },
     {
       name: "desktop",
-      testMatch: ["auth-directory.spec.ts", "management.spec.ts", "sharing-groups.spec.ts", "ordering.spec.ts", "ui-improvements.spec.ts"],
+      testMatch: ["auth-directory.spec.ts", "management.spec.ts", "sharing-groups.spec.ts", "ordering.spec.ts", "ui-improvements.spec.ts", "ai-import.spec.ts"],
       use: {
         browserName: "chromium",
         viewport: { width: 1280, height: 800 },
@@ -56,8 +58,8 @@ export default defineConfig({
     command:
       `rm -rf "${DB_DIR}" && mkdir -p "${DB_DIR}" && ` +
       `printf '%s\\n' '${E2E_ADMIN_PASSWORD}' | ` +
-      `../backend/target/release/server admin create --email '${E2E_ADMIN_EMAIL}' --name '${E2E_ADMIN_NAME}' --password-stdin && ` +
-      `exec ../backend/target/release/server`,
+      `"${SERVER}" admin create --email '${E2E_ADMIN_EMAIL}' --name '${E2E_ADMIN_NAME}' --password-stdin && ` +
+      `exec "${SERVER}"`,
     url: `${BASE_URL}/healthz`,
     reuseExistingServer: false,
     timeout: 60_000,

@@ -49,6 +49,7 @@ const MESSAGES: Record<string, string> = {
   ai_refused: "這張照片無法辨識，請改用手動輸入",
   ai_unavailable: "AI 服務暫時無法使用，請稍後再試",
   invalid_changes: "有些變更內容不正確，請檢查標示的項目",
+  invalid_save_photo: "無法儲存照片：照片可能已到期，或本次不是單一店家。請取消同時儲存照片後重試，或重新辨識",
   invalid_state: "這份匯入已處理過，請重新整理頁面",
 };
 

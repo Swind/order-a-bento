@@ -21,7 +21,8 @@ pub trait MaintenanceRepo: Send + Sync {
     /// and reopened groups are never touched.) Returns the number of submissions changed.
     async fn clear_client_info(&self, closed_before: std::time::SystemTime) -> PortResult<u64>;
     /// Mark AI import runs `running` and created at or before `created_before`
-    /// as `failed` with error `"interrupted"`. Returns the number of runs changed.
+    /// as `failed` with error `"interrupted"`, and delete expired/terminal pending
+    /// photos in the same transaction. Returns only the number of runs changed.
     async fn fail_stuck_import_runs(
         &self,
         created_before: std::time::SystemTime,

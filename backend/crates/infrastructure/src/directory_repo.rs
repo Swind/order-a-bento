@@ -450,6 +450,75 @@ struct VendorRow {
     updated_at: String,
 }
 
+async fn image_metadata(
+    conn: &mut SqliteConnection,
+    id: VendorId,
+) -> PortResult<Option<domain::directory::VendorImage>> {
+    let row: Option<(String, u32, u32, u32, String)> = sqlx::query_as(
+        "SELECT revision,length(data),width,height,updated_at FROM vendor_images WHERE vendor_id=?",
+    )
+    .bind(id.to_string())
+    .fetch_optional(conn)
+    .await
+    .map_err(port)?;
+    row.map(|(revision, size_bytes, width, height, updated)| {
+        Ok(domain::directory::VendorImage {
+            revision,
+            size_bytes,
+            width,
+            height,
+            updated_at: ts(&updated)?,
+        })
+    })
+    .transpose()
+}
+
+pub(crate) async fn put_image_tx(
+    conn: &mut SqliteConnection,
+    actor: OrganizerId,
+    id: VendorId,
+    image: application::ports::NormalizedVendorImage,
+    now: SystemTime,
+) -> RepoResult<domain::directory::VendorImage> {
+    authorize_image(conn, actor, id, true).await?;
+    let revision = uuid::Uuid::now_v7().to_string();
+    let t = to_text(now);
+    sqlx::query("INSERT INTO vendor_images(vendor_id,revision,content_type,data,width,height,updated_at) VALUES(?,?,'image/jpeg',?,?,?,?) ON CONFLICT(vendor_id) DO UPDATE SET revision=excluded.revision,content_type=excluded.content_type,data=excluded.data,width=excluded.width,height=excluded.height,updated_at=excluded.updated_at")
+        .bind(id.to_string()).bind(&revision).bind(&image.data).bind(image.width).bind(image.height).bind(&t).execute(&mut *conn).await.map_err(repo)?;
+    sqlx::query("UPDATE vendors SET updated_at=? WHERE id=?")
+        .bind(&t)
+        .bind(id.to_string())
+        .execute(&mut *conn)
+        .await
+        .map_err(repo)?;
+    Ok(domain::directory::VendorImage {
+        revision,
+        size_bytes: image.data.len() as u32,
+        width: image.width,
+        height: image.height,
+        updated_at: stored_time(now),
+    })
+}
+
+async fn authorize_image(
+    conn: &mut SqliteConnection,
+    actor: OrganizerId,
+    id: VendorId,
+    write: bool,
+) -> RepoResult<()> {
+    let (owner, group): (String, Option<String>) =
+        sqlx::query_as("SELECT organizer_id,sharing_group_id FROM vendors WHERE id=?")
+            .bind(id.to_string())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(port)?
+            .ok_or(RepoError::NotFound)?;
+    match access(conn, actor, &owner, group.as_deref()).await? {
+        Some(can_manage) if !write || can_manage => Ok(()),
+        _ => Err(RepoError::NotFound),
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct ItemRow {
     id: String,
@@ -523,6 +592,7 @@ pub(crate) async fn load_vendor(
         .map(|s| s.parse().map_err(port))
         .transpose()?;
     vendor.can_manage = can_manage;
+    vendor.image = image_metadata(conn, id).await?;
     Ok(Some(Stored {
         value: vendor,
         updated_at: ts(&row.updated_at)?,
@@ -669,6 +739,72 @@ pub(crate) async fn modify_vendor_tx(
 
 #[async_trait]
 impl VendorRepo for SqliteVendorRepo {
+    async fn read_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+    ) -> RepoResult<application::ports::StoredVendorImage> {
+        let mut tx = self.db.read.begin().await.map_err(port)?;
+        authorize_image(&mut tx, actor, id, false).await?;
+        let metadata = image_metadata(&mut tx, id)
+            .await?
+            .ok_or(RepoError::NotFound)?;
+        let (data,): (Vec<u8>,) =
+            sqlx::query_as("SELECT data FROM vendor_images WHERE vendor_id=?")
+                .bind(id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(port)?;
+        Ok(application::ports::StoredVendorImage { metadata, data })
+    }
+
+    async fn put_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+        image: application::ports::NormalizedVendorImage,
+        now: SystemTime,
+    ) -> RepoResult<domain::directory::VendorImage> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(port)?;
+        let metadata = put_image_tx(&mut tx, actor, id, image, now).await?;
+        tx.commit().await.map_err(port)?;
+        Ok(metadata)
+    }
+
+    async fn delete_image(
+        &self,
+        actor: OrganizerId,
+        id: VendorId,
+        now: SystemTime,
+    ) -> RepoResult<()> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(port)?;
+        authorize_image(&mut tx, actor, id, true).await?;
+        let r = sqlx::query("DELETE FROM vendor_images WHERE vendor_id=?")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(repo)?;
+        if r.rows_affected() > 0 {
+            sqlx::query("UPDATE vendors SET updated_at=? WHERE id=?")
+                .bind(to_text(now))
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(repo)?;
+        }
+        tx.commit().await.map_err(port)?;
+        Ok(())
+    }
     async fn list_scoped(
         &self,
         org: OrganizerId,

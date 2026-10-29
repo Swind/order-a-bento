@@ -545,6 +545,29 @@ export interface paths {
         patch: operations["patch_vendor"];
         trace?: never;
     };
+    "/api/v1/vendors/{vendorId}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current JPEG using current parent permissions, never a public URL. */
+        get: operations["get_image"];
+        /**
+         * Atomically replace the image; last successful commit wins. 5 MiB image,
+         *     6 MiB body, at most two processing jobs; busy requests are not queued.
+         *     Only static JPEG/PNG inputs are supported; WebP and animated formats are rejected.
+         */
+        put: operations["put_image"];
+        post?: never;
+        /** Idempotent for an existing, manageable vendor (including no image). */
+        delete: operations["delete_image"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vendors/{vendorId}/menu-items/upsert": {
         parameters: {
             query?: never;
@@ -763,6 +786,8 @@ export interface components {
         ApplyRequest: {
             /** @description The changes the user confirmed (possibly edited); anything not listed is ignored. */
             accepted: components["schemas"]["AcceptedChangeDto"][];
+            /** @description Omitted defaults to the currently available pending photo. False imports data only. */
+            savePhoto?: boolean | null;
         };
         ApplyResponse: {
             deliveryAddressIds?: string[];
@@ -953,6 +978,10 @@ export interface components {
             /** Format: int64 */
             unitPrice: number;
         };
+        /** Format: binary */
+        ImageBinary: string;
+        /** @enum {string} */
+        ImageContentType: "image/jpeg";
         /** @enum {string} */
         ImportModeDto: "deliveryAddress" | "roster" | "vendor";
         ImportRunDto: {
@@ -961,10 +990,13 @@ export interface components {
             /** @description Why the run failed (`status = failed`). */
             error?: string | null;
             finishedAt?: string | null;
+            /** @description True only while running/proposed with an unexpired pending JPEG. */
+            hasPendingPhoto: boolean;
             id: string;
             instruction?: string | null;
             mode?: components["schemas"]["ImportModeDto"] | null;
             model: string;
+            pendingPhotoExpiresAt: string | null;
             proposal: components["schemas"]["ProposalDto"];
             sharingGroupId?: string | null;
             status: components["schemas"]["ImportRunStatusDto"];
@@ -1372,6 +1404,8 @@ export interface components {
             instruction?: string | null;
             /** @enum {string} */
             mode: "deliveryAddress" | "roster" | "vendor";
+            /** @description Opt-in, default false. Only vendor mode; requires static JPEG/PNG. */
+            savePhoto?: boolean | null;
             sharingGroupId?: string | null;
             /** @description Existing roster to add the members to. */
             targetRosterId?: string | null;
@@ -1490,6 +1524,7 @@ export interface components {
             address?: string | null;
             canManage: boolean;
             id: string;
+            image: components["schemas"]["VendorImageDto"] | null;
             /** @description Sorted by `sortOrder`. */
             menuItems: components["schemas"]["MenuItemDto"][];
             name: string;
@@ -1497,6 +1532,22 @@ export interface components {
             phone?: string | null;
             sharingGroupId?: string | null;
             updatedAt: string;
+        };
+        VendorImageDto: {
+            contentType: components["schemas"]["ImageContentType"];
+            /** Format: int32 */
+            height: number;
+            /** @description Server-generated UUID, not an authorization token or conditional-write version. */
+            revision: string;
+            /** Format: int32 */
+            sizeBytes: number;
+            updatedAt: string;
+            /** Format: int32 */
+            width: number;
+        };
+        VendorImageForm: {
+            /** Format: binary */
+            image: string;
         };
         VendorInfoSnapshotDto: {
             address?: string | null;
@@ -1726,7 +1777,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Invalid changes (invalid_changes, with errors[]) */
+            /** @description Invalid changes (invalid_changes, with errors[]) or unavailable/ambiguous pending photo (invalid_save_photo, field savePhoto); nothing is committed */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -3660,6 +3711,207 @@ export interface operations {
             };
             /** @description Validation failed: invalid_<field>, duplicate_name, limit_exceeded or validation_failed */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    get_image: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendorId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": components["schemas"]["ImageBinary"];
+                };
+            };
+            /** @description unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description not_found (including no image) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description internal_error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    put_image: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendorId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["VendorImageForm"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VendorImageDto"];
+                };
+            };
+            /** @description invalid_multipart */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description bad_origin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description not_found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description image_too_large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description invalid_image */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description rate_limited; Retry-After */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description internal_error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    delete_image: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vendorId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description bad_origin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description not_found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description internal_error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

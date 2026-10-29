@@ -170,6 +170,7 @@ fn vargs(v: serde_json::Value) -> ProposeVendorArgs {
 }
 fn cmd() -> StartImportCmd {
     StartImportCmd {
+        pending_photo: None,
         sharing_group_id: None,
         image: ImageInput {
             bytes: vec![1, 2, 3],
@@ -912,7 +913,10 @@ impl ImportAgent for Sleeper {
 async fn agent_timeout_fails_the_run() {
     let e = env().await;
     let svc = e.service(Arc::new(Sleeper), 10);
-    let err = svc.start(e.org, cmd()).await.unwrap_err();
+    let mut command = cmd();
+    command.mode = ImportMode::Vendor;
+    command.pending_photo = Some(pending_photo());
+    let err = svc.start(e.org, command).await.unwrap_err();
     assert!(matches!(
         err,
         AiImportError::Agent {
@@ -921,6 +925,7 @@ async fn agent_timeout_fails_the_run() {
         }
     ));
     assert_eq!(e.run_status(e.org).await, ["failed"]);
+    assert_eq!(photo_count(&e).await, 0);
 }
 
 // ===========================================================================
@@ -974,6 +979,7 @@ async fn shared_import_is_actor_and_scope_bound_and_rechecks_admin_on_apply() {
                 e.org,
                 run.id,
                 ApplyCmd {
+                    save_photo: None,
                     accepted: vec![acc_roster(
                         TargetRef::Existing {
                             existing_id: target
@@ -992,6 +998,7 @@ async fn shared_import_is_actor_and_scope_bound_and_rechecks_admin_on_apply() {
             e.org,
             run.id,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![
                     acc_roster(
                         TargetRef::New {
@@ -1058,7 +1065,11 @@ async fn shared_import_is_actor_and_scope_bound_and_rechecks_admin_on_apply() {
     bypass.sharing_group_id = Some(g.id);
     assert!(
         e.runs
-            .apply(&in_memory, vec![ImportApplyStep::CreateRoster(bypass)])
+            .apply(
+                &in_memory,
+                vec![ImportApplyStep::CreateRoster(bypass)],
+                None
+            )
             .await
             .is_err(),
         "transaction rechecks even an already-prepared apply"
@@ -1211,6 +1222,7 @@ async fn shared_vendor_import_targets_and_same_name_matching_stay_in_draft_scope
                     e.org,
                     run.id,
                     ApplyCmd {
+                        save_photo: None,
                         accepted: vec![acc_vendor(
                             TargetRef::Existing {
                                 existing_id: vendor.id()
@@ -1245,6 +1257,7 @@ async fn shared_vendor_import_targets_and_same_name_matching_stay_in_draft_scope
                 e.org,
                 run.id,
                 ApplyCmd {
+                    save_photo: None,
                     accepted: vec![acc_vendor(
                         TargetRef::New {
                             name: " cafe ".into(),
@@ -1289,6 +1302,7 @@ async fn shared_vendor_import_targets_and_same_name_matching_stay_in_draft_scope
             e.org,
             run.id,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![acc_vendor(
                     TargetRef::New {
                         name: "Cafe".into(),
@@ -1347,6 +1361,7 @@ async fn shared_draft_cannot_create_private_address_or_touch_another_scope_in_tr
             e.org,
             run.id,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![AcceptedChange::DeliveryAddress(
                     application::ai_import::AcceptedDeliveryAddress {
                         name: "Home".into(),
@@ -1372,7 +1387,8 @@ async fn shared_draft_cannot_create_private_address_or_touch_another_scope_in_tr
                 vec![
                     ImportApplyStep::CreateRoster(preceding),
                     ImportApplyStep::CreateDeliveryAddress(address),
-                ]
+                ],
+                None
             )
             .await,
         Err(application::ports::RepoError::NotFound)
@@ -1397,7 +1413,8 @@ async fn shared_draft_cannot_create_private_address_or_touch_another_scope_in_tr
                         r.rename("Hacked")?;
                         Ok(None)
                     })
-                }]
+                }],
+                None
             )
             .await
             .is_err()
@@ -1461,6 +1478,467 @@ fn info(name: &str, phone: Option<&str>, address: Option<&str>) -> Option<Accept
     })
 }
 
+fn pending_photo() -> application::ports::NormalizedVendorImage {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(3, 2)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    crate::vendor_image::normalize(bytes.get_ref()).unwrap()
+}
+
+async fn photo_run(e: &Env) -> domain::ai_import::ImportRun {
+    use application::ports::ImportRunRepo;
+    let mut run = domain::ai_import::ImportRun::start(
+        e.org,
+        ImportMode::Vendor,
+        None,
+        None,
+        None,
+        "m".into(),
+        SystemTime::now(),
+    );
+    e.runs.create(&run, Some(pending_photo())).await.unwrap();
+    run.propose(
+        Default::default(),
+        "s".into(),
+        Usage::default(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    e.runs.save(&run, ImportRunStatus::Running).await.unwrap();
+    e.runs.find(e.org, run.id).await.unwrap().unwrap()
+}
+
+async fn photo_count(e: &Env) -> i64 {
+    sqlx::query_as::<_, (i64,)>("SELECT count(*) FROM ai_import_photos")
+        .fetch_one(&e.db.read)
+        .await
+        .unwrap()
+        .0
+}
+
+struct PhotoAgent(Vec<u8>);
+#[async_trait]
+impl ImportAgent for PhotoAgent {
+    async fn run(
+        &self,
+        ctx: Arc<ImportToolContext>,
+        input: AgentInput,
+    ) -> Result<AgentOutcome, AiError> {
+        assert_eq!(input.image.bytes, self.0);
+        assert_eq!(input.image.media_type, "image/jpeg");
+        tools::propose_vendor(&ctx, vargs(json!({"target":"new","info":{"name":"Photo shop"},"menuItems":[{"name":"Rice","price":60,"confidence":"high"}]}))).await.unwrap();
+        Ok(AgentOutcome {
+            summary: "s".into(),
+            model: "m".into(),
+            usage: Usage::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn pending_photo_service_normalized_input_unique_target_scope_and_clock() {
+    use application::ports::ImportRunRepo;
+    use application::sharing::SharingRepo;
+    struct Fixed(SystemTime);
+    impl application::ports::Clock for Fixed {
+        fn now(&self) -> SystemTime {
+            self.0
+        }
+    }
+    let e = env().await;
+    let groups = crate::sharing_repo::SqliteSharingRepo::new(e.db.clone());
+    let group = groups.create(e.org, "Photos").await.unwrap();
+    let mut svc = e.service(Arc::new(PhotoAgent(pending_photo().data)), 100);
+    let mut command = cmd();
+    command.mode = ImportMode::Vendor;
+    command.sharing_group_id = Some(group.id);
+    command.pending_photo = Some(pending_photo());
+    let accepted = || {
+        vec![acc_vendor(
+            TargetRef::New {
+                name: "Photo shop".into(),
+            },
+            info("Photo shop", None, None),
+            &[("Rice", Some(60))],
+        )]
+    };
+    let run = svc.start(e.org, command.clone()).await.unwrap();
+    let expiry = run.pending_photo_expires_at.unwrap();
+    svc.clock = Arc::new(Fixed(expiry));
+    assert!(
+        svc.get(e.org, run.id)
+            .await
+            .unwrap()
+            .pending_photo_expires_at
+            .is_none()
+    );
+    assert!(
+        svc.apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: accepted(),
+                save_photo: Some(true)
+            }
+        )
+        .await
+        .is_err()
+    );
+    svc.clock = Arc::new(SystemClock);
+    let mut multiple = run.clone();
+    multiple
+        .proposal
+        .targets
+        .push(multiple.proposal.targets[0].clone());
+    e.runs
+        .save(&multiple, ImportRunStatus::Proposed)
+        .await
+        .unwrap();
+    assert!(
+        svc.apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: accepted(),
+                save_photo: Some(true)
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        svc.apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: vec![],
+                save_photo: Some(true)
+            }
+        )
+        .await
+        .is_err()
+    );
+    e.runs.save(&run, ImportRunStatus::Proposed).await.unwrap();
+    let result = svc
+        .apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: accepted(),
+                save_photo: None,
+            },
+        )
+        .await
+        .unwrap();
+    let id = result.vendor_ids[0];
+    let first = e
+        .vendors
+        .find(e.org, id)
+        .await
+        .unwrap()
+        .unwrap()
+        .value
+        .image
+        .unwrap();
+    assert_eq!(photo_count(&e).await, 0);
+    // Scoped same-name resolution replaces exactly that vendor's photo.
+    let run = svc.start(e.org, command.clone()).await.unwrap();
+    let result = svc
+        .apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: accepted(),
+                save_photo: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.vendor_ids, [id]);
+    assert_ne!(
+        e.vendors
+            .find(e.org, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .image
+            .unwrap()
+            .revision,
+        first.revision
+    );
+    // Revocation after proposal prevents any photo/menu/state mutation.
+    let run = svc.start(e.org, command).await.unwrap();
+    groups.add(e.org, group.id, e.other, "admin").await.unwrap();
+    groups.change(e.other, group.id, e.org, None).await.unwrap();
+    assert!(matches!(
+        svc.apply(
+            e.org,
+            run.id,
+            ApplyCmd {
+                accepted: accepted(),
+                save_photo: Some(true)
+            }
+        )
+        .await,
+        Err(AiImportError::NotFound)
+    ));
+    assert_eq!(photo_count(&e).await, 1);
+    let stored = e.runs.find(e.org, run.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, ImportRunStatus::Proposed);
+    // Another connection sees the durable proposal and metadata, without BLOB loading.
+    let reopened = Db::connect_path(&e._dir.path().join("test.db"))
+        .await
+        .unwrap();
+    assert_eq!(
+        SqliteImportRunRepo::new(reopened)
+            .find(e.org, run.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        stored
+    );
+}
+
+#[tokio::test]
+async fn pending_photo_atomic_rollback_replace_and_double_cas() {
+    use application::ports::{ImportApplyRepo, ImportApplyStep, ImportRunRepo};
+    let e = env().await;
+    let id = e.vendor(e.org, "Existing", None, &[("Old", 50)]).await;
+    let old = e
+        .vendors
+        .put_image(e.org, id, pending_photo(), SystemTime::now())
+        .await
+        .unwrap();
+    let mut run = photo_run(&e).await;
+    run.apply(SystemTime::now()).unwrap();
+    sqlx::query("CREATE TRIGGER reject_photo BEFORE UPDATE ON vendor_images BEGIN SELECT RAISE(ABORT, 'test'); END").execute(&e.db.write).await.unwrap();
+    let steps = || {
+        vec![ImportApplyStep::ModifyVendor {
+            id,
+            mutation: Box::new(|v| {
+                v.upsert_menu_items(vec![MenuItemInput {
+                    name: "New".into(),
+                    price: 80,
+                    description: None,
+                    category: None,
+                }])
+                .map(Some)
+            }),
+        }]
+    };
+    assert!(e.runs.apply(&run, steps(), Some(id)).await.is_err());
+    assert_eq!(
+        e.runs.find(e.org, run.id).await.unwrap().unwrap().status,
+        ImportRunStatus::Proposed
+    );
+    assert_eq!(photo_count(&e).await, 1);
+    let vendor = e.vendors.find(e.org, id).await.unwrap().unwrap().value;
+    assert_eq!(vendor.menu().len(), 1);
+    assert_eq!(vendor.image.as_ref().unwrap().revision, old.revision);
+    sqlx::query("DROP TRIGGER reject_photo")
+        .execute(&e.db.write)
+        .await
+        .unwrap();
+    let (a, b) = tokio::join!(
+        e.runs.apply(&run, steps(), Some(id)),
+        e.runs.apply(&run, steps(), Some(id))
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    assert_eq!(photo_count(&e).await, 0);
+    let vendor = e.vendors.find(e.org, id).await.unwrap().unwrap().value;
+    assert_eq!(vendor.menu().len(), 2);
+    assert_ne!(vendor.image.as_ref().unwrap().revision, old.revision);
+}
+
+#[tokio::test]
+async fn pending_photo_expiry_rolls_back_create_but_opt_out_succeeds() {
+    use application::ports::{ImportApplyRepo, ImportApplyStep, ImportRunRepo};
+    let e = env().await;
+    let mut run = photo_run(&e).await;
+    let expiry = run.created_at + Duration::from_secs(86400);
+    assert_eq!(
+        run.pending_photo_expires_at,
+        Some(crate::timefmt::from_text(&crate::timefmt::to_text(expiry)).unwrap())
+    );
+    run.apply(expiry).unwrap();
+    let vendor = Vendor::new(e.org, "New vendor").unwrap();
+    let id = vendor.id();
+    assert!(matches!(
+        e.runs
+            .apply(
+                &run,
+                vec![ImportApplyStep::CreateVendor(vendor.clone())],
+                Some(id)
+            )
+            .await,
+        Err(application::ports::RepoError::Domain(
+            domain::shared::DomainError::Invalid {
+                field: "savePhoto",
+                ..
+            }
+        ))
+    ));
+    assert!(e.vendors.find(e.org, id).await.unwrap().is_none());
+    assert_eq!(
+        e.runs.find(e.org, run.id).await.unwrap().unwrap().status,
+        ImportRunStatus::Proposed
+    );
+    assert_eq!(photo_count(&e).await, 1);
+    e.runs
+        .apply(&run, vec![ImportApplyStep::CreateVendor(vendor)], None)
+        .await
+        .unwrap();
+    assert_eq!(photo_count(&e).await, 0);
+    assert!(
+        e.vendors
+            .find(e.org, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .image
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn pending_photo_discard_failed_cas_and_maintenance_cleanup() {
+    use application::MaintenanceRepo;
+    use application::ports::ImportRunRepo;
+    let e = env().await;
+    let mut discard = photo_run(&e).await;
+    discard.discard().unwrap();
+    // A failed CAS must not clear a still-retryable photo.
+    assert!(
+        e.runs
+            .save(&discard, ImportRunStatus::Running)
+            .await
+            .is_err()
+    );
+    assert_eq!(photo_count(&e).await, 1);
+    e.runs
+        .save(&discard, ImportRunStatus::Proposed)
+        .await
+        .unwrap();
+    assert_eq!(photo_count(&e).await, 0);
+    let mut failed = domain::ai_import::ImportRun::start(
+        e.org,
+        ImportMode::Vendor,
+        None,
+        None,
+        None,
+        "m".into(),
+        SystemTime::now(),
+    );
+    e.runs.create(&failed, Some(pending_photo())).await.unwrap();
+    failed
+        .fail("test".into(), Usage::default(), SystemTime::now())
+        .unwrap();
+    e.runs
+        .save(&failed, ImportRunStatus::Running)
+        .await
+        .unwrap();
+    assert_eq!(photo_count(&e).await, 0);
+    let live = photo_run(&e).await;
+    let expired = photo_run(&e).await;
+    sqlx::query("UPDATE ai_import_photos SET expires_at=? WHERE run_id=?")
+        .bind(crate::timefmt::to_text(SystemTime::UNIX_EPOCH))
+        .bind(expired.id.to_string())
+        .execute(&e.db.write)
+        .await
+        .unwrap();
+    let stuck = domain::ai_import::ImportRun::start(
+        e.org,
+        ImportMode::Vendor,
+        None,
+        None,
+        None,
+        "m".into(),
+        SystemTime::UNIX_EPOCH,
+    );
+    e.runs.create(&stuck, Some(pending_photo())).await.unwrap();
+    let terminal = photo_run(&e).await;
+    sqlx::query("UPDATE ai_import_runs SET status='discarded' WHERE id=?")
+        .bind(terminal.id.to_string())
+        .execute(&e.db.write)
+        .await
+        .unwrap();
+    let vendor_id = e.vendor(e.org, "Retained", None, &[]).await;
+    let saved = e
+        .vendors
+        .put_image(e.org, vendor_id, pending_photo(), SystemTime::now())
+        .await
+        .unwrap();
+    let maintenance = crate::maintenance_repo::SqliteMaintenanceRepo::new(e.db.clone());
+    assert_eq!(
+        maintenance
+            .fail_stuck_import_runs(
+                SystemTime::now() - Duration::from_secs(600),
+                SystemTime::now()
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(photo_count(&e).await, 1);
+    assert_eq!(
+        e.vendors
+            .find(e.org, vendor_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+            .image
+            .unwrap(),
+        saved
+    );
+    assert!(
+        e.runs
+            .find(e.org, live.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .pending_photo_expires_at
+            .is_some()
+    );
+    sqlx::query("DELETE FROM ai_import_runs WHERE id=?")
+        .bind(live.id.to_string())
+        .execute(&e.db.write)
+        .await
+        .unwrap();
+    assert_eq!(photo_count(&e).await, 0);
+}
+
+#[tokio::test]
+async fn pending_photo_apply_discard_race_has_one_winner() {
+    use application::ports::{ImportApplyRepo, ImportApplyStep, ImportRunRepo};
+    let e = env().await;
+    let run = photo_run(&e).await;
+    let mut applied = run.clone();
+    applied.apply(SystemTime::now()).unwrap();
+    let mut discarded = run;
+    discarded.discard().unwrap();
+    let vendor = Vendor::new(e.org, "Race").unwrap();
+    let id = vendor.id();
+    let (apply, discard) = tokio::join!(
+        e.runs.apply(
+            &applied,
+            vec![ImportApplyStep::CreateVendor(vendor)],
+            Some(id)
+        ),
+        e.runs.save(&discarded, ImportRunStatus::Proposed)
+    );
+    assert_ne!(apply.is_ok(), discard.is_ok());
+    assert_eq!(photo_count(&e).await, 0);
+    let vendor = e.vendors.find(e.org, id).await.unwrap();
+    assert_eq!(vendor.is_some(), apply.is_ok());
+    if let Some(vendor) = vendor {
+        assert!(vendor.value.image.is_some());
+    }
+}
+
 async fn proposed_run(e: &Env, svc: &AiImportService) -> domain::ai_import::ImportRunId {
     let _ = e;
     svc.start(e.org, cmd()).await.unwrap().id
@@ -1479,6 +1957,7 @@ async fn apply_roster_writes_only_the_accepted_subset() {
             e.org,
             run,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![acc_roster(
                     TargetRef::Existing { existing_id: id },
                     // proposal might have had more; the user accepted these (one edited)
@@ -1518,6 +1997,7 @@ async fn apply_roster_writes_only_the_accepted_subset() {
             e.org,
             run.id,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![acc_roster(
                     TargetRef::Existing { existing_id: id },
                     &[("Zed", None)],
@@ -1561,6 +2041,7 @@ async fn apply_vendor_and_new_targets_in_one_transaction() {
             e.org,
             run,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![
                     acc_vendor(
                         TargetRef::Existing { existing_id: vid },
@@ -1632,6 +2113,7 @@ async fn apply_new_vendor_whose_name_now_exists_updates_it() {
             e.org,
             run,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![acc_vendor(
                     TargetRef::New { name: "x".into() },
                     info("好吃便當 ", None, None),
@@ -1659,6 +2141,7 @@ async fn invalid_edited_values_give_422_list_and_write_nothing() {
             e.org,
             run,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![
                     acc_roster(
                         TargetRef::Existing { existing_id: rid },
@@ -1728,6 +2211,7 @@ async fn failure_in_a_later_step_rolls_back_earlier_steps_and_the_run() {
             e.org,
             run,
             ApplyCmd {
+                save_photo: None,
                 accepted: vec![
                     acc_roster(
                         TargetRef::New {
@@ -1762,6 +2246,7 @@ async fn failure_in_a_later_step_rolls_back_earlier_steps_and_the_run() {
         e.org,
         run,
         ApplyCmd {
+            save_photo: None,
             accepted: vec![acc_roster(TargetRef::New { name: "ok".into() }, &[])],
         },
     )

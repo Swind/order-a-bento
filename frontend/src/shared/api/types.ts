@@ -14,6 +14,7 @@ export type MemberInput = S["MemberInputDto"];
 export type MemberUpsertReport = S["MemberUpsertReport"];
 export type VendorSummary = S["VendorSummaryDto"];
 export type VendorDetail = S["VendorDetail"];
+export type VendorImage = S["VendorImageDto"];
 export type MenuItem = S["MenuItemDto"];
 export type MenuItemInput = S["MenuItemInputDto"];
 export type ItemUpsertReport = S["ItemUpsertReport"];

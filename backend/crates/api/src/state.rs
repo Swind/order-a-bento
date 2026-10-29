@@ -94,6 +94,8 @@ pub struct AppState {
     pub ai_demo: bool,
     /// Per-organizer limiter for starting AI imports (3 per minute).
     pub ai_limiter: Arc<KeyedLimiter<String>>,
+    pub image_limiter: Arc<KeyedLimiter<String>>,
+    pub image_processing: Arc<tokio::sync::Semaphore>,
 }
 
 /// Burst and refill of the per-organizer AI import limiter: 3 requests per minute.
@@ -130,6 +132,8 @@ impl AppState {
             ai_import: None,
             ai_demo: false,
             ai_limiter: Arc::new(KeyedLimiter::new(AI_IMPORT_RATE)),
+            image_limiter: Arc::new(KeyedLimiter::new(AI_IMPORT_RATE)),
+            image_processing: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 

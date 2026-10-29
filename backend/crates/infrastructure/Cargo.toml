@@ -5,6 +5,10 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+image.workspace = true
+zune-core = "=0.5.3"
+zune-jpeg = "=0.5.15"
+crc32fast = "1"
 argon2.workspace = true
 async-trait.workspace = true
 base64.workspace = true

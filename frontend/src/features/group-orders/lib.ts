@@ -66,7 +66,8 @@ export function buildConfirmationText(input: {
   vendorName: string;
   participants: ParticipantRow[];
 }): string {
-  const { ordered, notOrdered } = splitParticipants(input.participants);
+  const { ordered } = splitParticipants(input.participants);
+  if (ordered.length === 0) return "";
   return [
     `【${input.title}】訂餐確認`,
     `店家：${input.vendorName}`,
@@ -74,7 +75,6 @@ export function buildConfirmationText(input: {
     ...ordered.map((p) => `${p.name}：${p.items.map(itemText).join("、")}${p.orderNote ? `（訂單備註：${p.orderNote}）` : ""}`),
     "",
     `已訂 ${ordered.length} 人，共 ${ordered.reduce((sum, p) => sum + p.items.reduce((n, i) => n + i.quantity, 0), 0)} 個`,
-    ...(notOrdered.length ? [`未訂餐：${notOrdered.map((p) => p.name).join("、")}`] : []),
     "",
     "請大家確認自己的餐點與數量是否正確，謝謝！",
   ].join("\n");

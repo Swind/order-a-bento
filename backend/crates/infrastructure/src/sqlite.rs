@@ -115,6 +115,59 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn vendor_image_migration_preserves_v6_data_and_enforces_constraints() {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("before-images.db"))
+            .await
+            .unwrap();
+        MIGRATOR.run_to(6, &db.write).await.unwrap();
+        sqlx::raw_sql("INSERT INTO organizers(id,oidc_issuer,oidc_sub,email,display_name,created_at,last_login_at) VALUES('o','issuer','sub','a@b.test','A','t','t');
+            INSERT INTO sharing_groups(id,name,created_by,created_at) VALUES('team','Team','o','t');
+            INSERT INTO sharing_group_members(sharing_group_id,organizer_id,role) VALUES('team','o','admin');
+            INSERT INTO vendors(id,organizer_id,name,name_key,note,created_at,updated_at) VALUES('v','o','Lunch','lunch','keep','t','t');
+            INSERT INTO menu_items(id,vendor_id,name,name_key,price,updated_at) VALUES('m','v','Rice','rice',100,'t');
+            INSERT INTO group_orders(id,organizer_id,title,share_token,status,vendor_name,source_vendor_id,created_at) VALUES('g','o','Order','token','open','Lunch','v','t');
+            INSERT INTO participants(id,group_order_id,name) VALUES('p','g','Person');
+            INSERT INTO offered_items(id,group_order_id,name,price) VALUES('i','g','Rice',100);
+            INSERT INTO order_submissions(id,group_order_id,participant_id,idempotency_key,submitted_by,submitted_at) VALUES('s','g','p','once','participant','t');
+            INSERT INTO submission_lines(submission_id,line_no,offered_item_id,quantity,unit_price) VALUES('s',0,'i',1,100);")
+            .execute(&db.write).await.unwrap();
+        db.migrate().await.unwrap();
+        let (note, price, title, quantity, images): (String, i64, String, i64, i64) = sqlx::query_as("SELECT v.note,m.price,g.title,l.quantity,(SELECT count(*) FROM vendor_images) FROM vendors v JOIN menu_items m ON m.vendor_id=v.id JOIN group_orders g ON g.source_vendor_id=v.id JOIN submission_lines l ON l.offered_item_id='i'")
+            .fetch_one(&db.read).await.unwrap();
+        assert_eq!(
+            (note, price, title, quantity, images),
+            ("keep".into(), 100, "Order".into(), 1, 0)
+        );
+        let (role,): (String,) = sqlx::query_as("SELECT role FROM sharing_group_members WHERE sharing_group_id='team' AND organizer_id='o'").fetch_one(&db.read).await.unwrap();
+        assert_eq!(role, "admin");
+        for (vendor, content_type, data, width) in [
+            ("missing", "image/jpeg", vec![1], 1),
+            ("v", "image/png", vec![1], 1),
+            ("v", "image/jpeg", vec![], 1),
+            ("v", "image/jpeg", vec![1], 1569),
+        ] {
+            assert!(sqlx::query("INSERT INTO vendor_images(vendor_id,revision,content_type,data,width,height,updated_at) VALUES(?,'r',?,?,?,1,'t')")
+                .bind(vendor).bind(content_type).bind(data).bind(width).execute(&db.write).await.is_err());
+        }
+        sqlx::query("INSERT INTO vendor_images(vendor_id,revision,content_type,data,width,height,updated_at) VALUES('v','r','image/jpeg',?,1,1,'t')").bind(vec![1u8]).execute(&db.write).await.unwrap();
+        sqlx::query("DELETE FROM vendors WHERE id='v'")
+            .execute(&db.write)
+            .await
+            .unwrap();
+        let (images,): (i64,) = sqlx::query_as("SELECT count(*) FROM vendor_images")
+            .fetch_one(&db.read)
+            .await
+            .unwrap();
+        assert_eq!(images, 0);
+        let (orders,): (i64,) = sqlx::query_as("SELECT count(*) FROM group_orders")
+            .fetch_one(&db.read)
+            .await
+            .unwrap();
+        assert_eq!(orders, 1);
+    }
+
+    #[tokio::test]
     async fn delivery_address_migration_preserves_import_runs() {
         let dir = TempDir::new().unwrap();
         let db = Db::connect_path(&dir.path().join("before-addresses.db"))
