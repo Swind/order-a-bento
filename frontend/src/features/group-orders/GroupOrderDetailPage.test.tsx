@@ -48,6 +48,25 @@ beforeEach(() => {
 });
 
 describe("GroupOrderDetailPage header", () => {
+  it("keeps complete long metadata, multiline notes and a single visible deadline outside settings", async () => {
+    group = {
+      ...GROUP,
+      title: "完整長標題".repeat(12),
+      sharingGroupId: "s1",
+      sharingGroupName: "長群組名稱".repeat(16),
+      deliveryAddress: "長送餐地址".repeat(24),
+      note: "第一行備註\n第二行備註",
+    };
+    renderApp("/group-orders/g1");
+    expect(await screen.findByRole("heading", { level: 1, name: group.title })).toBeVisible();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByText(`共用群組：${group.sharingGroupName}`)).toBeVisible();
+    expect(screen.getByText(`送餐地址：${group.deliveryAddress}`)).toBeVisible();
+    expect(screen.getByText("第一行備註 第二行備註").textContent).toBe(group.note);
+    expect(screen.getByText(/02-1234-5678/)).toBeVisible();
+    expect(screen.getAllByText("未設定截止時間").filter((element) => !element.closest("details"))).toHaveLength(1);
+  });
+
   it.each([
     { status: "open", deadlineAt: null, collapsed: false },
     { status: "open", deadlineAt: "2000-01-01T00:00:00Z", collapsed: true },
@@ -76,6 +95,35 @@ describe("GroupOrderDetailPage header", () => {
     await waitFor(() => expect(screen.queryByText("分享與訂購連結")).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "複製連結" })).toBeVisible();
     expect(router.state.location.search).toBe("?tab=checklist");
+  });
+  it("moves sharing below content when the deadline passes without changing the URL tab", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-29T04:00:00Z"));
+      group = { ...GROUP, deadlineAt: "2026-10-29T04:00:20Z" };
+      const { router } = renderApp("/group-orders/g1?tab=details&source=shared");
+      expect(await screen.findByRole("button", { name: "複製連結" })).toBeVisible();
+      expect(screen.queryByText("分享與訂購連結")).not.toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      const fold = screen.getByText("分享與訂購連結");
+      expect(fold.closest("details")).not.toHaveAttribute("open");
+      expect(screen.getByRole("tabpanel").compareDocumentPosition(fold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(router.state.location.search).toBe("?tab=details&source=shared");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("keeps sharing below content when reopened with an expired deadline and preserves other URL parameters", async () => {
+    group = { ...GROUP, status: "closed", deadlineAt: "2000-01-01T00:00:00Z" };
+    const { queryClient, router } = renderApp("/group-orders/g1?tab=details&source=shared");
+    await screen.findByText("分享與訂購連結");
+    group = { ...group, status: "open" };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["group-order", "g1"], exact: true }));
+    expect(screen.getByText("分享與訂購連結").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "複製連結" })).not.toBeVisible();
+    expect(router.state.location.search).toBe("?tab=details&source=shared");
+    await userEvent.click(screen.getByRole("tab", { name: "統計" }));
+    expect(router.state.location.search).toBe("?tab=stats&source=shared");
   });
   it.each([
     { status: "open", canManage: false },
@@ -135,7 +183,7 @@ describe("GroupOrderDetailPage header", () => {
     server.use(http.get("*/api/v1/group-orders/g1/participants/p2/submissions", () => HttpResponse.json([])));
     const { queryClient } = renderApp(source === "summary" ? "/group-orders/g1" : "/group-orders/g1?tab=details");
     if (source === "summary") {
-      await screen.findByText("共 11 個 · $1,140");
+      await screen.findByText("11 份");
     } else {
       await userEvent.click(await screen.findByRole("button", { name: /陳美麗/ }));
       await screen.findByText("尚無送出紀錄");
@@ -164,9 +212,12 @@ describe("GroupOrderDetailPage header", () => {
     renderApp("/group-orders/g1");
     await screen.findByText("更多操作");
     expect(screen.getByRole("button", { name: "重新產生連結" })).not.toBeVisible();
-    expect(screen.getByRole("textbox", { name: "分享連結" })).not.toBeVisible();
+     expect(screen.getByRole("textbox", { name: "分享連結" })).not.toBeVisible();
+     expect(screen.getByRole("link", { name: "開啟訂購頁" })).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "複製連結" }));
-    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "分享連結" });
+     const input = screen.getByRole<HTMLInputElement>("textbox", { name: "分享連結" });
+     expect(input.closest("details")).toHaveAttribute("open");
+     expect(screen.getByRole("link", { name: "開啟訂購頁" })).toBeVisible();
     expect(input).toHaveFocus();
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe(input.value.length);
@@ -190,7 +241,9 @@ describe("GroupOrderDetailPage header", () => {
     expect(screen.queryByRole("button", { name: "關閉收單" })).not.toBeInTheDocument();
   });
 
-  it("rotating the link (after confirm) shows the new URL", async () => {
+   it("rotating the link (after confirm) shows the new URL", async () => {
+     const user = userEvent.setup();
+     const writeText = vi.spyOn(navigator.clipboard, "writeText");
     server.use(
       http.post("*/api/v1/group-orders/g1/share-token/rotate", () =>
         HttpResponse.json({ ...group, shareUrl: "https://x.test/g/new" }),
@@ -201,7 +254,16 @@ describe("GroupOrderDetailPage header", () => {
     await userEvent.click(await screen.findByRole("button", { name: "重新產生連結" }));
     expect(screen.getByText(/舊的分享連結會立即失效/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "確定重新產生連結" }));
-    expect(await screen.findByDisplayValue("https://x.test/g/new")).toBeInTheDocument();
+     expect(await screen.findByDisplayValue("https://x.test/g/new")).toBeInTheDocument();
+     await user.click(screen.getByRole("button", { name: "複製連結" }));
+     expect(writeText).toHaveBeenCalledWith("https://x.test/g/new");
+     expect(await screen.findByText("已複製連結")).toBeInTheDocument();
+     await user.click(screen.getByText("連結與其他操作"));
+     expect(screen.getByRole("link", { name: "開啟訂購頁" })).toHaveAttribute("href", "https://x.test/g/new");
+     const line = screen.getByRole("link", { name: "分享到 LINE" });
+     expect(line).toHaveAttribute("href", expect.stringContaining(encodeURIComponent("https://x.test/g/new")));
+     expect(line).toHaveAttribute("target", "_blank");
+     expect(line).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("archived group is read-only", async () => {
@@ -219,10 +281,39 @@ describe("GroupOrderDetailPage header", () => {
 });
 
 describe("StatsTab", () => {
+  it("does not show zero totals while loading, hides failed cached totals and retries", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    server.use(http.get("*/api/v1/group-orders/g1/summary", async () => {
+      await pending;
+      return HttpResponse.json({ ...SUMMARY, totalAmount: 2000000 });
+    }));
+    const { queryClient } = renderApp("/group-orders/g1");
+    await screen.findByRole("heading", { name: GROUP.title });
+    expect(screen.queryByLabelText("訂單統計摘要")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByText("$2,000,000")).toBeInTheDocument();
+    server.use(http.get("*/api/v1/group-orders/g1/summary", () => problem(500, "internal_error")));
+    await act(() => queryClient.refetchQueries({ queryKey: ["group-order", "g1", "summary"], exact: true }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByLabelText("訂單統計摘要")).not.toBeInTheDocument();
+    expect(screen.queryByText("$2,000,000")).not.toBeInTheDocument();
+    server.use(http.get("*/api/v1/group-orders/g1/summary", () => HttpResponse.json(SUMMARY)));
+    await userEvent.click(screen.getByRole("button", { name: "重試" }));
+    expect(await screen.findByText("$1,140")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows totals and per-item rows", async () => {
     renderApp("/group-orders/g1");
-    expect(await screen.findByText("共 11 個 · $1,140")).toBeInTheDocument();
-    expect(screen.getByText("已訂 2 / 未訂 1")).toBeInTheDocument();
+    const summary = await screen.findByLabelText("訂單統計摘要");
+    expect(summary.tagName).toBe("DL");
+    expect(within(summary).getAllByRole("term").map((term) => term.textContent)).toEqual(["已訂人數", "總份數", "總金額"]);
+    expect(within(summary).getByText("2 人")).toBeInTheDocument();
+    expect(within(summary).getByText("未訂 1 人")).toBeInTheDocument();
+    expect(within(summary).getByText("11 份")).toBeInTheDocument();
+    expect(within(summary).getByText("$1,140")).toBeInTheDocument();
     expect(screen.getByText("$100 × 7")).toBeInTheDocument();
     expect(
       within(screen.getByRole("list", { name: "品項統計" })).queryByText("素食"),
@@ -268,6 +359,10 @@ describe("StatsTab", () => {
     );
     renderApp("/group-orders/g1");
     expect(await screen.findByText("還沒有人下單")).toBeInTheDocument();
+    const summary = screen.getByLabelText("訂單統計摘要");
+    for (const value of ["0 人", "未訂 3 人", "0 份", "$0"]) {
+      expect(within(summary).getByText(value)).toBeInTheDocument();
+    }
     expect(screen.getByText(/把訂購頁連結分享給大家/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "複製訂單文字" })).not.toBeInTheDocument();
   });
@@ -282,7 +377,7 @@ describe("StatsTab", () => {
     );
     renderApp("/group-orders/g1");
     await userEvent.click(await screen.findByRole("switch", { name: "排骨飯 售完" }));
-    await screen.findByText("共 11 個 · $1,140");
+    await screen.findByText("11 份");
     expect(body).toEqual({ soldOut: true });
   });
 

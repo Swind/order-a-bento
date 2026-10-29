@@ -22,7 +22,8 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
   await expect(page.getByRole("region", { name: "開團選擇摘要" })).toContainText("開團歸屬：個人");
   await page.getByRole("button", { name: "開團", exact: true }).click();
   await expect(page).toHaveURL(/group-orders\/[0-9a-f-]+$/);
-  const shareUrl = await page.locator("input[readonly]").first().inputValue();
+  await page.getByText("連結與其他操作", { exact: true }).click();
+  const shareUrl = await page.getByLabel("分享連結", { exact: true }).inputValue();
   expect(shareUrl).toMatch(/\/g\/[A-Za-z0-9_-]{43}$/);
   await expectNoHorizontalOverflow(page);
 
@@ -92,9 +93,10 @@ test("wizard, participant ordering, impersonation, cancel", async ({ page, brows
 
   // A cancels
   await a.getByRole("button", { name: /取消我的訂單/ }).click();
-  const confirm = a.getByRole("alertdialog", { name: "確認取消訂單" });
+  const confirm = a.getByRole("dialog", { name: "確認取消訂單" });
   await expect(confirm).toBeVisible();
-  await confirm.getByRole("button").first().click();
+  await expect(confirm.getByRole("button", { name: "保留", exact: true })).toBeFocused();
+  await confirm.getByRole("button", { name: "確定取消", exact: true }).click();
   await expect(confirm).toBeHidden();
 
   await expect

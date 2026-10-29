@@ -51,10 +51,21 @@ export function StatsTab({ group }: { group: GroupOrderDetail }) {
     }
   }
 
-  const totals = <div className="space-y-1 rounded-xl bg-muted p-4">
-    <p className="text-base font-semibold tabular-nums">共 {s.totalQuantity} 個 · {formatMoney(s.totalAmount)}</p>
-    <p className="text-sm text-muted-foreground">已訂 {s.participants.ordered} / 未訂 {s.participants.notOrdered}</p>
-  </div>;
+  const totals = <dl aria-label="訂單統計摘要" className="grid grid-cols-2 gap-3 rounded-xl bg-muted p-4 sm:grid-cols-3">
+    <div className="min-w-0">
+      <dt className="text-sm text-muted-foreground">已訂人數</dt>
+      <dd className="break-words text-xl font-semibold tabular-nums">{s.participants.ordered} 人</dd>
+      <dd className="text-sm text-muted-foreground">未訂 {s.participants.notOrdered} 人</dd>
+    </div>
+    <div className="min-w-0">
+      <dt className="text-sm text-muted-foreground">總份數</dt>
+      <dd className="break-words text-xl font-semibold tabular-nums">{s.totalQuantity} 份</dd>
+    </div>
+    <div className="col-span-2 min-w-0 sm:col-span-1">
+      <dt className="text-sm text-muted-foreground">總金額</dt>
+      <dd className="break-words text-2xl font-bold tabular-nums">{formatMoney(s.totalAmount)}</dd>
+    </div>
+  </dl>;
   if (orderedItems.length === 0)
     return (
       <div className="space-y-4">{totals}

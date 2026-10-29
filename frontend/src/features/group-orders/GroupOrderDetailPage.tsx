@@ -42,7 +42,7 @@ export function GroupOrderDetailPage() {
   const collecting = group.status === "open" && (!group.deadlineAt || new Date(group.deadlineAt).getTime() > now.getTime());
   const triggerClass = "h-11 min-w-24 flex-none px-4 text-base";
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
+    <div className="mx-auto max-w-2xl space-y-4">
       <GroupHeader group={group} />
       {collecting && <SharePanel title={group.title} shareUrl={group.shareUrl} />}
       {group.status === "archived" && <p className="text-sm text-muted-foreground">此團已封存，僅供查看既有訂單。</p>}

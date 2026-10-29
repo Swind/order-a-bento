@@ -18,7 +18,7 @@ export function DeliveryAddressSelect({ value, onChange, disabled = false }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled || query.isPending || query.isError}
-        className="h-11 w-full min-w-0 rounded-lg border bg-background px-3 text-base"
+        className="h-11 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:bg-input/50 disabled:opacity-50"
       >
         <option value="">暫不設定</option>
         {query.data?.map((a) => <option key={a.id} value={a.id}>{a.name} — {a.address}</option>)}
@@ -26,7 +26,7 @@ export function DeliveryAddressSelect({ value, onChange, disabled = false }: {
       {query.isError && (
         <div>
           <p role="alert" className="text-sm text-destructive">{errorMessage(query.error)}</p>
-          <Button type="button" variant="outline" onClick={() => query.refetch()}>重試載入地址</Button>
+          <Button type="button" variant="outline" className="h-11" onClick={() => query.refetch()}>重試載入地址</Button>
         </div>
       )}
       <p className="text-sm text-muted-foreground">

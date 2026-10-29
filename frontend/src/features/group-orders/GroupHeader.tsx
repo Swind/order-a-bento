@@ -73,7 +73,7 @@ function TitleEditor({ group, readOnly }: { group: GroupOrderDetail; readOnly: b
 
   if (!editing || readOnly)
     return (
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 max-w-full items-center gap-1">
         <h1 className="min-w-0 break-words text-2xl font-bold">{group.title}</h1>
         {!readOnly && (
           <Button
@@ -200,16 +200,18 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
         <TitleEditor key={group.title} group={group} readOnly={readOnly} />
         <StatusBadge status={group.status} deadlineAt={group.deadlineAt} />
       </div>
-      <p className="text-sm text-muted-foreground">{group.sharingGroupId ? `共用群組：${group.sharingGroupName ?? group.sharingGroupId}` : "個人"}</p>
-      <p className="text-muted-foreground">
-        {group.vendor.name}
-        {group.vendor.phone && ` · ${group.vendor.phone}`}
-      </p>
-      <div className="space-y-1 text-sm text-muted-foreground">
+      <div className="space-y-1">
+        <p className="break-words font-medium">
+          {group.vendor.name}
+          {group.vendor.phone && <span className="font-normal text-muted-foreground"> · {group.vendor.phone}</span>}
+        </p>
+        <p className="break-words text-sm text-muted-foreground">{group.sharingGroupId ? `共用群組：${group.sharingGroupName ?? group.sharingGroupId}` : "個人"}</p>
+      </div>
+      <div className="grid gap-x-4 gap-y-1 text-sm text-muted-foreground sm:grid-cols-2">
         <p>{group.deadlineAt ? `截止 ${formatMD(new Date(group.deadlineAt))} ${formatHHmm(group.deadlineAt)}` : "未設定截止時間"}</p>
         <p className="break-words">{group.deliveryAddress ? `送餐地址：${group.deliveryAddress}` : "尚未設定送餐地址"}</p>
       </div>
-      {group.note && <p className="text-sm">{group.note}</p>}
+      {group.note && <p className="whitespace-pre-wrap break-words text-sm">{group.note}</p>}
 
       {archived ? (
         <p className="rounded-lg bg-muted p-3 text-sm text-muted-foreground">
@@ -240,9 +242,9 @@ export function GroupHeader({ group }: { group: GroupOrderDetail }) {
               重新開放
             </Button>
           )}
-          <details className="min-w-0 flex-1 rounded-lg border bg-card">
-            <summary className="cursor-pointer rounded-lg px-3 py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">更多操作</summary>
-            <div className="space-y-4 border-t p-4">
+          <details className="min-w-0 max-w-full rounded-lg border bg-card open:w-full">
+            <summary className="min-h-11 cursor-pointer content-center rounded-lg px-3 py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">更多操作</summary>
+            <div className="space-y-3 border-t p-3">
               <DeadlineEditor key={group.deadlineAt ?? "none"} group={group} readOnly={false} />
               <DeliveryAddressEditor group={group} readOnly={false} />
               <div className="flex flex-wrap gap-2 border-t pt-4">

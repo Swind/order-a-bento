@@ -8,7 +8,7 @@ export function ScopeSelect({ value, onChange, ownership = false }: { value: str
       <label htmlFor={id} className="text-sm font-medium">{ownership ? "開團歸屬" : "資料範圍"}</label>
       <select
         id={id}
-        className="block h-11 w-full rounded-md border bg-background px-3"
+        className="block h-11 w-full min-w-0 rounded-lg border border-input bg-background px-3 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >

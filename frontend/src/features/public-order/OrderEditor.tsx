@@ -11,6 +11,7 @@ import { formatMoney } from "@/shared/lib/format";
 import { cn } from "@/shared/lib/utils";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { Button } from "@/shared/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { publicGroupKey, useSubmitOrder } from "./hooks";
@@ -47,6 +48,10 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
   const sending = useRef(false);
+  const cancelTriggerRef = useRef<HTMLButtonElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+  const cancelledRef = useRef(false);
   const pendingKey = useRef<PendingKey | null>(null);
   const submit = useSubmitOrder(token, participantId);
   const qc = useQueryClient();
@@ -106,6 +111,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
       setNoteOpen(Object.fromEntries((saved?.lines ?? []).filter((l) => l.note).map((l) => [l.itemId, true])));
       setOrderNote(saved?.note ?? "");
       pendingKey.current = null;
+      cancelledRef.current = cancelling;
       setConfirmCancel(false);
       toast.success(cancelling ? "已取消你的訂單" : effective ? "已更新訂單" : "訂單已送出");
     } catch (err) {
@@ -128,11 +134,21 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   return (
     <div className="space-y-4">
       {effective ? (
-        <div className="space-y-1 rounded-xl border border-primary/20 bg-accent p-4">
+        <section aria-label="上次送出的訂單" className="space-y-1 rounded-xl border border-primary/20 bg-accent p-4">
           <p className="text-sm font-semibold text-accent-foreground">上次送出的訂單 · 已於 {formatHHmm(effective.submittedAt)} 送出</p>
           <p className="text-sm text-accent-foreground">{effective.lines.map((line) => `${line.name} ×${line.quantity}`).join("、")}</p>
           <p className="text-sm text-muted-foreground">{readOnly ? "這是你最後送出的訂單。" : "截止前都可以修改，修改後請再次送出。"}</p>
-        </div>
+          <Button
+            ref={cancelTriggerRef}
+            type="button"
+            variant="ghost"
+            className="h-11 text-destructive"
+            disabled={busy}
+            onClick={() => { cancelledRef.current = false; setConfirmCancel(true); }}
+          >
+            取消我的訂單
+          </Button>
+        </section>
       ) : (
         order?.cancelled && (
           <p className="text-sm text-muted-foreground">
@@ -140,9 +156,36 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
           </p>
         )
       )}
-      <p role="status" className="text-sm font-medium">
+      <p ref={statusRef} tabIndex={-1} role="status" className="text-sm font-medium">
         {!effective && count === 0 ? "請先選擇餐點" : dirty ? (effective ? "有尚未送出的修改" : "尚未送出") : effective ? "訂單已送出" : "尚未送出"}
       </p>
+
+      {confirmCancel && <Dialog
+        open
+        onOpenChange={(open) => { if (!sending.current) setConfirmCancel(open); }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          initialFocus={keepRef}
+          finalFocus={() => {
+            const target = cancelledRef.current ? statusRef.current : cancelTriggerRef.current;
+            // Base UI can suppress automatic return after an outside press; both close paths need a target.
+            target?.focus({ preventScroll: true });
+            return false;
+          }}
+        >
+          <DialogTitle>確認取消訂單</DialogTitle>
+          <DialogDescription>確定要取消你的訂單嗎？尚未送出的修改也會在取消成功後清除。</DialogDescription>
+          <div className="flex gap-2">
+            <Button ref={keepRef} type="button" variant="outline" className="h-11 flex-1" disabled={busy} onClick={() => setConfirmCancel(false)}>
+              保留
+            </Button>
+            <Button type="button" variant="destructive" className="h-11 flex-1" disabled={busy} aria-busy={busy} onClick={() => send([], "", true)}>
+              {busy ? "取消中…" : "確定取消"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>}
 
       <fieldset disabled={busy} className="min-w-0 space-y-4" aria-busy={busy}>
       {group.menu.length === 0 && (
@@ -255,6 +298,8 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
       {!readOnly && (
         <div
           ref={barRef}
+          role="region"
+          aria-label="訂單送出操作"
           className="fixed inset-x-0 bottom-0 z-10 border-t bg-card shadow-[0_-4px_20px_rgba(0,0,0,0.04)]"
         >
           <div className="mx-auto w-full max-w-md space-y-1 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
@@ -270,40 +315,6 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
             >
               {busy ? "送出中…" : effective ? dirty ? "儲存修改" : "訂單已送出" : "送出訂單"}
             </Button>
-            {effective && !confirmCancel && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-11 w-full text-destructive"
-                disabled={busy}
-                onClick={() => setConfirmCancel(true)}
-              >
-                取消我的訂單
-              </Button>
-            )}
-            {effective && confirmCancel && (
-              <div className="flex items-center gap-2" role="alertdialog" aria-label="確認取消訂單">
-                <span className="flex-1 text-sm">確定要取消你的訂單嗎？</span>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="h-11"
-                  disabled={busy}
-                  onClick={() => send([], "", true)}
-                >
-                  確定取消
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-11"
-                  disabled={busy}
-                  onClick={() => setConfirmCancel(false)}
-                >
-                  保留
-                </Button>
-              </div>
-            )}
           </div>
         </div>
       )}

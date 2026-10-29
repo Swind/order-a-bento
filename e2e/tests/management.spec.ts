@@ -35,7 +35,7 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   await page.getByText("週五午餐").first().click();
   await expect(page).toHaveURL(/group-orders\/[0-9a-f-]+/);
   await page.getByRole("tab", { name: "統計" }).click();
-  await expect(page.getByText(/共 4 個/).first()).toBeVisible();
+  await expect(page.locator("dl").filter({ has: page.locator("dt", { hasText: "總份數" }) })).toContainText("4 份");
   await expectNoHorizontalOverflow(page);
 
   // Checklist: mark paid, then resubmit
@@ -88,7 +88,7 @@ test("stats, checklist, history, close and rotate", async ({ page, browser }) =>
   await page.getByRole("button", { name: "重新產生連結" }).click();
   await page.getByRole("button", { name: "確定重新產生連結" }).click();
   await page.getByText("分享與訂購連結", { exact: true }).click();
-  await page.getByText("顯示完整連結", { exact: true }).click();
+  await page.getByText("連結與其他操作", { exact: true }).click();
   await expect(page.getByLabel("分享連結", { exact: true })).not.toHaveValue(g.shareUrl);
 
   const old = await pubCtx.newPage();

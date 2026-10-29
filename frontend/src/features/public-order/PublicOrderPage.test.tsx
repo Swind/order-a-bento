@@ -308,19 +308,170 @@ describe("PublicOrderPage", () => {
     expect(screen.queryByRole("button", { name: /送出訂單|更新訂單|取消我的訂單/ })).not.toBeInTheDocument();
   });
 
-  it("cancel sends empty lines after inline confirmation", async () => {
+  it("cancels the saved order from its summary even with an empty draft, focuses status and permits reordering", async () => {
     localStorage.setItem(`bento:last:${TOKEN}`, "p1");
     renderApp(`/g/${TOKEN}`);
-    await userEvent.click(await screen.findByRole("button", { name: "取消我的訂單" }));
+    const summary = await screen.findByRole("region", { name: "上次送出的訂單" });
+    expect(within(screen.getByRole("region", { name: "訂單送出操作" })).getAllByRole("button")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "減少 排骨飯" }));
+    await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "未送出的備註");
+    expect(screen.getByRole("button", { name: "儲存修改" })).toBeDisabled();
+    expect(summary).toHaveTextContent("排骨飯 ×1");
+    await userEvent.click(within(summary).getByRole("button", { name: "取消我的訂單" }));
     await userEvent.click(screen.getByRole("button", { name: "確定取消" }));
     await waitFor(() => expect(submitted).toHaveLength(1));
     expect(submitted[0].body.lines).toEqual([]);
+    expect(submitted[0].body.note).toBeUndefined();
     expect(await screen.findByText("已取消你的訂單")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "送出訂單" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+    expect(screen.getByRole("status")).toHaveTextContent("請先選擇餐點");
+    expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消我的訂單" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "增加 雞腿飯" }));
     await userEvent.click(screen.getByRole("button", { name: "送出訂單" }));
     expect(await screen.findByRole("button", { name: "訂單已送出" })).toBeDisabled();
     expect(screen.getByText("雞腿飯 ×1")).toBeInTheDocument();
+  });
+
+  it("focuses 保留, traps focus, and returns to the summary trigger without changing the draft", async () => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p1");
+    renderApp(`/g/${TOKEN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
+    await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "保留草稿");
+    const trigger = screen.getByRole("button", { name: "取消我的訂單" });
+    for (const close of ["保留", "Escape", "background"]) {
+      await userEvent.click(trigger);
+      const dialog = screen.getByRole("dialog", { name: "確認取消訂單" });
+      const keep = within(dialog).getByRole("button", { name: "保留" });
+      await waitFor(() => expect(keep).toHaveFocus());
+      expect(within(dialog).queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+      await userEvent.tab({ shift: true });
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "確定取消" })).toHaveFocus());
+      await userEvent.tab();
+      await waitFor(() => expect(keep).toHaveFocus());
+      if (close === "保留") await userEvent.click(keep);
+      else if (close === "Escape") await userEvent.keyboard("{Escape}");
+      else await userEvent.click(document.querySelector('[data-slot="dialog-overlay"]')!);
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("保留草稿");
+      expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+    }
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("locks cancellation throughout client preparation and API pending, preserves failure and retries the same key", async () => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p1");
+    let prepare!: (client: Awaited<ReturnType<typeof deviceInfo.collectClientInfo>>) => void;
+    const client = await deviceInfo.collectClientInfo();
+    const spy = vi.spyOn(deviceInfo, "collectClientInfo").mockImplementationOnce(() => new Promise((resolve) => { prepare = resolve; }));
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    server.use(http.post(`*/api/v1/public/g/${TOKEN}/participants/p1/submissions`, async ({ request }) => {
+      submitted.push({ pid: "p1", body: await request.json() as Record<string, any> });
+      await pending;
+      return problem(500, "internal_error");
+    }));
+    renderApp(`/g/${TOKEN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
+    await userEvent.click(screen.getByRole("button", { name: "＋備註" }));
+    await userEvent.type(screen.getByLabelText("排骨飯 備註"), "不辣");
+    await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "晚點拿");
+    const trigger = screen.getByRole("button", { name: "取消我的訂單" });
+    const note = screen.getByLabelText("訂單備註（選填）");
+    const increase = screen.getByRole("button", { name: "增加 排骨飯" });
+    await userEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "確認取消訂單" });
+    await userEvent.dblClick(within(dialog).getByRole("button", { name: "確定取消" }));
+    for (const phase of ["preparation", "API"]) {
+      expect(within(dialog).getByRole("button", { name: "取消中…" })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "取消中…" })).toHaveAttribute("aria-busy", "true");
+      expect(within(dialog).getByRole("button", { name: "保留" })).toBeDisabled();
+      expect(trigger).toBeDisabled();
+      expect(note).toBeDisabled();
+      expect(increase).toBeDisabled();
+      await userEvent.keyboard("{Escape}");
+      await userEvent.click(document.querySelector('[data-slot="dialog-overlay"]')!);
+      expect(screen.getByRole("dialog", { name: "確認取消訂單" })).toBe(dialog);
+      await userEvent.click(within(dialog).getByRole("button", { name: "取消中…" }));
+      expect(spy).toHaveBeenCalledTimes(1);
+      if (phase === "preparation") {
+        expect(submitted).toHaveLength(0);
+        await act(async () => prepare(client));
+        await waitFor(() => expect(submitted).toHaveLength(1));
+      }
+    }
+    await act(async () => finish());
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "確定取消" })).toBeEnabled());
+    expect(screen.getByRole("dialog", { name: "確認取消訂單" })).toBe(dialog);
+    expect(note).toHaveValue("晚點拿");
+    expect(screen.getByLabelText("排骨飯 備註")).toHaveValue("不辣");
+    await userEvent.click(within(dialog).getByRole("button", { name: "保留" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getByRole("region", { name: "上次送出的訂單" })).toHaveTextContent("排骨飯 ×1");
+    expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+    spy.mockRestore();
+    server.use(http.post(`*/api/v1/public/g/${TOKEN}/participants/p1/submissions`, async ({ request }) => {
+      submitted.push({ pid: "p1", body: await request.json() as Record<string, any> });
+      orders.p1 = order([], true);
+      return HttpResponse.json(orders.p1);
+    }));
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("button", { name: "確定取消" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1].body.idempotencyKey).toBe(submitted[0].body.idempotencyKey);
+  });
+
+  it("keeps the cancellation dialog and draft after client preparation fails without sending a request", async () => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p1");
+    const spy = vi.spyOn(deviceInfo, "collectClientInfo").mockRejectedValueOnce(new Error("準備失敗"));
+    renderApp(`/g/${TOKEN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
+    await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "保留備註");
+    const trigger = screen.getByRole("button", { name: "取消我的訂單" });
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("button", { name: "確定取消" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "確定取消" })).toBeEnabled());
+    expect(screen.getByRole("dialog", { name: "確認取消訂單" })).toBeInTheDocument();
+    expect(submitted).toHaveLength(0);
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("保留備註");
+    expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+    spy.mockRestore();
+  });
+
+  it.each(["closed", "switch", 403, 404] as const)("removes an open cancellation dialog and bar on %s", async (state) => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p1");
+    const { queryClient } = renderApp(`/g/${TOKEN}`);
+    // A sold-out selected item blocks saving but must not block cancellation.
+    group = { ...base, menu: base.menu.map((item) => item.id === "i1" ? { ...item, soldOut: true } : item) };
+    await screen.findByRole("button", { name: "取消我的訂單" });
+    await act(() => queryClient.invalidateQueries({ queryKey: ["public-group", TOKEN] }));
+    expect(screen.getByRole("button", { name: "訂單已送出" })).toBeDisabled();
+    const switchButton = screen.getByRole("button", { name: "換人" });
+    await userEvent.click(screen.getByRole("button", { name: "取消我的訂單" }));
+    expect(screen.getByRole("dialog", { name: "確認取消訂單" })).toBeInTheDocument();
+    if (state === "switch") {
+      // Modal blocks user access; simulate an external identity transition to test unmount cleanup.
+      act(() => switchButton.click());
+      await screen.findByLabelText("搜尋名字");
+    } else {
+      if (state === "closed") group = { ...group, status: "closed", acceptingOrders: false };
+      else server.use(http.get(`*/api/v1/public/g/${TOKEN}`, () => problem(state, state === 404 ? "not_found" : "forbidden")));
+      await act(() => queryClient.invalidateQueries({ queryKey: ["public-group", TOKEN] }));
+      if (state === "closed") await screen.findByText("總額 $100");
+      else await screen.findByRole("alert");
+    }
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
+    expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消我的訂單" })).not.toBeInTheDocument();
+    expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
+    expect(submitted).toHaveLength(0);
   });
 
   it("409 deadline_passed switches to read-only", async () => {
