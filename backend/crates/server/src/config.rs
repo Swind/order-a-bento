@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use infrastructure::ai::{AiProvider, AiReasoning};
+use infrastructure::ai::{AiProvider, AiReasoning, DEFAULT_MAX_TOKENS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnv {
@@ -76,6 +76,8 @@ pub struct Config {
     pub ai_model: String,
     pub ai_daily_quota_per_user: u32,
     pub ai_max_turns: u32,
+    /// Output-token budget per model call (`AI_MAX_TOKENS`).
+    pub ai_max_tokens: u64,
     /// `AI_PROVIDER` (`anthropic` | `anthropic-compatible` | `openai-compatible` | `openai-responses`).
     pub ai_provider: AiProvider,
     /// `AI_FALLBACKS` (`default` | `off`): server-side model fallback on refusals.
@@ -465,6 +467,17 @@ impl Config {
                 30,
             )?,
             ai_max_turns: num(get("AI_MAX_TURNS"), "AI_MAX_TURNS", 8)?,
+            ai_max_tokens: {
+                let tokens = num(get("AI_MAX_TOKENS"), "AI_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
+                if tokens == 0 {
+                    return Err(ConfigError::Invalid {
+                        key: "AI_MAX_TOKENS",
+                        value: "0".into(),
+                        reason: "must be greater than 0",
+                    });
+                }
+                tokens
+            },
             ai_provider,
             ai_fallbacks,
             ai_strict_tools,
@@ -693,6 +706,34 @@ mod tests {
         }
         // raising only the request timeout above the default run timeout is rejected
         assert!(Config::from_map(&env(&[("AI_REQUEST_TIMEOUT_SECS", "100")])).is_err());
+    }
+
+    #[test]
+    fn ai_max_tokens_defaults_and_validation() {
+        for value in [None, Some(""), Some("  ")] {
+            let vars = value.map_or_else(HashMap::new, |v| env(&[("AI_MAX_TOKENS", v)]));
+            assert_eq!(Config::from_map(&vars).unwrap().ai_max_tokens, 16_384);
+        }
+        for (value, expected) in [
+            (" 32768 ", 32_768),
+            ("1", 1),
+            ("18446744073709551615", u64::MAX),
+        ] {
+            let c = Config::from_map(&env(&[("AI_MAX_TOKENS", value)])).unwrap();
+            assert_eq!(c.ai_max_tokens, expected);
+        }
+        for value in ["0", "-1", "1.5", "abc", "18446744073709551616"] {
+            assert!(
+                matches!(
+                    Config::from_map(&env(&[("AI_MAX_TOKENS", value)])).unwrap_err(),
+                    ConfigError::Invalid {
+                        key: "AI_MAX_TOKENS",
+                        ..
+                    }
+                ),
+                "{value}"
+            );
+        }
     }
 
     fn env(kv: &[(&str, &str)]) -> HashMap<String, String> {

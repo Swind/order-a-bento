@@ -68,6 +68,7 @@ pub fn rig_agent_config(config: &Config) -> Option<RigAgentConfig> {
         .collect();
     cfg.session_header = config.ai_session_header.clone();
     cfg.max_turns = config.ai_max_turns as usize;
+    cfg.max_tokens = config.ai_max_tokens;
     cfg.provider = config.ai_provider;
     cfg.fallbacks = config.ai_fallbacks;
     cfg.strict_tools = config.ai_strict_tools;
@@ -210,6 +211,31 @@ mod tests {
     use application::BootstrapOutcome;
 
     use super::*;
+
+    #[test]
+    fn rig_agent_token_budget_is_shared_by_server_and_eval() {
+        for provider in [
+            "anthropic",
+            "anthropic-compatible",
+            "openai-compatible",
+            "openai-responses",
+        ] {
+            for (value, expected) in [(None, 16_384), (Some("32768"), 32_768)] {
+                let mut vars = std::collections::HashMap::from([
+                    ("AI_API_KEY".into(), "test-key".into()),
+                    ("AI_BASE_URL".into(), "http://localhost:9".into()),
+                    ("AI_MODEL".into(), "test-model".into()),
+                    ("AI_PROVIDER".into(), provider.into()),
+                ]);
+                if let Some(value) = value {
+                    vars.insert("AI_MAX_TOKENS".into(), value.into());
+                }
+                let cfg = rig_agent_config(&Config::from_map(&vars).unwrap()).unwrap();
+                assert_eq!(cfg.max_tokens, expected, "{provider}");
+                assert!(format!("{cfg:?}").contains(&format!("max_tokens: {expected}")));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn bootstrap_admin_from_config_is_idempotent() {

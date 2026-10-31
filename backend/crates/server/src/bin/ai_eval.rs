@@ -113,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
             "strictTools": config.ai_strict_tools,
             "reasoning": format!("{:?}", config.ai_reasoning),
             "fallbacks": config.ai_fallbacks,
+            "maxTokens": config.ai_max_tokens,
             "runs": runs,
         });
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

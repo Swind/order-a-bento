@@ -103,6 +103,55 @@ fn first_body(mock: &Mock) -> Value {
 }
 
 #[tokio::test]
+async fn every_provider_uses_the_configured_token_budget_on_every_turn() {
+    for provider in [
+        AiProvider::Anthropic,
+        AiProvider::AnthropicCompatible,
+        AiProvider::OpenAiCompatible,
+        AiProvider::OpenAiResponses,
+    ] {
+        for tokens in [None, Some(32_768)] {
+            let e = env().await;
+            let (url, mock) = match provider {
+                AiProvider::Anthropic | AiProvider::AnthropicCompatible => {
+                    start(happy_script()).await
+                }
+                AiProvider::OpenAiCompatible => start_openai(oa_happy_script()).await,
+                AiProvider::OpenAiResponses => start_responses(rs_happy_script()).await,
+            };
+            let mut c = RigAgentConfig::new("test-key", "test-model");
+            c.provider = provider;
+            c.base_url = Some(url);
+            c.request_timeout = Duration::from_secs(5);
+            if let Some(tokens) = tokens {
+                c.max_tokens = tokens;
+            }
+            RigImportAgent::new(c)
+                .unwrap()
+                .run(e.ctx.clone(), input())
+                .await
+                .unwrap();
+            assert_eq!(mock.calls(), 3);
+            let field = if provider == AiProvider::OpenAiResponses {
+                "max_output_tokens"
+            } else {
+                "max_tokens"
+            };
+            for body in mock.bodies.lock().unwrap().iter() {
+                assert_eq!(body[field], tokens.unwrap_or(16_384), "{provider:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn zero_token_budget_is_rejected() {
+    let mut c = RigAgentConfig::new("test-key", "test-model");
+    c.max_tokens = 0;
+    assert!(matches!(RigImportAgent::new(c), Err(e) if e.contains("AI_MAX_TOKENS")));
+}
+
+#[tokio::test]
 async fn happy_path_records_proposal_usage_and_tool_calls() {
     let e = env().await;
     let (url, mock) = start(happy_script()).await;
@@ -165,7 +214,7 @@ async fn first_request_shape_with_fallbacks() {
 
     let body = first_body(&mock);
     assert_eq!(body["model"], "claude-opus-5-5");
-    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body["max_tokens"], 16_384);
     assert_eq!(body["output_config"]["effort"], "low");
     assert_eq!(body["fallbacks"], "default");
     let tools = body["tools"].as_array().unwrap();
@@ -551,7 +600,7 @@ async fn openai_happy_path_request_shape_and_usage() {
 
     let body = first_body(&mock);
     assert_eq!(body["model"], "deepseek-v4.1-flash");
-    assert_eq!(body["max_tokens"], 4096);
+    assert_eq!(body["max_tokens"], 16_384);
     // nothing Anthropic-specific, no reasoning request by default
     for k in ["fallbacks", "output_config", "thinking", "reasoning_effort"] {
         assert!(body.get(k).is_none(), "{k} in {body}");
@@ -840,7 +889,7 @@ async fn responses_happy_path_request_shape_loop_and_usage() {
 
     let body = first_body(&mock);
     assert_eq!(body["model"], "gpt-6-luna");
-    assert_eq!(body["max_output_tokens"], 4096);
+    assert_eq!(body["max_output_tokens"], 16_384);
     assert_eq!(body["store"], false);
     assert!(
         body["include"]

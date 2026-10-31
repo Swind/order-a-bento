@@ -26,8 +26,8 @@ use rig::{AgentBuilder, DynModel};
 
 use super::tools::{add_roster_tools, add_vendor_tools};
 
-/// Cap on a single model turn (summary plus a few dozen tool-call items).
-const MAX_TOKENS: u64 = 4096;
+/// Default output-token budget per model call (`AI_MAX_TOKENS`).
+pub const DEFAULT_MAX_TOKENS: u64 = 16_384;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which Messages-API server the agent talks to (`AI_PROVIDER`).
@@ -90,6 +90,8 @@ pub struct RigAgentConfig {
     pub model: String,
     /// Total model-call budget per run (`AI_MAX_TURNS`).
     pub max_turns: usize,
+    /// Output-token budget per model call (`AI_MAX_TOKENS`); must fit the model's limit.
+    pub max_tokens: u64,
     /// Ask the API to fall back to another model on a refusal
     /// (`server-side-fallback` beta, `AI_FALLBACKS`).
     pub fallbacks: bool,
@@ -113,6 +115,7 @@ impl RigAgentConfig {
             base_url: None,
             model: model.into(),
             max_turns: 8,
+            max_tokens: DEFAULT_MAX_TOKENS,
             fallbacks: true,
             request_timeout: Duration::from_secs(60),
             extra_headers: Vec::new(),
@@ -132,6 +135,7 @@ impl std::fmt::Debug for RigAgentConfig {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("max_turns", &self.max_turns)
+            .field("max_tokens", &self.max_tokens)
             .field("fallbacks", &self.fallbacks)
             .field("request_timeout", &self.request_timeout)
             .field("extra_headers", &self.extra_headers)
@@ -147,6 +151,9 @@ pub struct RigImportAgent {
 
 impl RigImportAgent {
     pub fn new(config: RigAgentConfig) -> Result<Self, String> {
+        if config.max_tokens == 0 {
+            return Err("AI_MAX_TOKENS must be greater than 0".into());
+        }
         let http = reqwest::Client::builder()
             .timeout(config.request_timeout)
             .connect_timeout(CONNECT_TIMEOUT)
@@ -443,7 +450,7 @@ impl ImportAgent for RigImportAgent {
         };
         let mut builder = AgentBuilder::new(model)
             .preamble(import_agent_system_prompt(input.mode))
-            .max_tokens(MAX_TOKENS)
+            .max_tokens(cfg.max_tokens)
             .default_max_turns(cfg.max_turns)
             .add_hook(hook);
         if cfg.reasoning == AiReasoning::Low {

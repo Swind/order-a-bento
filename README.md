@@ -280,6 +280,7 @@ docker start bento
 | `AI_EXTRA_HEADERS` | 否 | 空 | `name=value,name2=value2`（值不可含逗號，須為可列印 ASCII，標頭名僅限字母數字 `-` `_`） | 每次模型請求附加的 HTTP 標頭；值視為機密，不寫入日誌 | **yes** |
 | `AI_SESSION_HEADER` | 否 | 空 | 標頭名稱 | 以此標頭送出匯入 run id（供依 session 路由的閘道，例 `x-opencode-session`） | no |
 | `AI_MAX_TURNS` | 否 | `8` | 正整數 | 每次匯入最多呼叫模型次數 | no |
+| `AI_MAX_TOKENS` | 否 | `16384` | 正整數（u64） | 所有 provider 每次模型呼叫的輸出 token 額度（非整個 run）；推理也可能占用。須符合模型／gateway 的輸出與 context 限制，小模型請調低；不改變 reasoning／tool 策略 | no |
 | `AI_DAILY_QUOTA_PER_USER` | 否 | `30` | 整數 | 每位使用者每日 AI 匯入次數上限 | no |
 | `AI_FALLBACKS` | 否 | `anthropic`：`default`；其他 provider：`off` | `default`、`off` | 請求被拒時是否讓 API 退回其他模型。**`default` 只在 `AI_PROVIDER=anthropic` 有效**，其他 provider 設 `default` 會拒絕啟動 | no |
 | `AI_STRICT_TOOLS` | 否 | `anthropic`：`true`；其他：`false` | 布林 | 工具 schema 使用 strict 模式 | no |

@@ -8,5 +8,7 @@ mod rig_agent;
 mod tools;
 
 pub use demo::DemoImportAgent;
-pub use rig_agent::{AiProvider, AiReasoning, ExtraHeader, RigAgentConfig, RigImportAgent};
+pub use rig_agent::{
+    AiProvider, AiReasoning, DEFAULT_MAX_TOKENS, ExtraHeader, RigAgentConfig, RigImportAgent,
+};
 pub use tools::{import_tools_parameters, strict_schema};

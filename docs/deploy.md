@@ -106,6 +106,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `AI_SESSION_HEADER` | 空 | 帶「匯入 run id」的 header 名稱（例如 `x-opencode-session`）。每次匯入產生一個新 id，該次所有 model 呼叫共用；需要 session 路由的 gateway 才要設 |
 | `AI_MODEL` | `claude-opus-5-5` | 使用的模型；`openai-compatible`／`openai-responses` 必須明確設定 |
 | `AI_MAX_TURNS` | `8` | 每次匯入最多呼叫模型次數 |
+| `AI_MAX_TOKENS` | `16384` | 所有 provider 每次模型呼叫的輸出 token 額度（正整數 u64，非整個 run）；推理也可能占用。須符合模型／gateway 的輸出與 context 限制，小模型請調低；不改變 reasoning／tool 策略 |
 | `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者每日匯入次數上限 |
 | `AI_PROVIDER` | `anthropic` | `anthropic`＝Anthropic 官方 API（Claude 預設值）；`anthropic-compatible`＝相容 Messages API 的 gateway 後面接其他模型（見下方「改用 Anthropic 相容 gateway」）；`openai-compatible`＝相容 OpenAI Chat Completions 的伺服器（DeepSeek、vLLM、LiteLLM、opencode…，見下方「改用 OpenAI 相容伺服器」）；`openai-responses`＝只支援 OpenAI Responses API（`/v1/responses`）的模型，如 opencode Go 上的 `gpt-6-luna`（見下方「Responses API」） |
 | `AI_FALLBACKS` | `default`（compatible 為 `off`） | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉。fallback 是 Anthropic 專屬功能，compatible provider 設 `default` 會拒絕啟動 |
@@ -121,6 +122,8 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `RUST_LOG` | `info,tower_http=info` | 日誌等級 |
 
 清除 ClientInfo 的依據是 `group_orders.closed_at`（關閉時寫入；封存只能從已關閉狀態進行且保留 `closed_at`；重新開啟會清空 `closed_at`）。因此「開放中」與「重新開啟」的團不會被清除，已關閉／已封存且關閉時間早於保存期限的團會被清除。訂單內容、備註與品項明細不受影響。
+
+`AI_MAX_TOKENS` 預設 `16384`，可用容器環境變數（例如 `-e AI_MAX_TOKENS=32768`）調整；須先確認模型／gateway 支援該輸出與 context 額度。Messages／Chat Completions 送 `max_tokens`，Responses 送 `max_output_tokens`，每輪皆使用相同設定。此設定需包含這次程式更新的新版 image，舊版 image 不會讀取；更新後變更環境變數需重建容器。`ai_eval` 使用相同設定，報告以 `maxTokens` 記錄。
 
 ### 改用 Anthropic 相容 gateway（非 Claude 模型）
 

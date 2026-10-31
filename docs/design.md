@@ -1210,6 +1210,7 @@ AI_API_KEY=...                   # 舊名 ANTHROPIC_API_KEY 仍可用（僅 anth
 AI_MODEL=claude-opus-5-5         # openai-compatible 必須明確設定
 AI_DAILY_QUOTA_PER_USER=30
 AI_MAX_TURNS=8
+AI_MAX_TOKENS=16384              # 每次模型呼叫的輸出 token 額度（正整數 u64）；須符合模型／gateway 的輸出與 context 限制，推理也可能占用
 AI_PROVIDER=anthropic            # anthropic | anthropic-compatible | openai-compatible | openai-responses（9.7）
 AI_FALLBACKS=default             # off = 關閉 server-side fallback（僅 anthropic 可用 default）
 # AI_STRICT_TOOLS=true           # 預設：anthropic 為 true、compatible 為 false

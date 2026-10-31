@@ -51,7 +51,7 @@ docker-build: ## Build the Docker image (order-a-bento:latest)
 	docker build -t order-a-bento:latest .
 
 # Manual only (calls a real model, costs tokens): never part of `make check` or CI.
-# Uses AI_API_KEY / AI_BASE_URL / AI_MODEL / AI_PROVIDER as the server does (legacy ANTHROPIC_API_KEY /
+# Uses AI_API_KEY / AI_BASE_URL / AI_MODEL / AI_PROVIDER / AI_MAX_TOKENS as the server does (legacy ANTHROPIC_API_KEY /
 # ANTHROPIC_BASE_URL still work for the Anthropic providers). Two shortcuts map other sources onto them:
 #   - AI_PROVIDER_FILE=provider.json  ({"base_url": ..., "api_key": ...}, optional "model", "provider",
 #     "session_header") -> AI_BASE_URL / AI_API_KEY, AI_PROVIDER=openai-compatible by default. Set AI_MODEL
@@ -63,9 +63,10 @@ docker-build: ## Build the Docker image (order-a-bento:latest)
 # extended cases (01, 03, 07); ARGS="--filter 03 --all --repeat 3"; report path: AI_REPORT=/tmp/x.json
 AI_REPORT ?= ../eval/report.json
 ai-eval: ## Run the core AI import eval cases (ARGS=--all for all) against the configured model; report in eval/report.json
-	@cli_model="$$AI_MODEL"; cli_provider="$$AI_PROVIDER"; \
+	@cli_model="$$AI_MODEL"; cli_provider="$$AI_PROVIDER"; cli_max_tokens="$$AI_MAX_TOKENS"; \
 	set -a; [ -f .env ] && . ./.env; set +a; \
 	[ -n "$$cli_model" ] && AI_MODEL="$$cli_model"; [ -n "$$cli_provider" ] && AI_PROVIDER="$$cli_provider"; \
+	[ -n "$$cli_max_tokens" ] && AI_MAX_TOKENS="$$cli_max_tokens"; \
 	if [ -n "$(AI_PROVIDER_FILE)" ]; then \
 		test -r "$(AI_PROVIDER_FILE)" || { echo "ai-eval: cannot read $(AI_PROVIDER_FILE)" >&2; exit 1; }; \
 		eval "$$(jq -r '@sh "export AI_BASE_URL=\(.base_url) AI_API_KEY=\(.api_key) file_model=\(.model // "") file_provider=\(.provider // "") file_session=\(.session_header // "")"' "$(AI_PROVIDER_FILE)")" || exit 1; \
