@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
 import { publicGroupKey, useSubmitOrder } from "./hooks";
+import { restoreOrderFocus } from "./focus";
 import {
   ITEM_NOTE_MAX,
   MAX_QTY,
@@ -30,10 +31,11 @@ interface Props {
   participantId: string;
   order: EffectiveOrder | null;
   readOnly: boolean;
+  active?: boolean;
   onClosed: (reason: "group_closed" | "deadline_passed") => void;
 }
 
-export function OrderEditor({ token, group, participantId, order, readOnly, onClosed }: Props) {
+export function OrderEditor({ token, group, participantId, order, readOnly, active = true, onClosed }: Props) {
   const effective = order && !order.cancelled ? order : null;
   const [qty, setQty] = useState<Record<string, number>>(() =>
     Object.fromEntries((effective?.lines ?? []).map((l) => [l.itemId, l.quantity])),
@@ -71,7 +73,17 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   // Publish the sticky bar's real height (incl. safe-area inset) as --order-bar-h so the page can
   // reserve exactly that much bottom padding and the footer scrolls clear of the bar.
   const barRef = useRef<HTMLDivElement>(null);
-  const barShown = !readOnly;
+  const barShown = active && !readOnly;
+  const readOnlyRef = useRef(readOnly);
+  useEffect(() => {
+    readOnlyRef.current = readOnly;
+    return () => { readOnlyRef.current = true; };
+  }, [readOnly]);
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) setConfirmCancel(false);
+  }
   useEffect(() => {
     const root = document.documentElement;
     const el = barRef.current;
@@ -91,7 +103,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
   }
 
   async function send(payloadLines: typeof lines, note: string, cancelling: boolean) {
-    if (sending.current || readOnly) return;
+    if (sending.current || readOnly || !active) return;
     sending.current = true;
     setBusy(true);
     try {
@@ -104,6 +116,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
         idempotencyKey: pendingKey.current.key,
         client: await collectClientInfo(),
       };
+      if (readOnlyRef.current) return;
       const data = await submit.mutateAsync(body);
       const saved = data.order && !data.order.cancelled ? data.order : null;
       setQty(Object.fromEntries((saved?.lines ?? []).map((l) => [l.itemId, l.quantity])));
@@ -160,7 +173,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
         {!effective && count === 0 ? "請先選擇餐點" : dirty ? (effective ? "有尚未送出的修改" : "尚未送出") : effective ? "訂單已送出" : "尚未送出"}
       </p>
 
-      {confirmCancel && <Dialog
+      {active && confirmCancel && <Dialog
         open
         onOpenChange={(open) => { if (!sending.current) setConfirmCancel(open); }}
       >
@@ -170,8 +183,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
           finalFocus={() => {
             const target = cancelledRef.current ? statusRef.current : cancelTriggerRef.current;
             // Base UI can suppress automatic return after an outside press; both close paths need a target.
-            target?.focus({ preventScroll: true });
-            return false;
+            return restoreOrderFocus(target);
           }}
         >
           <DialogTitle>確認取消訂單</DialogTitle>
@@ -295,7 +307,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, onCl
       </div>
       </fieldset>
 
-      {!readOnly && (
+      {barShown && (
         <div
           ref={barRef}
           role="region"

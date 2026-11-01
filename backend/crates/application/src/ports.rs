@@ -473,9 +473,35 @@ pub struct EffectiveOrderView {
     pub lines: Vec<OrderLineView>,
 }
 
+/// Safe public projection; deliberately excludes notes, prices and client metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicOrderLineView {
+    pub item_id: OfferedItemId,
+    pub name: String,
+    pub quantity: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicOrderView {
+    pub participant_id: ParticipantId,
+    pub name: String,
+    pub submitted_at: SystemTime,
+    pub lines: Vec<PublicOrderLineView>,
+}
+
+pub struct PublicOrderOverview {
+    pub group: GroupOrder,
+    pub orders: Vec<PublicOrderView>,
+}
+
 /// Read models over the `effective_submissions` view.
 #[async_trait]
 pub trait OrderReadModel: Send + Sync {
+    /// Token, group and latest noncancelled orders in one read snapshot; fixed query count.
+    async fn public_order_overview(
+        &self,
+        token: &ShareToken,
+    ) -> PortResult<Option<PublicOrderOverview>>;
     /// Participants whose effective submission has at least one line.
     async fn ordered_participants(&self, group: GroupOrderId)
     -> PortResult<HashSet<ParticipantId>>;

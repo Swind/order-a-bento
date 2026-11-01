@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { useIsMutating } from "@tanstack/react-query";
+import { useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import type { PublicGroup, PublicParticipant } from "@/shared/api/types";
@@ -12,9 +12,12 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
-import { orderSubmissionKey, useEffectiveOrder, usePublicGroup } from "./hooks";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
+import { PublicAccessContext, orderSubmissionKey, useEffectiveOrder, usePublicGroup, usePublicOrders } from "./hooks";
 import { matchesName, readLastParticipant, writeLastParticipant } from "./lib";
 import { OrderEditor } from "./OrderEditor";
+import { PublicOrderOverview } from "./PublicOrderOverview";
+import { restoreOrderFocus } from "./focus";
 
 function GroupHeader({ group, closedBanner }: { group: PublicGroup; closedBanner: string | null }) {
   const now = useNow(30_000);
@@ -64,7 +67,7 @@ function IdentityConfirm({
   const at = order.data?.order && !order.data.order.cancelled ? order.data.order.submittedAt : null;
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onNo(); }}>
-    <DialogContent initialFocus={cancelRef} finalFocus={returnFocus}>
+    <DialogContent initialFocus={cancelRef} finalFocus={() => restoreOrderFocus(returnFocus.current)}>
       <DialogTitle>確認身分</DialogTitle>
       <DialogDescription className="break-words text-base">
         {order.isPending || order.isFetching ? `正在查詢 ${participant.name} 的訂單…` : order.isError ? "無法查詢訂單，請重試後再確認身分。" :
@@ -91,15 +94,22 @@ function ParticipantPicker({
   group,
   remembered,
   onChoose,
+  active,
 }: {
   token: string;
   group: PublicGroup;
   remembered: string | null;
   onChoose: (pid: string) => void;
+  active: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<PublicParticipant | null>(null);
   const origin = useRef<HTMLButtonElement | null>(null);
+  const [wasActive, setWasActive] = useState(active);
+  if (wasActive !== active) {
+    setWasActive(active);
+    if (!active) setPending(null);
+  }
   const shown = group.participants.filter((p) => matchesName(p.name, query));
 
   function pick(p: PublicParticipant) {
@@ -119,7 +129,7 @@ function ParticipantPicker({
         onChange={(e) => setQuery(e.target.value)}
         autoComplete="off"
       />
-      {pending && (
+      {active && pending && (
         <IdentityConfirm
           token={token}
           participant={pending}
@@ -169,6 +179,7 @@ function OrderStep({
   readOnly,
   onClosed,
   onSwitch,
+  active,
 }: {
   token: string;
   group: PublicGroup;
@@ -176,10 +187,12 @@ function OrderStep({
   readOnly: boolean;
   onClosed: (reason: "group_closed" | "deadline_passed") => void;
   onSwitch: () => void;
+  active: boolean;
 }) {
   const order = useEffectiveOrder(token, participant.id);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { headingRef.current?.focus(); }, []);
+  const [focusOnMount] = useState(active);
+  useEffect(() => { if (focusOnMount) headingRef.current?.focus(); }, [focusOnMount]);
   return (
     <section className="space-y-3" aria-label="選便當">
       <div className="flex items-center justify-between gap-2 rounded-xl border bg-card px-4 py-2">
@@ -208,6 +221,7 @@ function OrderStep({
           participantId={participant.id}
           order={order.data.order ?? null}
           readOnly={readOnly}
+          active={active}
           onClosed={onClosed}
         />
       )}
@@ -234,10 +248,45 @@ function ReadOnlyOrder({ token, group, participantId, onClosed }: {
 
 export function PublicOrderPage() {
   const { token = "" } = useParams();
+  return <TokenPage key={token} token={token} />;
+}
+
+function TokenPage({ token }: { token: string }) {
+  const qc = useQueryClient();
+  const [denied, setDenied] = useState<ApiError | null>(null);
+  const blocked = useRef(false);
+  const access = useMemo(() => ({
+    isBlocked: () => blocked.current,
+    onError: (error: unknown) => {
+      if (!blocked.current && error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+        blocked.current = true;
+        setDenied(error);
+      }
+    },
+  }), []);
+  useEffect(() => {
+    if (!denied) return;
+    const filters = { predicate: (query: { queryKey: readonly unknown[] }) =>
+      ["public-group", "public-orders", "public-order"].includes(String(query.queryKey[0])) && query.queryKey[1] === token };
+    void qc.cancelQueries(filters).then(() => qc.removeQueries(filters));
+  }, [denied, qc, token]);
+  if (denied) return <div className="space-y-3 py-12 text-center">
+    <p role="alert" className="text-lg">{denied.status === 404 ? "這個訂購連結無效或已失效" : "你目前無權限查看或使用這個訂購連結"}</p>
+    <p className="text-sm text-muted-foreground">請向開團的人確認連結及存取權限。</p>
+  </div>;
+  return <PublicAccessContext.Provider value={access}><OrderingPage token={token} /></PublicAccessContext.Provider>;
+}
+
+function OrderingPage({ token }: { token: string }) {
   const query = usePublicGroup(token);
+  const [tab, setTab] = useState("own");
+  const overview = usePublicOrders(token, tab === "overview");
   const [selectedId, setSelectedId] = useState<string | null>(() => readLastParticipant(token));
   const [forcedClosed, setForcedClosed] = useState<"group_closed" | "deadline_passed" | null>(null);
   const now = useNow(30_000);
+  const closure = closingReason(overview.data, now) ?? closingReason(query.data, now);
+  // A late open snapshot must not reopen a group already known to be closed.
+  if (closure && forcedClosed === null) setForcedClosed(closure);
 
   if (query.isPending)
     return (
@@ -249,30 +298,22 @@ export function PublicOrderPage() {
       </div>
     );
 
-  const accessRevoked = query.error instanceof ApiError && (query.error.status === 403 || query.error.status === 404);
-  if (query.isError && (!query.data || accessRevoked)) {
-    const notFound = query.error instanceof ApiError && query.error.status === 404;
-    const forbidden = query.error instanceof ApiError && query.error.status === 403;
+  if (query.isError && !query.data) {
     return (
       <div className="space-y-3 py-12 text-center">
         <p role="alert" className="text-lg">
-          {notFound ? "這個訂購連結無效或已失效" : forbidden ? "你目前無權限查看或使用這個訂購連結" : errorMessage(query.error)}
+          {errorMessage(query.error)}
         </p>
-        {accessRevoked ? (
-          <p className="text-sm text-muted-foreground">請向開團的人確認連結及存取權限。</p>
-        ) : (
-          <Button className="h-11" onClick={() => query.refetch()}>
-            重試
-          </Button>
-        )}
+        <Button className="h-11" onClick={() => query.refetch()}>
+          重試
+        </Button>
       </div>
     );
   }
 
   const group = query.data;
-  const deadlinePassed = !!group.deadlineAt && new Date(group.deadlineAt).getTime() <= now.getTime();
-  const readOnly = !group.acceptingOrders || forcedClosed !== null || deadlinePassed;
-  const manuallyClosed = group.status !== "open" || forcedClosed === "group_closed";
+  const readOnly = !!closure || forcedClosed !== null;
+  const manuallyClosed = group.status !== "open" || (forcedClosed ?? closure) === "group_closed";
   const bannerText = readOnly ? (group.status === "archived" ? "已封存" : manuallyClosed ? "已關閉" : "已截止") : null;
 
   const participant = selectedId ? group.participants.find((p) => p.id === selectedId) : undefined;
@@ -283,35 +324,55 @@ export function PublicOrderPage() {
   }
 
   return (
-    <div className="space-y-5 pb-[calc(var(--order-bar-h,0px)+1rem)]">
+    <div className={cn("space-y-5", tab === "own" && "pb-[calc(var(--order-bar-h,0px)+1rem)]")}>
       <GroupHeader group={group} closedBanner={bannerText} />
       {query.isError && <div className="space-y-2 rounded-xl border p-4">
         <p role="alert">團單資料更新失敗，保留目前選餐。{errorMessage(query.error)}</p>
         <Button variant="outline" className="h-11" disabled={query.isFetching} onClick={() => query.refetch()}>重試</Button>
       </div>}
-      {participant ? (
-        <OrderStep
-          token={token}
-          group={group}
-          participant={participant}
-          readOnly={readOnly}
-          onClosed={(reason) => {
-            setForcedClosed(reason);
-            query.refetch();
-          }}
-          onSwitch={() => setSelectedId(null)}
-        />
-      ) : (
-        <ParticipantPicker
-          token={token}
-          group={group}
-          remembered={readLastParticipant(token)}
-          onChoose={choose}
-        />
-      )}
-      <p className="pt-4 text-center text-xs text-muted-foreground">
-        為核對訂單，系統會記錄 IP 與裝置資訊
-      </p>
+      <Tabs value={tab} onValueChange={(value) => setTab(String(value))}>
+        <TabsList className="w-full group-data-horizontal/tabs:h-12" aria-label="訂餐與總覽">
+          <TabsTrigger value="own" className="min-h-11">我要點餐</TabsTrigger>
+          <TabsTrigger value="overview" className="min-h-11">大家訂了什麼</TabsTrigger>
+        </TabsList>
+        <TabsContent value="own" keepMounted className="space-y-4 pt-3">
+          {participant ? (
+            <OrderStep
+              token={token}
+              group={group}
+              participant={participant}
+              readOnly={readOnly}
+              active={tab === "own"}
+              onClosed={(reason) => {
+                setForcedClosed(reason);
+                query.refetch();
+              }}
+              onSwitch={() => setSelectedId(null)}
+            />
+          ) : (
+            <ParticipantPicker
+              token={token}
+              active={tab === "own"}
+              group={group}
+              remembered={readLastParticipant(token)}
+              onChoose={choose}
+            />
+          )}
+          <p className="pt-4 text-center text-xs text-muted-foreground">
+            為核對訂單，系統會記錄 IP 與裝置資訊
+          </p>
+        </TabsContent>
+        <TabsContent value="overview" keepMounted className="pt-3">
+          <PublicOrderOverview query={overview} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
+}
+
+function closingReason(group: Pick<PublicGroup, "status" | "acceptingOrders" | "deadlineAt"> | undefined, now: Date) {
+  if (!group) return null;
+  if (group.status !== "open") return "group_closed";
+  if (!group.acceptingOrders || (group.deadlineAt && new Date(group.deadlineAt).getTime() <= now.getTime())) return "deadline_passed";
+  return null;
 }

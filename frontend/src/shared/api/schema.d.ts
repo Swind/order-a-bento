@@ -316,6 +316,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/g/{token}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest noncancelled orders, without notes, prices or client metadata. */
+        get: operations["get_public_orders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/g/{token}/participants/{pid}/order": {
         parameters: {
             query?: never;
@@ -1323,6 +1340,27 @@ export interface components {
             /** Format: int64 */
             price: number;
             soldOut: boolean;
+        };
+        PublicOrderDto: {
+            lines: components["schemas"]["PublicOrderLineDto"][];
+            name: string;
+            participantId: string;
+            /** Format: date-time */
+            submittedAt: string;
+        };
+        PublicOrderLineDto: {
+            itemId: string;
+            name: string;
+            /** Format: int32 */
+            quantity: number;
+        };
+        PublicOrdersDto: {
+            acceptingOrders: boolean;
+            /** Format: date-time */
+            deadlineAt?: string | null;
+            orders: components["schemas"]["PublicOrderDto"][];
+            /** @description `open`, `closed` or `archived`. */
+            status: string;
         };
         PublicParticipantDto: {
             /** @description The effective order has at least one line. */
@@ -2716,6 +2754,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicGroupDto"];
+                };
+            };
+            /** @description Unknown or malformed share token, or unknown participant/item */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Rate limited (code rate_limited) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    get_public_orders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Share token */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicOrdersDto"];
                 };
             };
             /** @description Unknown or malformed share token, or unknown participant/item */

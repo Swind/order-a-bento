@@ -1566,6 +1566,57 @@
         }
       }
     },
+    "/api/v1/public/g/{token}/orders": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Latest noncancelled orders, without notes, prices or client metadata.",
+        "operationId": "get_public_orders",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "Share token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicOrdersDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or malformed share token, or unknown participant/item",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (code rate_limited)",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/public/g/{token}/participants/{pid}/order": {
       "get": {
         "tags": [
@@ -5832,6 +5883,84 @@
           },
           "soldOut": {
             "type": "boolean"
+          }
+        }
+      },
+      "PublicOrderDto": {
+        "type": "object",
+        "required": [
+          "participantId",
+          "name",
+          "submittedAt",
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicOrderLineDto"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PublicOrderLineDto": {
+        "type": "object",
+        "required": [
+          "itemId",
+          "name",
+          "quantity"
+        ],
+        "properties": {
+          "itemId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PublicOrdersDto": {
+        "type": "object",
+        "required": [
+          "status",
+          "acceptingOrders",
+          "orders"
+        ],
+        "properties": {
+          "acceptingOrders": {
+            "type": "boolean"
+          },
+          "deadlineAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicOrderDto"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "`open`, `closed` or `archived`."
           }
         }
       },

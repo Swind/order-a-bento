@@ -92,6 +92,35 @@ pub struct EffectiveOrderResponse {
     pub order: Option<EffectiveOrderDto>,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicOrderLineDto {
+    pub item_id: String,
+    pub name: String,
+    pub quantity: u32,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicOrderDto {
+    pub participant_id: String,
+    pub name: String,
+    #[schema(format = "date-time")]
+    pub submitted_at: String,
+    pub lines: Vec<PublicOrderLineDto>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicOrdersDto {
+    /// `open`, `closed` or `archived`.
+    pub status: String,
+    pub accepting_orders: bool,
+    #[schema(format = "date-time")]
+    pub deadline_at: Option<String>,
+    pub orders: Vec<PublicOrderDto>,
+}
+
 impl From<EffectiveOrderView> for EffectiveOrderDto {
     fn from(v: EffectiveOrderView) -> Self {
         Self {
@@ -227,6 +256,48 @@ pub async fn get_public_group(
     }))
 }
 
+/// Latest noncancelled orders, without notes, prices or client metadata.
+#[utoipa::path(get, path = "/public/g/{token}/orders", tag = TAG_PUBLIC,
+    params(("token" = String, Path, description = "Share token")),
+    responses(
+        (status = 200, body = PublicOrdersDto),
+        (status = 404, description = NOT_FOUND_DESC, body = ProblemDetails, content_type = "application/problem+json"),
+        (status = 429, description = "Rate limited (code rate_limited)", body = ProblemDetails, content_type = "application/problem+json")))]
+pub async fn get_public_orders(
+    State(state): State<AppState>,
+    _client: ClientCtx,
+    Path(token): Path<String>,
+) -> Result<Json<PublicOrdersDto>, AppError> {
+    let v = state
+        .ordering
+        .get_public_orders(&token)
+        .await
+        .map_err(ordering_error)?;
+    Ok(Json(PublicOrdersDto {
+        status: v.status.as_str().into(),
+        accepting_orders: v.accepting_orders,
+        deadline_at: v.deadline_at.map(time_text),
+        orders: v
+            .orders
+            .into_iter()
+            .map(|o| PublicOrderDto {
+                participant_id: o.participant_id.to_string(),
+                name: o.name,
+                submitted_at: time_text(o.submitted_at),
+                lines: o
+                    .lines
+                    .into_iter()
+                    .map(|l| PublicOrderLineDto {
+                        item_id: l.item_id.to_string(),
+                        name: l.name,
+                        quantity: l.quantity,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }))
+}
+
 /// A participant's current (latest) order.
 #[utoipa::path(get, path = "/public/g/{token}/participants/{pid}/order", tag = TAG_PUBLIC,
     params(
@@ -303,6 +374,7 @@ pub async fn submit_order(
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_public_group))
+        .routes(routes!(get_public_orders))
         .routes(routes!(get_effective_order))
         .routes(routes!(submit_order))
         .layer(SetResponseHeaderLayer::overriding(

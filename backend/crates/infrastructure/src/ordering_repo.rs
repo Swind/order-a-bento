@@ -12,8 +12,8 @@ use std::time::SystemTime;
 use application::ports::{
     AppendOutcome, ClientView, EffectiveOrderView, GroupListItem, GroupOrderMutation,
     GroupOrderRepo, ItemStat, ManagementReadModel, OrderLineView, OrderReadModel, ParticipantLine,
-    ParticipantRow, PortError, PortResult, RepoError, RepoResult, SettlementRepo,
-    SubmissionHistoryEntry, SubmissionRepo,
+    ParticipantRow, PortError, PortResult, PublicOrderLineView, PublicOrderOverview,
+    PublicOrderView, RepoError, RepoResult, SettlementRepo, SubmissionHistoryEntry, SubmissionRepo,
 };
 use async_trait::async_trait;
 use domain::identity::OrganizerId;
@@ -700,6 +700,59 @@ impl SqliteOrderReadModel {
 
 #[async_trait]
 impl OrderReadModel for SqliteOrderReadModel {
+    async fn public_order_overview(
+        &self,
+        token: &ShareToken,
+    ) -> PortResult<Option<PublicOrderOverview>> {
+        let mut tx = self.db.read.begin().await.map_err(port)?;
+        let row = sqlx::query_as::<_, GroupRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {GROUP_COLUMNS} FROM group_orders WHERE share_token = ?"
+        )))
+        .bind(token.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(port)?;
+        let Some(row) = row else { return Ok(None) };
+        let group = assemble_group(&mut tx, row).await?;
+        let rows = sqlx::query_as::<_, (String, String, String, String, String, i64)>(
+            "SELECT p.id, p.name, es.submitted_at, oi.id, oi.name, l.quantity \
+             FROM effective_submissions es \
+             JOIN participants p ON p.id = es.participant_id AND p.group_order_id = es.group_order_id \
+             JOIN submission_lines l ON l.submission_id = es.id \
+             JOIN offered_items oi ON oi.id = l.offered_item_id AND oi.group_order_id = es.group_order_id \
+             WHERE es.group_order_id = ? ORDER BY p.sort_order, p.id, l.line_no",
+        )
+        .bind(group.id().to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(port)?;
+        let mut orders: Vec<PublicOrderView> = Vec::new();
+        for (pid, name, submitted_at, item_id, item_name, quantity) in rows {
+            let participant_id = pid.parse().map_err(port)?;
+            if orders
+                .last()
+                .is_none_or(|o| o.participant_id != participant_id)
+            {
+                orders.push(PublicOrderView {
+                    participant_id,
+                    name,
+                    submitted_at: ts(&submitted_at)?,
+                    lines: Vec::new(),
+                });
+            }
+            orders
+                .last_mut()
+                .expect("participant just inserted")
+                .lines
+                .push(PublicOrderLineView {
+                    item_id: item_id.parse().map_err(port)?,
+                    name: item_name,
+                    quantity: quantity as u32,
+                });
+        }
+        Ok(Some(PublicOrderOverview { group, orders }))
+    }
+
     async fn ordered_participants(
         &self,
         group: GroupOrderId,
@@ -1355,6 +1408,93 @@ mod tests {
             .await
             .unwrap()
             .0
+    }
+
+    #[tokio::test]
+    async fn public_overview_snapshot_keeps_group_and_replacements_or_cancellations_together() {
+        let e = env(3).await;
+        let svc = service(&e.db, Arc::new(SystemClock));
+        let g = svc.open_group(e.org, cmd(&e, None)).await.unwrap();
+        let rm = SqliteOrderReadModel::new(e.db.clone());
+        let token = g.share_token();
+        assert!(
+            rm.public_order_overview(token)
+                .await
+                .unwrap()
+                .unwrap()
+                .orders
+                .is_empty()
+        );
+
+        // Commit a marker with each append so a mixed group/order snapshot is detectable.
+        let write = async {
+            for n in 1..=60 {
+                let cancelled = n % 3 == 0;
+                let quantity = n % 10 + 1;
+                let marker = if cancelled {
+                    "cancelled".to_owned()
+                } else {
+                    quantity.to_string()
+                };
+                let id = Uuid::now_v7().to_string();
+                let mut tx = e.db.write.begin().await.unwrap();
+                sqlx::query("UPDATE group_orders SET title = ? WHERE id = ?")
+                    .bind(marker)
+                    .bind(g.id().to_string())
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO order_submissions (id, group_order_id, participant_id, idempotency_key, submitted_by, submitted_at) VALUES (?, ?, ?, ?, 'participant', '2026-01-01T00:00:00Z')")
+                    .bind(&id).bind(g.id().to_string()).bind(g.participants()[0].id.to_string())
+                    .bind(&id).execute(&mut *tx).await.unwrap();
+                if !cancelled {
+                    for (line_no, qty) in [(0, quantity), (1, quantity + 1)] {
+                        sqlx::query("INSERT INTO submission_lines (submission_id, line_no, offered_item_id, quantity, unit_price) VALUES (?, ?, ?, ?, 100)")
+                            .bind(&id).bind(line_no).bind(g.offered_items()[line_no as usize].id.to_string())
+                            .bind(qty).execute(&mut *tx).await.unwrap();
+                    }
+                }
+                tx.commit().await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        };
+        let read = async {
+            for _ in 0..120 {
+                let v = rm.public_order_overview(token).await.unwrap().unwrap();
+                let marker = v.group.title().as_str();
+                if marker == "午餐" || marker == "cancelled" {
+                    assert!(v.orders.is_empty());
+                } else {
+                    let quantity: u32 = marker.parse().unwrap();
+                    assert_eq!(v.orders.len(), 1);
+                    let o = &v.orders[0];
+                    assert_eq!(o.participant_id, g.participants()[0].id);
+                    assert_eq!(o.lines.len(), 2);
+                    for (idx, line) in o.lines.iter().enumerate() {
+                        assert_eq!(line.item_id, g.offered_items()[idx].id);
+                        assert_eq!(line.quantity, quantity + idx as u32);
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::join!(write, read);
+        assert!(
+            rm.public_order_overview(token)
+                .await
+                .unwrap()
+                .unwrap()
+                .orders
+                .is_empty()
+        );
+        let rotated = svc.rotate_share_token(e.org, g.id()).await.unwrap();
+        assert!(rm.public_order_overview(token).await.unwrap().is_none());
+        assert!(
+            rm.public_order_overview(rotated.share_token())
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[tokio::test]

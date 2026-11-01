@@ -20,6 +20,7 @@ export type MenuItemInput = S["MenuItemInputDto"];
 export type ItemUpsertReport = S["ItemUpsertReport"];
 export type GroupOrderDetail = S["GroupOrderDetail"];
 export type PublicGroup = S["PublicGroupDto"];
+export type PublicOrderOverview = S["PublicOrdersDto"];
 export type PublicMenuItem = S["PublicMenuItemDto"];
 export type PublicParticipant = S["PublicParticipantDto"];
 export type EffectiveOrder = S["EffectiveOrderDto"];

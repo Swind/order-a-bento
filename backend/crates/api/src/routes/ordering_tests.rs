@@ -169,6 +169,259 @@ async fn submission_count(f: &Fixture) -> i64 {
 }
 
 #[tokio::test]
+async fn public_orders_are_exact_safe_latest_projection() {
+    let f = Fixture::new().await;
+    let (s, empty) = f.public_get("/orders").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        empty,
+        json!({"status": "open", "acceptingOrders": true, "deadlineAt": null, "orders": []})
+    );
+
+    let submit = |lines: Value| {
+        json!({
+            "lines": lines, "note": "private order note", "idempotencyKey": key(),
+            "client": {"deviceId": "private-device", "deviceModel": "private-model", "language": "zh-TW"}
+        })
+    };
+    assert_eq!(
+        f.submit(
+            "Bob",
+            submit(json!([{"itemId": f.item("素食"), "quantity": 2, "note": "private line note"}]))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.submit(
+            "Amy",
+            submit(json!([{"itemId": f.item("排骨飯"), "quantity": 1}]))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (s, latest) = f
+        .submit(
+            "Amy",
+            submit(json!([
+                {"itemId": f.item("雞腿飯"), "quantity": 3, "note": "secret"},
+                {"itemId": f.item("排骨飯"), "quantity": 4}
+            ])),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    sqlx::query("INSERT INTO settlements (group_order_id, participant_id, picked_up_at, paid_at, paid_amount, updated_at) VALUES (?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 730, '2026-01-01T00:00:00Z')")
+        .bind(f.group["id"].as_str().unwrap()).bind(f.pid("Amy"))
+        .execute(&f.state().db.write).await.unwrap();
+
+    let (s, v) = f.public_get("/orders").await;
+    assert_eq!(s, StatusCode::OK);
+    let keys = |v: &Value| {
+        let mut keys = v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        keys
+    };
+    assert_eq!(
+        keys(&v),
+        ["acceptingOrders", "deadlineAt", "orders", "status"]
+    );
+    let orders = v["orders"].as_array().unwrap();
+    assert_eq!(orders.len(), 2); // Cat never submitted.
+    for o in orders {
+        assert_eq!(keys(o), ["lines", "name", "participantId", "submittedAt"]);
+        for l in o["lines"].as_array().unwrap() {
+            assert_eq!(keys(l), ["itemId", "name", "quantity"]);
+        }
+    }
+    assert_eq!(
+        orders[0],
+        json!({
+            "participantId": f.pid("Amy"), "name": "Amy", "submittedAt": latest["order"]["submittedAt"],
+            "lines": [
+                {"itemId": f.item("雞腿飯"), "name": "雞腿飯", "quantity": 3},
+                {"itemId": f.item("排骨飯"), "name": "排骨飯", "quantity": 4}
+            ]
+        })
+    );
+    assert_eq!(orders[1]["participantId"], f.pid("Bob"));
+    assert_eq!(orders[1]["name"], "Bob");
+    assert_eq!(
+        orders[1]["lines"],
+        json!([{"itemId": f.item("素食"), "name": "素食", "quantity": 2}])
+    );
+
+    assert_eq!(f.submit("Amy", submit(json!([]))).await.0, StatusCode::OK);
+    let (_, v) = f.public_get("/orders").await;
+    assert_eq!(v["orders"].as_array().unwrap().len(), 1);
+    assert_eq!(v["orders"][0]["participantId"], f.pid("Bob"));
+    assert_eq!(
+        f.submit(
+            "Amy",
+            submit(json!([{"itemId": f.item("素食"), "quantity": 5}]))
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, v) = f.public_get("/orders").await;
+    assert_eq!(v["orders"].as_array().unwrap().len(), 2);
+    assert_eq!(v["orders"][0]["lines"][0]["quantity"], 5);
+}
+
+#[tokio::test]
+async fn public_orders_token_isolation_rotation_and_headers() {
+    let f = Fixture::new().await;
+    let other = Fixture::from_client(f.c.other().await).await;
+    assert_eq!(
+        f.submit(
+            "Amy",
+            json!({"lines": [{"itemId": f.item("素食"), "quantity": 1}], "idempotencyKey": key()})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(other.public_get("/orders").await.1["orders"], json!([]));
+    let (s, rotated) =
+        f.c.post(
+            &format!(
+                "/group-orders/{}/share-token/rotate",
+                f.group["id"].as_str().unwrap()
+            ),
+            json!({}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{rotated}");
+    let token = rotated["shareUrl"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    for (token, expected) in [
+        ("short", StatusCode::NOT_FOUND),
+        (
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            StatusCode::NOT_FOUND,
+        ),
+        (f.token.as_str(), StatusCode::NOT_FOUND),
+        (token, StatusCode::OK),
+    ] {
+        let (s, v, h) = send(
+            &f.c.app,
+            "GET",
+            &format!("/api/v1/public/g/{token}/orders"),
+            None,
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(s, expected, "{v}");
+        assert_eq!(h["x-robots-tag"], "noindex");
+        assert_eq!(h[header::CACHE_CONTROL], "no-store");
+        if s == StatusCode::OK {
+            assert_eq!(v["orders"].as_array().unwrap().len(), 1);
+            assert_eq!(v["orders"][0]["participantId"], f.pid("Amy"));
+        } else {
+            assert_eq!(v["code"], "not_found");
+        }
+    }
+}
+
+#[tokio::test]
+async fn public_orders_remain_readable_when_writes_are_blocked() {
+    let f = Fixture::new().await;
+    let body =
+        || json!({"lines": [{"itemId": f.item("素食"), "quantity": 1}], "idempotencyKey": key()});
+    assert_eq!(f.submit("Amy", body()).await.0, StatusCode::OK);
+    let orders = f.public_get("/orders").await.1["orders"].clone();
+    for (status, deadline, sold_out, accepting, code) in [
+        ("open", None, true, true, "sold_out"),
+        (
+            "open",
+            Some("2020-01-01T00:00:00Z"),
+            false,
+            false,
+            "deadline_passed",
+        ),
+        ("closed", None, false, false, "group_closed"),
+        ("archived", None, false, false, "group_closed"),
+    ] {
+        sqlx::query("UPDATE group_orders SET status = ?, deadline_at = ? WHERE id = ?")
+            .bind(status)
+            .bind(deadline)
+            .bind(f.group["id"].as_str().unwrap())
+            .execute(&f.state().db.write)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE offered_items SET sold_out = ?")
+            .bind(sold_out)
+            .execute(&f.state().db.write)
+            .await
+            .unwrap();
+        let (s, v) = f.public_get("/orders").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(
+            v,
+            json!({"status": status, "acceptingOrders": accepting, "deadlineAt": deadline, "orders": orders})
+        );
+        let (s, v) = f.submit("Bob", body()).await;
+        assert_eq!(s, StatusCode::CONFLICT);
+        assert_eq!(v["code"], code);
+    }
+}
+
+#[tokio::test]
+async fn public_orders_share_public_rate_limit() {
+    let t = test_app_with(
+        true,
+        false,
+        vec![],
+        RateLimitConfig {
+            burst: 1,
+            per_sec: 0.001,
+        },
+    )
+    .await;
+    let f = Fixture::from_client(client_for(t).await).await;
+    assert_eq!(
+        send(&f.c.app, "GET", &f.base(), None, Some("192.0.2.8"), &[])
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (s, v, h) = send(
+        &f.c.app,
+        "GET",
+        &format!("{}/orders", f.base()),
+        None,
+        Some("192.0.2.8"),
+        &[],
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(v["code"], "rate_limited");
+    assert!(h.contains_key(header::RETRY_AFTER));
+    assert_eq!(h["x-robots-tag"], "noindex");
+    assert_eq!(h[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        send(
+            &f.c.app,
+            "GET",
+            &format!("{}/orders", f.base()),
+            None,
+            Some("192.0.2.9"),
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn organizer_group_detail_and_scoping() {
     let f = Fixture::new().await;
     let g = &f.group;
@@ -740,6 +993,15 @@ fn openapi_documents_the_ordering_endpoints() {
     assert!(paths["/api/v1/group-orders"]["post"].is_object());
     assert!(paths["/api/v1/group-orders/{id}"]["get"].is_object());
     assert!(paths["/api/v1/public/g/{token}"]["get"].is_object());
+    let overview = &paths["/api/v1/public/g/{token}/orders"]["get"];
+    assert_eq!(overview["tags"][0], "public");
+    assert_eq!(
+        overview["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/PublicOrdersDto"
+    );
+    for name in ["PublicOrdersDto", "PublicOrderDto", "PublicOrderLineDto"] {
+        assert!(doc["components"]["schemas"][name].is_object(), "{name}");
+    }
     assert!(paths["/api/v1/public/g/{token}/participants/{pid}/order"]["get"].is_object());
     assert!(paths["/api/v1/public/g/{token}/participants/{pid}/submissions"]["post"].is_object());
     assert_eq!(

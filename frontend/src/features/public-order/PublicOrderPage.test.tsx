@@ -148,6 +148,24 @@ describe("PublicOrderPage", () => {
     expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
   });
 
+  it("does not start a prepared submission after cutoff unmounts its editor", async () => {
+    localStorage.setItem(`bento:last:${TOKEN}`, "p3");
+    let prepare!: (client: Awaited<ReturnType<typeof deviceInfo.collectClientInfo>>) => void;
+    const client = await deviceInfo.collectClientInfo();
+    const spy = vi.spyOn(deviceInfo, "collectClientInfo").mockImplementationOnce(() => new Promise((resolve) => { prepare = resolve; }));
+    const { queryClient } = renderApp(`/g/${TOKEN}`);
+    await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
+    await userEvent.click(screen.getByRole("button", { name: "送出訂單" }));
+    expect(spy).toHaveBeenCalledTimes(1);
+    group = { ...base, status: "closed", acceptingOrders: false };
+    await act(() => queryClient.invalidateQueries({ queryKey: ["public-group", TOKEN] }));
+    await screen.findByText("你沒有訂餐");
+    await act(async () => prepare(client));
+    expect(submitted).toHaveLength(0);
+    expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+
   it("blocks stale cutoff summaries on read failure and supports retry", async () => {
     localStorage.setItem(`bento:last:${TOKEN}`, "p1");
     const { queryClient } = renderApp(`/g/${TOKEN}`);
@@ -542,8 +560,8 @@ describe("PublicOrderPage", () => {
     server.use(http.get(`*/api/v1/public/g/${TOKEN}`, () => problem(status, status === 404 ? "not_found" : "forbidden")));
     await act(() => queryClient.invalidateQueries({ queryKey: ["public-group", TOKEN] }));
     expect(await screen.findByRole("alert")).toHaveTextContent(status === 404 ? "這個訂購連結無效或已失效" : "你目前無權限查看或使用這個訂購連結");
-    // Cached data still exists: authorization, not the absence of a cache, must block the UI.
-    expect(queryClient.getQueryData(["public-group", TOKEN])).toEqual(base);
+    // Revocation clears this token's cached success as well as blocking both tabs.
+    await waitFor(() => expect(queryClient.getQueryData(["public-group", TOKEN])).toBeUndefined());
     expect(screen.getByText("請向開團的人確認連結及存取權限。")).toBeInTheDocument();
     expect(screen.queryByText(/保留目前選餐/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /儲存修改|送出訂單|取消我的訂單|確定取消/ })).not.toBeInTheDocument();

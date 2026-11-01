@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::ports::{
     AppendOutcome, Clock, EffectiveOrderView, GroupListItem, GroupOrderRepo, ItemStat,
-    ManagementReadModel, OrderReadModel, ParticipantRow, PortError, RepoError, RosterRepo,
-    SettlementRepo, SubmissionHistoryEntry, SubmissionRepo, TokenGenerator, VendorRepo,
+    ManagementReadModel, OrderReadModel, ParticipantRow, PortError, PublicOrderView, RepoError,
+    RosterRepo, SettlementRepo, SubmissionHistoryEntry, SubmissionRepo, TokenGenerator, VendorRepo,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +134,13 @@ pub struct PublicGroupView {
     pub accepting_orders: bool,
 }
 
+pub struct PublicOrdersView {
+    pub status: GroupOrderStatus,
+    pub accepting_orders: bool,
+    pub deadline_at: Option<SystemTime>,
+    pub orders: Vec<PublicOrderView>,
+}
+
 pub struct OrderingService {
     pub delivery_addresses: Arc<dyn crate::ports::DeliveryAddressRepo>,
     pub groups: Arc<dyn GroupOrderRepo>,
@@ -226,6 +233,21 @@ impl OrderingService {
             group,
             ordered,
             accepting_orders,
+        })
+    }
+
+    pub async fn get_public_orders(&self, token: &str) -> Result<PublicOrdersView, OrderingError> {
+        let token = ShareToken::parse(token).map_err(|_| OrderingError::NotFound)?;
+        let v = self
+            .read_model
+            .public_order_overview(&token)
+            .await?
+            .ok_or(OrderingError::NotFound)?;
+        Ok(PublicOrdersView {
+            status: v.group.status(),
+            accepting_orders: v.group.accepts_orders(self.clock.now()),
+            deadline_at: v.group.deadline_at(),
+            orders: v.orders,
         })
     }
 
