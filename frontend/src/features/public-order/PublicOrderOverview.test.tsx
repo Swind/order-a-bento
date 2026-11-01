@@ -85,7 +85,7 @@ it("needs no identity, renders only safe fields, handles empty data and refreshe
   await waitFor(() => expect(groupReads).toBe(4));
 });
 
-it("keeps draft, expanded notes and retry idempotency across tabs, cleans up the bar and does not steal tab focus", async () => {
+it.each(["new", "editing"])("keeps %s draft, expanded notes and retry idempotency across tabs, cleans up the bar and does not steal tab focus", async (mode) => {
   const barObservers: { disconnect: ReturnType<typeof vi.fn> }[] = [];
   vi.stubGlobal("ResizeObserver", class {
     disconnect = vi.fn();
@@ -94,19 +94,23 @@ it("keeps draft, expanded notes and retry idempotency across tabs, cleans up the
     }
   });
   localStorage.setItem(`bento:last:${token}`, "p1");
+  if (mode === "editing") server.use(http.get(`${url}/participants/p1/order`, () => HttpResponse.json({ order: {
+    ...saved.order, note: null, lines: saved.order.lines.map((line) => ({ ...line, note: null })),
+  } })));
   renderApp(`/g/${token}`);
+  if (mode === "editing") await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
   await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
   await userEvent.click(screen.getByRole("button", { name: "＋備註" }));
   await userEvent.type(screen.getByLabelText("排骨飯 備註"), "不辣");
   await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "晚點拿");
-  await userEvent.click(screen.getByRole("button", { name: "送出訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: mode === "editing" ? "儲存修改" : "送出訂單" }));
   await waitFor(() => expect(posts).toHaveLength(1));
-  await waitFor(() => expect(screen.getByRole("button", { name: "送出訂單" })).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", { name: mode === "editing" ? "儲存修改" : "送出訂單" })).toBeEnabled());
   const note = screen.getByLabelText("排骨飯 備註");
   expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toMatch(/px$/);
   expect(barObservers).toHaveLength(1);
   await openOverview();
-  await screen.findByText("排骨飯 ×1");
+  await within(screen.getByRole("tabpanel", { name: "大家訂了什麼" })).findByText("排骨飯 ×1");
   expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
   expect(document.querySelector('[aria-label="訂單送出操作"]')).toBeNull();
   expect(barObservers[0].disconnect).toHaveBeenCalledTimes(1);
@@ -117,12 +121,43 @@ it("keeps draft, expanded notes and retry idempotency across tabs, cleans up the
   expect(screen.getByLabelText("排骨飯 備註")).toBe(note);
   expect(note).toHaveValue("不辣");
   expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("晚點拿");
-  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("1");
+  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent(mode === "editing" ? "2" : "1");
   expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toMatch(/px$/);
   expect(barObservers).toHaveLength(2);
-  await userEvent.click(screen.getByRole("button", { name: "送出訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: mode === "editing" ? "儲存修改" : "送出訂單" }));
   await waitFor(() => expect(posts).toHaveLength(2));
   expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
+});
+
+it.each([false, true])("keeps remembered summary across tabs and remeasures only on entering editing (cancelled: %s)", async (cancelled) => {
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  vi.stubGlobal("ResizeObserver", class {
+    observe(element: Element) { if (element.getAttribute("aria-label") === "訂單送出操作") observe(element); }
+    disconnect = disconnect;
+  });
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  server.use(http.get(`${url}/participants/p1/order`, () => HttpResponse.json(cancelled ? { order: {
+    ...saved.order, cancelled: true, lines: [], total: 0, note: null,
+  } } : saved)));
+  renderApp(`/g/${token}`);
+  await screen.findByRole("button", { name: cancelled ? "重新訂餐" : "修改訂單" });
+  expect(observe).not.toHaveBeenCalled();
+  expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
+  await openOverview();
+  await userEvent.click(ownTab());
+  expect(ownTab()).toHaveFocus();
+  expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: cancelled ? "重新訂餐" : "修改訂單" }));
+  await waitFor(() => expect(screen.getByRole("heading", { name: cancelled ? "選擇餐點" : "修改訂單" })).toHaveFocus());
+  expect(observe).toHaveBeenCalledTimes(1);
+  expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toMatch(/px$/);
+  await userEvent.click(screen.getByRole("button", { name: "放棄修改" }));
+  expect(disconnect).toHaveBeenCalled();
+  expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
+  await userEvent.click(screen.getByRole("button", { name: cancelled ? "重新訂餐" : "修改訂單" }));
+  expect(observe).toHaveBeenCalledTimes(2);
+  expect(posts).toHaveLength(0);
 });
 
 it("shows loading and stale successful data/time after 5xx, not a false empty state", async () => {

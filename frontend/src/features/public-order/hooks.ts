@@ -104,13 +104,17 @@ export function useSubmitOrder(token: string, pid: string) {
   return useMutation({
     mutationKey: orderSubmissionKey(token, pid),
     onMutate: () => qc.cancelQueries({ queryKey, exact: true }),
-    mutationFn: (body: SubmitOrderBody) => request(async () =>
-      unwrap(
+    mutationFn: (body: SubmitOrderBody) => request(async () => {
+      const data = await unwrap(
         await api.POST("/api/v1/public/g/{token}/participants/{pid}/submissions", {
           params: { path: { token, pid } },
           body,
         }),
-      )),
+      );
+      // A successful write must include its authoritative snapshot; never cache a false empty order.
+      if (!data.order) throw new Error("未取得已儲存的訂單，請重試");
+      return data;
+    }),
     onSuccess: async (data) => {
       // Cutoff can start another GET while POST is pending. Cancel it before publishing success.
       await qc.cancelQueries({ queryKey, exact: true });

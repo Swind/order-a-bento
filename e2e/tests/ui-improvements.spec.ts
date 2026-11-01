@@ -147,6 +147,7 @@ for (const width of [320, 390, 768, 1280]) {
     await origin.click();
     await dialog.getByRole("button", { name: "是我", exact: true }).click();
     await expect(page.getByRole("heading", { name: last })).toBeFocused();
+    await page.getByRole("button", { name: "修改訂單", exact: true }).click();
     await page.getByRole("button", { name: `減少 ${meal}` }).focus();
     await page.keyboard.press("Enter");
     await page.getByLabel("訂單備註（選填）").fill("尚未送出的第一行\n尚未送出的第二行");
@@ -214,6 +215,11 @@ for (const width of [320, 390, 768, 1280]) {
     expect(requests).toBe(1);
     await expect(cancel).toHaveCount(0);
     await expect(page.getByRole("status")).toBeFocused();
+    await expect(page.getByRole("status")).toHaveText("你的訂單已取消");
+    await expect(page.getByRole("region", { name: "訂單送出操作" })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--order-bar-h"))).toBe("");
+    await page.screenshot({ path: info.outputPath("public-cancelled-viewport.png") });
+    await page.getByRole("button", { name: "重新訂餐", exact: true }).click();
     await expect(page.getByLabel("訂單備註（選填）")).toHaveValue("");
     await expect(page.getByRole("button", { name: "送出訂單", exact: true })).toBeDisabled();
     expect(await expectFixedBar(page)).toBeCloseTo(barHeight, 0);
@@ -221,7 +227,8 @@ for (const width of [320, 390, 768, 1280]) {
 
     await page.getByRole("button", { name: `增加 ${meal}` }).click();
     await page.getByRole("button", { name: "送出訂單", exact: true }).click();
-    await expect(page.getByRole("button", { name: "訂單已送出", exact: true })).toBeDisabled();
+    await expect(page.getByRole("status")).toHaveText("訂單已送出");
+    await page.getByRole("button", { name: "修改訂單", exact: true }).click();
     await page.getByRole("button", { name: `增加 ${meal}` }).click();
 
     // Server closes while this client still has an editable draft: exercise real 409 handling.
@@ -322,7 +329,8 @@ test("share fallback, zero stats and failed cancellation preserve an empty draft
   await page.getByRole("button", { name: "重試訂餐者", exact: true }).click();
   await page.getByRole("button", { name: "增加 重試餐點" }).click();
   await page.getByRole("button", { name: "送出訂單", exact: true }).click();
-  await expect(page.getByRole("button", { name: "訂單已送出" })).toBeDisabled();
+  await expect(page.getByRole("status")).toHaveText("訂單已送出");
+  await page.getByRole("button", { name: "修改訂單", exact: true }).click();
   await page.getByRole("button", { name: "減少 重試餐點" }).click();
   await expect(page.getByRole("button", { name: "儲存修改" })).toBeDisabled();
   const cancel = page.getByRole("button", { name: "取消我的訂單", exact: true });
@@ -357,6 +365,7 @@ test("deadline timer discards draft and performs a fresh persisted-order read", 
   await page.goto(group.shareUrl);
   await page.getByRole("button", { name: /截止測試者/ }).click();
   await page.getByRole("dialog").getByRole("button", { name: "是我", exact: true }).click();
+  await page.getByRole("button", { name: "修改訂單", exact: true }).click();
   await page.getByRole("button", { name: "增加 快照餐點" }).click();
   await expect(page.getByRole("status")).toHaveText("有尚未送出的修改");
   let freshReads = 0;

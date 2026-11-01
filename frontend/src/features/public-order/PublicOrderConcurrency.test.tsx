@@ -13,9 +13,9 @@ function deferred() {
 }
 
 const snapshot = (quantity: number) => ({ order: {
-  submissionId: `s${quantity}`, submittedAt: "2026-05-01T02:02:00Z", cancelled: false, note: null,
+  submissionId: `s${quantity}`, submittedAt: "2026-05-01T02:02:00Z", cancelled: quantity === 0, note: null,
   total: quantity * 100,
-  lines: [{ itemId: "i1", name: "排骨飯", quantity, unitPrice: 100, subtotal: quantity * 100, note: null }],
+  lines: quantity ? [{ itemId: "i1", name: "排骨飯", quantity, unitPrice: 100, subtotal: quantity * 100, note: null }] : [],
 } });
 
 beforeEach(() => localStorage.clear());
@@ -44,6 +44,7 @@ it("exits mutation loading when post-success cutoff revalidation fails and retri
     }),
   );
   const { queryClient } = renderApp("/g/retry");
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
   await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
   await userEvent.click(screen.getByRole("button", { name: "儲存修改" }));
   await waitFor(() => expect(postStarted).toBe(true));
@@ -103,6 +104,7 @@ it.each(["read-first", "write-first"])("cutoff revalidates the last persisted su
   );
 
   const { queryClient } = renderApp("/g/race");
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
   await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
   await userEvent.click(screen.getByRole("button", { name: "儲存修改" }));
   await waitFor(() => expect(postStarted).toBe(true));
@@ -146,6 +148,240 @@ const overviewSnapshot = (quantity: number) => ({ status: "open", acceptingOrder
     lines: [{ itemId: "i1", name: "排骨飯", quantity }] }] : [],
 });
 
+it.each(["success", "error", "null"])("keeps local editing locked through POST %s and deferred settlement, then uses latest persisted data", async (outcome) => {
+  const token = "editing-race";
+  const url = `*/api/v1/public/g/${token}`;
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  const post = deferred();
+  const settlement = deferred();
+  let postStarted = false;
+  let settled = false;
+  let readStarted = false;
+  const submittedSnapshot = { order: {
+    ...snapshot(2).order, note: "本機整單草稿",
+    lines: snapshot(2).order.lines.map((line) => ({ ...line, note: "本機品項草稿" })),
+  } };
+  server.use(
+    http.get(url, () => HttpResponse.json(overviewGroup)),
+    http.get(`${url}/participants/p1/order`, async () => {
+      if (!settled) return HttpResponse.json(snapshot(1));
+      readStarted = true;
+      await settlement.promise;
+      return HttpResponse.json(snapshot(5));
+    }),
+    http.post(`${url}/participants/p1/submissions`, async () => {
+      postStarted = true;
+      await post.promise;
+      settled = true;
+      return outcome === "error" ? problem(500, "internal_error") : HttpResponse.json(outcome === "null" ? { order: null } : submittedSnapshot);
+    }),
+  );
+  const { queryClient } = renderApp(`/g/${token}`);
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: "增加 排骨飯" }));
+  await userEvent.click(screen.getByRole("button", { name: "＋備註" }));
+  await userEvent.type(screen.getByLabelText("排骨飯 備註"), "本機品項草稿");
+  await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "本機整單草稿");
+  const note = screen.getByLabelText("排骨飯 備註");
+  await userEvent.click(screen.getByRole("button", { name: "儲存修改" }));
+  await waitFor(() => expect(postStarted).toBe(true));
+  expect(screen.queryByRole("region", { name: "已送出訂單" })).not.toBeInTheDocument();
+  await act(async () => post.resolve());
+  await waitFor(() => expect(readStarted).toBe(true));
+  // POST onSuccess has rendered its cache value, but mutateAsync is still awaiting GET settlement.
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toEqual(outcome === "success" ? submittedSnapshot : snapshot(1));
+  expect(queryClient.isMutating({ mutationKey: orderSubmissionKey(token, "p1") })).toBe(1);
+  expect(screen.queryByRole("button", { name: "修改訂單" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "送出中…" })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent("處理訂單中…");
+  expect(screen.getByRole("button", { name: "放棄修改" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "取消我的訂單" })).toBeDisabled();
+  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+  expect(screen.getByLabelText("排骨飯 備註")).toBe(note);
+  expect(note).toHaveValue("本機品項草稿");
+  expect(note).toBeDisabled();
+  expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("本機整單草稿");
+  await act(async () => settlement.resolve());
+  await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toEqual(snapshot(5));
+  if (outcome !== "success") {
+    expect(await screen.findByRole("alert")).toHaveTextContent(outcome === "null" ? "發生未預期的錯誤，請稍後再試" : "伺服器發生錯誤");
+    expect(screen.getByLabelText("排骨飯 備註")).toBe(note);
+    expect(note).toHaveValue("本機品項草稿");
+    expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("本機整單草稿");
+    expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+    // Discard is read-only: do not put the pre-edit snapshot back into the server cache.
+    await userEvent.click(screen.getByRole("button", { name: "放棄修改" }));
+  }
+  expect(await screen.findByText("總額 $500")).toBeInTheDocument();
+  expect(screen.getByText("排骨飯 ×5")).toBeInTheDocument();
+  expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
+  await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+  await userEvent.click(screen.getByRole("button", { name: "修改訂單" }));
+  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("5");
+  expect(screen.queryByLabelText("排骨飯 備註")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("");
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toEqual(snapshot(5));
+});
+
+it("discards into the current refetched order without a write, invalidation or stale cache overwrite", async () => {
+  const token = "discard-race";
+  const url = `*/api/v1/public/g/${token}`;
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  const refresh = deferred();
+  let reads = 0;
+  let started = false;
+  let posts = 0;
+  server.use(
+    http.get(url, () => HttpResponse.json(overviewGroup)),
+    http.get(`${url}/participants/p1/order`, async () => {
+      if (++reads === 1) return HttpResponse.json(snapshot(1));
+      started = true;
+      await refresh.promise;
+      return HttpResponse.json(snapshot(7));
+    }),
+    http.post(`${url}/participants/p1/submissions`, () => { posts++; return HttpResponse.json(snapshot(99)); }),
+  );
+  const { queryClient } = renderApp(`/g/${token}`);
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: "增加 排骨飯" }));
+  await userEvent.type(screen.getByLabelText("訂單備註（選填）"), "不可覆蓋新快照");
+  let refetch!: Promise<void>;
+  act(() => { refetch = queryClient.invalidateQueries({ queryKey: effectiveOrderKey(token, "p1") }); });
+  await waitFor(() => expect(started).toBe(true));
+  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+  await act(async () => { refresh.resolve(); await refetch; });
+  expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("不可覆蓋新快照");
+  await userEvent.click(screen.getByRole("button", { name: "放棄修改" }));
+  expect(await screen.findByText("總額 $700")).toBeInTheDocument();
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toEqual(snapshot(7));
+  await userEvent.click(screen.getByRole("button", { name: "修改訂單" }));
+  expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("7");
+  expect(screen.getByLabelText("訂單備註（選填）")).toHaveValue("");
+  expect(reads).toBe(2);
+  expect(posts).toBe(0);
+});
+
+it.each([0, 8])("does not expose cancellation completion from summary until settlement returns latest quantity %s", async (quantity) => {
+  const token = "summary-cancel-race";
+  const url = `*/api/v1/public/g/${token}`;
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  const post = deferred();
+  const settlement = deferred();
+  let started = false;
+  let posted = false;
+  let reading = false;
+  server.use(
+    http.get(url, () => HttpResponse.json(overviewGroup)),
+    http.get(`${url}/participants/p1/order`, async () => {
+      if (!posted) return HttpResponse.json(snapshot(1));
+      reading = true;
+      await settlement.promise;
+      return HttpResponse.json(snapshot(quantity));
+    }),
+    http.post(`${url}/participants/p1/submissions`, async () => {
+      started = true;
+      await post.promise;
+      posted = true;
+      return HttpResponse.json(snapshot(0));
+    }),
+  );
+  const { queryClient } = renderApp(`/g/${token}`);
+  await userEvent.click(await screen.findByRole("button", { name: "取消我的訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: "確定取消" }));
+  await waitFor(() => expect(started).toBe(true));
+  await act(async () => post.resolve());
+  await waitFor(() => expect(reading).toBe(true));
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toEqual(snapshot(0));
+  expect(screen.getByRole("dialog", { name: "確認取消訂單" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "取消中…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保留" })).toBeDisabled();
+  expect(screen.queryByText("你的訂單已取消")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "重新訂餐", hidden: true })).not.toBeInTheDocument();
+  expect(screen.getByRole("status", { hidden: true })).toHaveTextContent("處理訂單中…");
+  expect(screen.getByRole("status", { hidden: true })).not.toHaveClass("bg-green-50");
+  expect(screen.getByRole("status", { hidden: true }).querySelector("svg")).toBeNull();
+  await act(async () => settlement.resolve());
+  await screen.findByRole("button", { name: quantity ? "修改訂單" : "重新訂餐" });
+  expect(screen.getByRole("status")).toHaveTextContent(quantity ? "訂單已送出" : "你的訂單已取消");
+  await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+  if (quantity) expect(screen.getByText("總額 $800")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+});
+
+it("keeps the confirmed POST snapshot with a visible refresh error when open settlement GET fails", async () => {
+  const token = "open-refresh-error";
+  const url = `*/api/v1/public/g/${token}`;
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  const post = deferred();
+  let started = false;
+  let saved = snapshot(1);
+  let failReads = false;
+  server.use(
+    http.get(url, () => HttpResponse.json(overviewGroup)),
+    http.get(`${url}/participants/p1/order`, () => failReads ? problem(500, "internal_error") : HttpResponse.json(saved)),
+    http.post(`${url}/participants/p1/submissions`, async () => {
+      started = true;
+      await post.promise;
+      saved = snapshot(4);
+      failReads = true;
+      return HttpResponse.json(saved);
+    }),
+  );
+  renderApp(`/g/${token}`);
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: "增加 排骨飯" }));
+  await userEvent.click(screen.getByRole("button", { name: "儲存修改" }));
+  await waitFor(() => expect(started).toBe(true));
+  await act(async () => post.resolve());
+  await screen.findByRole("button", { name: "修改訂單" });
+  expect(screen.getByRole("alert")).toHaveTextContent("伺服器發生錯誤");
+  expect(screen.getByText("總額 $400")).toBeInTheDocument();
+  expect(screen.getByText("排骨飯 ×4")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+  failReads = false;
+  saved = snapshot(6);
+  await userEvent.click(screen.getByRole("button", { name: "重試" }));
+  expect(await screen.findByText("總額 $600")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("does not revive ordering or cache after a late successful POST following revocation", async () => {
+  const token = "late-post-revoked";
+  const url = `*/api/v1/public/g/${token}`;
+  localStorage.setItem(`bento:last:${token}`, "p1");
+  const post = deferred();
+  let started = false;
+  let returned = false;
+  let denied = false;
+  server.use(
+    http.get(url, () => denied ? problem(403, "forbidden") : HttpResponse.json(overviewGroup)),
+    http.get(`${url}/participants/p1/order`, () => HttpResponse.json(snapshot(1))),
+    http.post(`${url}/participants/p1/submissions`, async () => {
+      started = true;
+      await post.promise;
+      returned = true;
+      return HttpResponse.json(snapshot(8));
+    }),
+  );
+  const { queryClient } = renderApp(`/g/${token}`);
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
+  await userEvent.click(screen.getByRole("button", { name: "增加 排骨飯" }));
+  await userEvent.click(screen.getByRole("button", { name: "儲存修改" }));
+  await waitFor(() => expect(started).toBe(true));
+  denied = true;
+  await act(() => queryClient.invalidateQueries({ queryKey: publicGroupKey(token) }));
+  await screen.findByText("請向開團的人確認連結及存取權限。");
+  await act(async () => post.resolve());
+  await waitFor(() => expect(returned).toBe(true));
+  await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "已送出訂單" })).not.toBeInTheDocument();
+  expect(queryClient.getQueryData(effectiveOrderKey(token, "p1"))).toBeUndefined();
+  expect(queryClient.getQueryData(publicGroupKey(token))).toBeUndefined();
+  expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
+});
+
 it.each(["success", "failure", "cancel"])("cancels a pre-settlement overview GET after POST %s and rejects its late snapshot", async (outcome) => {
   localStorage.setItem("bento:last:overview-race", "p1");
   const post = deferred();
@@ -180,6 +416,7 @@ it.each(["success", "failure", "cancel"])("cancels a pre-settlement overview GET
     }),
   );
   const { queryClient } = renderApp("/g/overview-race");
+  await userEvent.click(await screen.findByRole("button", { name: "修改訂單" }));
   await userEvent.click(await screen.findByRole("button", { name: "增加 排骨飯" }));
   if (outcome === "cancel") {
     await userEvent.click(screen.getByRole("button", { name: "取消我的訂單" }));
@@ -189,6 +426,8 @@ it.each(["success", "failure", "cancel"])("cancels a pre-settlement overview GET
   act(() => screen.getByRole("tab", { name: "大家訂了什麼", hidden: true }).click());
   await waitFor(() => expect(oldStarted).toBe(true));
   expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeNull();
+  const activeTab = screen.getByRole("tab", { name: "大家訂了什麼" });
+  activeTab.focus();
   await act(async () => post.resolve());
   await waitFor(() => expect(oldAborted).toBe(true));
   const panel = screen.getByRole("tabpanel", { name: "大家訂了什麼" });
@@ -198,9 +437,17 @@ it.each(["success", "failure", "cancel"])("cancels a pre-settlement overview GET
   await waitFor(() => expect(oldReturned).toBe(true));
   expect(queryClient.getQueryData(publicOrdersKey("overview-race"))).toEqual(overviewSnapshot(quantity));
   expect(reads).toBe(2);
+  expect(activeTab).toHaveFocus();
   if (outcome === "failure") {
     await userEvent.click(screen.getByRole("tab", { name: "我要點餐" }));
     expect(screen.getByRole("group", { name: "排骨飯 數量" })).toHaveTextContent("2");
+  } else {
+    expect(document.activeElement?.closest('[data-slot="tabs-content"][hidden]')).toBeNull();
+    await userEvent.click(screen.getByRole("tab", { name: "我要點餐" }));
+    expect(screen.getByRole("tab", { name: "我要點餐" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: outcome === "cancel" ? "重新訂餐" : "修改訂單" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "訂單送出操作" })).not.toBeInTheDocument();
+    expect(document.documentElement.style.getPropertyValue("--order-bar-h")).toBe("");
   }
 });
 

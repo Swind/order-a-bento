@@ -206,6 +206,7 @@ function OrderStep({
       {order.isError && (
         <div className="space-y-2">
           <p role="alert" className="text-destructive">
+            {order.data && "訂單資料更新失敗，暫顯示上次資料並保留草稿。"}
             {errorMessage(order.error)}
           </p>
           <Button variant="outline" className="h-11" onClick={() => order.refetch()}>
