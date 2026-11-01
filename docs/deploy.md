@@ -163,7 +163,21 @@ AI 匯入也可走 OpenAI Chat Completions（`POST {AI_BASE_URL}/v1/chat/complet
 - 模型回傳的 `reasoning_content`（DeepSeek 的 thinking）會在同一次 run 的後續呼叫原樣送回，其餘 assistant 訊息帶空的 `reasoning_content`，DeepSeek 系列要求如此。
 - 逾時預設與 `anthropic-compatible` 相同（180／300 秒）。
 - 錯誤：401/403 顯示為「authentication failed」；圖片被伺服器判定無法解碼的 400 視為「圖片無效」；429／5xx／連線錯誤視為可重試。
-- opencode Go（`https://opencode.ai/zen/go`）要求每個請求帶 `x-opencode-session`，否則回 `400 MissingSessionID`；請設 `AI_SESSION_HEADER=x-opencode-session`（每次匯入一個 id）。該站位於 Cloudflare 後面，非瀏覽器的 User-Agent（如 Python urllib）會被擋（`403 error code: 1010`），後端使用的 reqwest 不受影響。
+- OpenCode Go 的 base URL／session 設定見下節；不要把舊 `/zen/go` alias 當成官方 0.46.0 的新設定。
+
+#### OpenCode Go（官方 rig 0.46.0）
+
+官方 [0.46.0 release](https://github.com/0xPlaygrounds/rig/releases/tag/v0.46.0) 已加入 `providers::opencode`。核對該 tag 的 [provider 說明](https://github.com/0xPlaygrounds/rig/blob/v0.46.0/crates/rig-core/src/providers/opencode.rs) 與 [三種 wire 測試](https://github.com/0xPlaygrounds/rig/blob/v0.46.0/crates/rig-core/src/providers/opencode/tests.rs)：
+
+| `AI_PROVIDER` | `AI_BASE_URL`（不含最後的 `/v1/...`） | 官方 catalog 的模型例子 |
+|---|---|---|
+| `anthropic-compatible` | `https://opencode.ai/inference/go/anthropic` | `claude-haiku-5-5`（請確認目前 Go 帳戶可用） |
+| `openai-compatible` | `https://opencode.ai/inference/go/openai` | `glm-5.3` |
+| `openai-responses` | `https://opencode.ai/inference/go/openai` | `gpt-6-luna` |
+
+三種都設 `AI_API_KEY`、`AI_MODEL`、`AI_SESSION_HEADER=x-opencode-session`、`AI_FALLBACKS=off`；建議先用 `AI_STRICT_TOOLS=false`、`AI_REASONING=off`（compatible 預設值）。匯入模型還必須支援圖片與 tools；列在 catalog 不代表帳戶能用或已通過本專案辨識評測。模型接受的 API 請以 Go 當前服務為準。
+
+本專案沿用現有 compatible providers，無新增 `AI_PROVIDER=opencode-go`：它們已能直連同一 endpoint，並透過既有 session header 每次匯入共用 run id。與官方專用 client 的差異是本專案明確選 wire、不使用 catalog 自動選路由，session 也由設定明確啟用。`AI_MAX_TOKENS` 仍控制每次 model call（Messages／Chat：`max_tokens`；Responses：`max_output_tokens`）。升級只以本機 mock 驗證三個完整 prefix、圖片／tools 多輪、usage、token budget 與 session header，**未呼叫 Go、未驗證帳戶權限／影像品質或舊 alias 是否仍可用**。
 
 #### Responses API（`AI_PROVIDER=openai-responses`）
 

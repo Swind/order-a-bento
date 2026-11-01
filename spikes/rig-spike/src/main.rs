@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 
 use mock::{start, MockState, Scenario};
 use rig::completion::{Effort, Reasoning};
-use rig::message::{ImageMediaType, UserContent};
+use rig::message::{ImageMediaType, Message, UserContent};
 use rig::providers::anthropic::{
     extension::{AnthropicOptions, Fallbacks, SERVER_SIDE_FALLBACK_BETA},
     AnthropicConfig, CLAUDE_OPUS_5_5,
@@ -82,9 +82,12 @@ async fn run(name: &str, scenario: Scenario, o: Opts, timeout: Option<Duration>)
     println!("  build agent: {:?}", t0.elapsed());
     let fut = async {
         agent
-            .prompt("這是一張便當店傳單，請匯入。")
-            .attach_files([UserContent::image_raw(FAKE_JPEG.to_vec(), Some(ImageMediaType::JPEG), None)])
-            .expect("attach")
+            .prompt(Message::User {
+                content: vec![
+                    UserContent::text("這是一張便當店傳單，請匯入。"),
+                    UserContent::image_raw(FAKE_JPEG.to_vec(), Some(ImageMediaType::JPEG), None),
+                ],
+            })
             .await
     };
     let res = match timeout {

@@ -19,8 +19,8 @@ use infrastructure::sqlite::{Db, TempDir};
 use serde_json::{Value, json};
 use support::{
     Mock, Reply, chat_end_turn, chat_reply, chat_tool_call, chat_tool_turn, end_turn, msg,
-    responses_call, responses_reasoning, responses_reply, responses_text, start, start_openai,
-    start_responses, tool_turn, tool_use,
+    responses_call, responses_reasoning, responses_reply, responses_text, start, start_go,
+    start_openai, start_responses, tool_turn, tool_use,
 };
 
 const JPEG: &[u8] = &[
@@ -141,6 +141,117 @@ async fn every_provider_uses_the_configured_token_budget_on_every_turn() {
                 assert_eq!(body[field], tokens.unwrap_or(16_384), "{provider:?}");
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn go_official_paths_work_with_existing_compatible_providers() {
+    for (provider, prefix, model, script) in [
+        (
+            AiProvider::AnthropicCompatible,
+            "anthropic",
+            "claude-haiku-5-5",
+            happy_script(),
+        ),
+        (
+            AiProvider::OpenAiCompatible,
+            "openai",
+            "deepseek-v4.1-flash",
+            oa_happy_script(),
+        ),
+        (
+            AiProvider::OpenAiResponses,
+            "openai",
+            "gpt-6-luna",
+            rs_happy_script(),
+        ),
+    ] {
+        let e = env().await;
+        let (url, mock) = start_go(script).await;
+        let mut c = oa_config(&format!("{url}/inference/go/{prefix}"));
+        c.provider = provider;
+        c.model = model.into();
+        c.max_tokens = 32_768;
+        c.session_header = Some("x-opencode-session".into());
+        c.fallbacks = false;
+        let out = RigImportAgent::new(c)
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap();
+        assert!(!out.summary.is_empty());
+        assert_eq!(out.usage.input_tokens, 3000);
+        assert_eq!(e.ctx.snapshot().await.targets.len(), 1);
+        assert_eq!(mock.calls(), 3, "{provider:?}");
+        let token_field = if provider == AiProvider::OpenAiResponses {
+            "max_output_tokens"
+        } else {
+            "max_tokens"
+        };
+        for body in mock.bodies.lock().unwrap().iter() {
+            assert_eq!(body["model"], model);
+            assert_eq!(body[token_field], 32_768);
+            assert!(body.get("fallbacks").is_none());
+        }
+        for headers in mock.headers.lock().unwrap().iter() {
+            assert_eq!(headers["x-opencode-session"], e.ctx.run_id.to_string());
+            assert!(headers.get("anthropic-beta").is_none());
+        }
+    }
+}
+
+#[tokio::test]
+async fn answerless_truncated_turns_fail_and_keep_usage_for_every_provider() {
+    for provider in [
+        AiProvider::Anthropic,
+        AiProvider::AnthropicCompatible,
+        AiProvider::OpenAiCompatible,
+        AiProvider::OpenAiResponses,
+    ] {
+        let e = env().await;
+        let (url, mock) = match provider {
+            AiProvider::Anthropic | AiProvider::AnthropicCompatible => {
+                start(vec![Reply::Message(msg(
+                    json!([]),
+                    "max_tokens",
+                    json!({}),
+                ))])
+                .await
+            }
+            AiProvider::OpenAiCompatible => {
+                start_openai(vec![Reply::Message(chat_reply(
+                    json!({ "role": "assistant", "content": null }),
+                    "length",
+                ))])
+                .await
+            }
+            AiProvider::OpenAiResponses => {
+                let mut reply = responses_reply(json!([]));
+                reply["status"] = json!("incomplete");
+                reply["incomplete_details"] = json!({ "reason": "max_output_tokens" });
+                start_responses(vec![Reply::Message(reply)]).await
+            }
+        };
+        let mut c = oa_config(&url);
+        c.provider = provider;
+        let err = RigImportAgent::new(c)
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap_err();
+        match err {
+            AiError::Unavailable { retryable, detail } => {
+                assert!(!retryable);
+                assert!(
+                    detail.contains("finish_reason=Length"),
+                    "{provider:?}: {detail}"
+                );
+            }
+            other => panic!("{provider:?}: {other:?}"),
+        }
+        assert_eq!(mock.calls(), 1);
+        assert_eq!(e.ctx.usage().input_tokens, 1000, "{provider:?}");
+        assert!(e.ctx.snapshot().await.targets.is_empty());
     }
 }
 

@@ -260,7 +260,7 @@ sequenceDiagram
 |------|------|------|
 | Web framework | `axum` + `tokio` + `tower-http` | |
 | OpenAPI | `utoipa` + `utoipa-axum` + `utoipa-scalar` | 由程式碼產生 OpenAPI 3.1，不手寫 yaml（見 7.1） |
-| AI agent | [`rig`](https://github.com/Swind/rig)（Anthropic provider） | `AgentBuilder` + 自訂 `Tool`（見 9） |
+| AI agent | [`rig`](https://github.com/0xPlaygrounds/rig)（官方 0.46.0） | `AgentBuilder` + 自訂 `Tool`（見 9） |
 | JSON Schema | `schemars` | 產生 tool 參數的 JSON Schema |
 | DB | `sqlx`（sqlite feature） | 用執行期的 `query_as::<_, T>`（不用編譯期檢查的 `query!` 巨集，免去 `DATABASE_URL`／`sqlx-cli` 依賴），以 `#[sqlx::test]` 整合測試確保 SQL 正確；`sqlx::migrate!` 內建 migration |
 | OAuth / OIDC | `openidconnect` crate | 驗證 Google id_token（簽章、aud、iss、nonce） |
@@ -933,9 +933,9 @@ impl rig::tool::Tool for ProposeVendor {
 // infrastructure/src/ai/rig_agent.rs
 let builder = AgentBuilder::new(anthropic.completion(&cfg.model))   // 預設 claude-opus-5-5
     .preamble(&prompts::import_agent_system_prompt(input.mode))
-    .max_tokens(4096)
+    .max_tokens(cfg.max_tokens)                      // AI_MAX_TOKENS，預設 16_384
     .reasoning(Reasoning::Effort(Effort::Low))
-    .hook(RefusalAndUsageHook::new(run_log.clone()))   // 擷取 refusal 的 stop_details 與失敗時的 usage
+    .add_hook(RefusalAndUsageHook::new(run_log.clone()))   // 擷取 refusal 的 stop_details 與失敗時的 usage
     .default_max_turns(8);
 
 // 只註冊所選 mode 的 tools
@@ -953,19 +953,21 @@ let agent = match input.mode {
 };
 
 let res = agent
-    .prompt(user_text)                                   // 指示 + target 提示（不含 mode，mode 已決定 prompt 與 tools）
-    .attach_files([UserContent::image_raw(bytes, Some(ImageMediaType::JPEG), None)])?
+    .prompt(Message::User { content: vec![
+        UserContent::text(user_text),                     // 指示 + target 提示
+        UserContent::image_raw(bytes, Some(ImageMediaType::JPEG), None),
+    ] })
     .await?;
 ```
 
-- **模型設定**：預設 `claude-opus-5-5`（`AI_MODEL` 可改成 `claude-sonnet-5-5`）。這兩個模型都不支援「強制指定要呼叫哪個 tool」，所以 tool choice 用 auto（rig 預設不送 `tool_choice`），靠 system prompt 指引流程。推論強度 `low`：rig 會送 `thinking: {type: "adaptive"}` + `output_config.effort: "low"`（Opus 5.5 的 thinking 本來就無法關閉）；如果 eval 顯示多步驟判斷不夠穩，再調成 `medium`。`max_tokens` 明確設 4096。
+- **模型設定**：預設 `claude-opus-5-5`（`AI_MODEL` 可改成 `claude-sonnet-5-5`）。這兩個模型都不支援「強制指定要呼叫哪個 tool」，所以 tool choice 用 auto（rig 預設不送 `tool_choice`），靠 system prompt 指引流程。推論強度 `low`：rig 會送 `thinking: {type: "adaptive"}` + `output_config.effort: "low"`（Opus 5.5 的 thinking 本來就無法關閉）。`AI_MAX_TOKENS` 明確設每輪輸出上限，預設 16_384，server 與 eval 共用 wiring。
 - **嚴格 tool schema**：用 rig 的 `model.wire.with_strict_tools()`，每個 tool 送 `"strict": true`，rig 會補 `additionalProperties: false` 與 `required`；我們自己的 schema 產生器（schemars 1.x、inline subschemas）作為第二道保險。
 - **tool 錯誤回饋**（spike 驗證）：參數 JSON 型別錯誤時，rig 自動回 `tool_result`（`is_error: true` + 解析錯誤訊息），模型會在下一輪修正。業務規則錯誤（價格超出範圍、名字過長）**不要用 `Err` 回傳**——rig 預設會把 `Err` 遮成「tool failed」，模型看不到原因；改成 `Ok(ProposalDiffSummary { errors: [...] })` 回傳具體訊息。
 - **refusal 與 usage**：rig 把 refusal 呈現為 `PromptError::Provider(ProviderError::Response("…finish_reason=ContentFilter…"))`，不含類別與說明。以一個 `AgentHook`（`on_model_turn_finished`）讀取 `finish_reason` 與原始回應中的 `stop_reason`／`stop_details`，判定為 `AiError::Refused { category }`；同一個 hook 累計每輪 usage，執行失敗時也能記錄花費。
 - **錯誤、重試與逾時**：rig 不重試、也沒有預設逾時。HTTP 錯誤為 `PromptError::Report(ErrorReport { retryable, http_status, code, … })`。策略：`retryable` 的錯誤（529、5xx、連線錯誤）由 application 層重試 1 次（間隔 2 秒），整體包在 `tokio::time::timeout(AI_RUN_TIMEOUT_SECS)` 內（預設 90 秒）；另外 reqwest client 以 `AI_REQUEST_TIMEOUT_SECS` 設單次請求逾時（預設 60 秒）。單次請求逾時會回報為「model call timed out after N s」且**不重試**（慢 gateway 再等一次整個逾時只會耗盡整體時限）。兩者的預設值依 provider 而異，見 9.7。
 - **server-side fallback**：rig 原生支援，`AnthropicConfig::…with_beta(SERVER_SIDE_FALLBACK_BETA)` + `AnthropicOptions::default().fallbacks(Fallbacks::Default)`，以設定 `AI_FALLBACKS=default`（預設開啟，設 `off` 關閉）控制。
 - **並行 tool 呼叫**：模型可能在同一輪平行呼叫多個 tool，`propose_*` 寫入提案時以 mutex 保護「同一目標以最新一次為準」的邏輯。
-- **rig 版本**：鎖定 `Swind/rig` rev `36f287befa9e6013579d7ba8a957a27f604d7d50`（rig 0.44.0）；細節見 `docs/spikes/rig.md`。rig 依賴 `aws-lc-sys`，Dockerfile 的 Rust build stage 需安裝 `cmake`。
+- **rig 版本**：crates.io 官方 facade `rig = "=0.46.0"`；`rig-core`、`rig-agent` 與 transport companion 由 `backend/Cargo.lock` 鎖定 0.46.0，無 git fork／patch。圖片直接放入 `Message::User`（0.46.0 已無 `AgentRunner::attach_files`）；來源與 migration 驗證見 `docs/spikes/rig.md`。rig 依賴 `aws-lc-sys`，Dockerfile 的 Rust build stage 需安裝 `cmake`。
 - **防呆**：agent 結束時如果沒有呼叫任何 `propose_*`，`ImportRun` 狀態仍為 `proposed` 但 proposal 為空，前端顯示 agent 的摘要（通常是「照片不是名單」或「照片不是菜單」，視使用者選的 mode 而定）。
 
 ### 9.4 System Prompt
@@ -1144,7 +1146,7 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 
 實測（Strata gateway，量化 Qwen，`thinking` 區塊 `signature` 為空）：strict nullable schema、`eager_input_streaming`、`output_config`、`thinking`（adaptive／enabled／disabled）、fallbacks beta／欄位、base64 圖片、多輪 tool_use／tool_result（含回送空 signature 的 thinking）皆被接受或忽略，錯誤格式為 Anthropic 風格（`{"error":{"type":"invalid_request_error"|"authentication_error","message":...}}`）。該 gateway 位於 Cloudflare 後面，預設的 Python urllib User-Agent 會被擋（`403 error code: 1010`），rig 的 reqwest 請求不受影響。
 
-實測（opencode Go，`https://opencode.ai/zen/go`，模型 `deepseek-v4.1-flash`，`openai-compatible`）：
+以下是升級前的歷史實測（舊 opencode Go `https://opencode.ai/zen/go`，模型 `deepseek-v4.1-flash`，`openai-compatible`），不是 0.46.0 的線上複驗；目前依官方來源的 URL／設定見 `docs/deploy.md`「OpenCode Go」：
 - 必須帶 `x-opencode-session`，否則 `400 {"type":"error","error":{"type":"MissingSessionID","message":"Request is missing x-opencode-session and cannot be routed efficiently. ..."}}`；任何字串都可，故用 `AI_SESSION_HEADER` 帶 run id。位於 Cloudflare 後面，Python urllib 的 User-Agent 會被擋（`403 error code: 1010`），reqwest 不受影響。
 - 圖片 `image_url` data URL 可用；損毀圖片回 `400 {"error":{"type":"invalid_request_error","code":"invalid_request_error","message":"Upstream request failed: [invalid_request_error] .messages[0].image[0]: You have uploaded an unsupported image. Please make sure your image is valid and has one of the following formats: webp, png, jpeg, and gif. ..."}}`，對應 `AiError::InvalidImage`。錯誤金鑰 `401 {"error":{"type":"server_error","message":"Upstream request failed: Invalid credential"}}`；不存在的模型 `400 {"error":{"type":"server_error","message":"Upstream request failed: Model is unavailable."}}`（不特別對應，歸為不可重試的 provider error）。
 - `strict: true` 且含 nullable 型別（`["integer","null"]`、`anyOf` + `null`）的 function schema 被接受，eval 結果與不送 strict 相當，因此維持預設 `AI_STRICT_TOOLS=false`。
@@ -1153,7 +1155,7 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 
 Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數）：20 次中 17 通過，平均 13.1 秒、2.8 輪，總 token 輸入 238k／輸出 26k（每次約 11.9k／1.3k）；比較 Strata／Qwen（10 案例 × 1 次，10/10，平均 24.5 秒，約 109k／11k）。DeepSeek 約快一倍，且案例 10（Qwen 會把鹽烤鯖魚飯改成鹽烤鱈魚飯、多出黑胡椒飯）兩次都全對；失敗皆為手寫／小字的讀字錯誤（焢肉飯→焗肉飯、挪威鯖魚飯↔鮭魚飯、多列被劃掉的「周杰」）與 scorer 對空白的敏感度（「VIP 餐盒」vs 預期「VIP餐盒」）。摘要與 warnings 均為繁體中文。
 
-實測（opencode Go，模型 `gpt-6-luna`，`openai-responses`）：
+升級前歷史實測（opencode Go，模型 `gpt-6-luna`，`openai-responses`）：
 - `{base}/v1/chat/completions` 回上述 `ModelProtocolUnsupported`；`{base}/v1/responses` 可用，同樣必須帶 `x-opencode-session`。
 - `strict: true` 且含 nullable（`["string","null"]`、`anyOf` + `null`）的 function schema 被接受；`reasoning: {effort: "low"|"high"}` 被接受；`store: false` 加 `include: ["reasoning.encrypted_content"]` 被接受。`effort: "low"` 時通常不產生 reasoning item，`high` 時會回傳帶 `encrypted_content` 的 reasoning item，連同 `function_call` 與 `function_call_output` 送回得 200，不帶 reasoning item 也是 200；`previous_response_id`（預設 store）亦可。
 - 損毀圖片：`400 {"model":"gpt-6-luna","error":{"message":"The image data you provided does not represent a valid image. ...","type":"invalid_request_error","param":"input","code":"invalid_value"}}`（內文含 image 與 invalid，對應 `AiError::InvalidImage`）；不存在的模型 `400 {"error":{"type":"server_error","message":"Upstream request failed: Model is unavailable."}}`。

@@ -39,7 +39,7 @@
 
 ### 技術
 
-- **後端**：Rust、axum 0.8、sqlx 0.9（SQLite、WAL）、utoipa（OpenAPI，開發模式提供 `/api/docs`）、[rig](https://github.com/Swind/rig)（AI agent，Swind fork）
+- **後端**：Rust、axum 0.8、sqlx 0.9（SQLite、WAL）、utoipa（OpenAPI，開發模式提供 `/api/docs`）、[rig](https://github.com/0xPlaygrounds/rig/releases/tag/v0.46.0)（官方 AI agent，crates.io `rig = "=0.46.0"`）
 - **前端**：React 19、Vite、TypeScript、shadcn/ui（Base UI）、TanStack Query，API 型別由 OpenAPI 產生
 - **測試**：cargo test、Vitest、Playwright E2E、AI 評測工具（`make ai-eval`）
 
@@ -185,13 +185,15 @@ AI_PROVIDER=anthropic
 AI_API_KEY=...
 AI_MODEL=claude-opus-5-5
 
-# Anthropic Messages API 相容的 gateway（例：opencode Go 上的 Claude Haiku）
-AI_PROVIDER=anthropic
-AI_BASE_URL=https://opencode.ai/zen/go
+# OpenCode Go：Messages wire（官方 rig 0.46.0 的 endpoint layout）
+AI_PROVIDER=anthropic-compatible
+AI_BASE_URL=https://opencode.ai/inference/go/anthropic
 AI_API_KEY=...
 AI_MODEL=claude-haiku-5-5
 AI_SESSION_HEADER=x-opencode-session
 AI_FALLBACKS=off
+AI_STRICT_TOOLS=false
+AI_REASONING=off
 
 # OpenAI Chat Completions 相容（DeepSeek、vLLM、LiteLLM…）
 AI_PROVIDER=openai-compatible
@@ -200,7 +202,7 @@ AI_API_KEY=...
 AI_MODEL=deepseek-v4.1-flash
 ```
 
-只支援 `/v1/responses` 的模型用 `AI_PROVIDER=openai-responses`。換模型前建議先跑 `make ai-eval` 比較準確度。
+Go 的 Chat Completions／Responses 請改用 `AI_BASE_URL=https://opencode.ai/inference/go/openai`，分別選 `AI_PROVIDER=openai-compatible`／`openai-responses`（依模型協定），同樣保留 session header 與 fallback off。來源與限制見 [部署說明](docs/deploy.md#opencode-go官方-rig-0460)。換模型前建議先跑 `make ai-eval` 比較準確度（會產生費用）。
 
 ### 6. 升級與備份
 

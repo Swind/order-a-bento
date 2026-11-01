@@ -26,7 +26,7 @@ tracing.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 schemars.workspace = true
-rig = { git = "https://github.com/Swind/rig", rev = "36f287befa9e6013579d7ba8a957a27f604d7d50" }
+rig = "=0.46.0"
 reqwest = { version = "0.13", features = ["rustls"] }
 
 [dev-dependencies]

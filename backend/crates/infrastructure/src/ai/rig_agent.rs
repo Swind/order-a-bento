@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use domain::ai_import::{ImportMode, Usage};
 use rig::agent::{AgentHook, HookContext, ModelTurnAction, ModelTurnFinished};
 use rig::completion::{Effort, Reasoning};
-use rig::message::{ImageMediaType, UserContent};
+use rig::message::{ImageMediaType, Message, UserContent};
 use rig::operation::Completion;
 use rig::providers::anthropic::extension::{
     AnthropicOptions, Fallbacks, SERVER_SIDE_FALLBACK_BETA,
@@ -471,9 +471,9 @@ impl ImportAgent for RigImportAgent {
         macro_rules! prompt {
             ($agent:expr) => {
                 $agent
-                    .prompt(user_message(&input))
-                    .attach_files([image])
-                    .map_err(|e| AiError::InvalidImage(e.to_string()))?
+                    .prompt(Message::User {
+                        content: vec![UserContent::text(user_message(&input)), image],
+                    })
                     .await
             };
         }

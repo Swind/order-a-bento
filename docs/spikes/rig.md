@@ -1,12 +1,22 @@
 # Spike T4.0：rig + Anthropic
 
 - 程式：`spikes/rig-spike/`（獨立 Cargo project，`[workspace]` 自成一體，不屬於 `backend/` workspace）
-- 鎖定版本：`rig = { git = "https://github.com/Swind/rig", rev = "36f287befa9e6013579d7ba8a957a27f604d7d50" }`（facade crate `rig` 0.44.0，預設 features 即含 `agent`、`derive`、`reqwest`、`rustls`）
+- 目前鎖定版本：官方 crates.io `rig = "=0.46.0"`（facade，預設 features 含 `agent`、`derive`、`reqwest`、`rustls`）；backend 與獨立 spike 的鎖檔均已遷移。下方原 spike 結果保留為**升級前歷史紀錄**，不是 0.46.0 的 API 使用指南；目前 API 與驗證見下一節。
 - 驗證方式：沒有 `ANTHROPIC_API_KEY`，所有 agent loop 都對本機 axum mock（`POST /v1/messages`）實跑；`cargo run` 依序跑 9 個情境並把每個 request body 存到 `spikes/rig-spike/target/recorded/`。
-- 以下 rig 原始碼路徑皆相對於 `~/.cargo/git/checkouts/rig-*/36f287b/crates/`。
+- 歷史紀錄的原始碼路徑相對於舊 fork `Swind/rig` rev `36f287befa9e6013579d7ba8a957a27f604d7d50`（0.44.0）；此 git source 已不再是任何鎖檔的依賴。
 - **未能驗證的部分**（需要真實 API）：真實 Anthropic 是否接受 rig 送出的 `thinking: adaptive` + beta header、`strict: true` schema、`fallbacks` 欄位——mock 只能證明「rig 送了什麼」，不能證明「API 收不收」。T4.4 有 key 時必須實跑一次。另外 mock 的 SSE 路徑（`.stream()`）沒有跑，本 spike 只用 unary。
 
-## 執行結果摘要
+## 官方 0.46.0 migration（2026-11-02）
+
+- 已核對 [正式 release `v0.46.0`](https://github.com/0xPlaygrounds/rig/releases/tag/v0.46.0)（2026-10-31，非 prerelease）；`git ls-remote --tags https://github.com/0xPlaygrounds/rig.git '*0.46.0*'` 的 peeled commit 為 `6e039cd24994bc1e7d963af6f6278df73a81b130`。crates.io `rig` 0.46.0 的 `.cargo_vcs_info.json` 同一 commit，`cargo info rig@0.46.0`／`rig-core@0.46.0`／`rig-agent@0.46.0` 的 repository 均為官方 repo（MSRV 1.97.1）。不是 `main`、RC 或 fork。
+- 官方目前已拆成 facade `rig`、`rig-core`、`rig-agent`、`rig-http`、`rig-reqwest` 等 companion；Anthropic／OpenAI providers **仍在 `rig-core::providers`**，不是獨立 `rig-provider-*` crate。因此保留原 facade、精確 pin `rig = "=0.46.0"` 是最小改動；兩份 lock 的全部 rig family 均為 registry 0.46.0 + checksum。沒有 `[patch]` 需要移除，沒有無關全量 update。
+- 實際需改的 API：`AgentRunner::attach_files` 已移除，改以 `Message::User { content: vec![UserContent::text(...), image] }` 一次傳入同一 user message；backend 與 spike 一併改，圖片 MIME 驗證仍在 adapter 邊界。`Tool::call(&mut ToolContext, ...)`、`AgentHook::on_model_turn_finished` 所用 usage/raw/finish_reason、`DynModel<Completion>`、custom reqwest transport、strict tools、reasoning effort、Anthropic fallback beta 都仍支援，不加 shim。
+- 四種 provider 與 `AI_MAX_TOKENS` 保留；server／`ai_eval` 原已共用 `wiring::rig_agent_config`，無須變更契約／eval 程式。mock 驗證 request 圖片與 tool schema、tool error 修正、多輪 reasoning replay、usage、refusal／content filter、HTTP 與 timeout mapping；另補四 provider 的 answerless token truncation（失敗且保留 usage）及 Go 三種完整 prefix／session／多輪／token budget。
+- 官方 Go 證據為 release 的 `providers::opencode`、`opencode/tests.rs` 與 catalog；專用 client 自動選 wire、設 session，本專案現有 compatible providers 已可直連，故不新增 enum。新版 endpoint 是 `/inference/go/{openai,anthropic}/v1/...`，正確設定及線上未驗證限制見 `docs/deploy.md`「OpenCode Go」。舊 `/zen/go` 線上實測只保留為歷史資料。
+- 官方 0.46.0 不再強制 serde_json `preserve_order`／`float_roundtrip`；本專案 JSON schema／tool arguments 依語意判斷，不依 property 順序。鎖檔因此只少了 serde_json 的 feature-induced dependency edges，既有非 rig package 版本不變。
+- 本次驗證：`cargo fmt --all --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`（**352 passed、0 failed、0 ignored**，其中 adapter **35** tests）、`cargo build --workspace --locked`、`cargo build --release -p server --locked` 全通過；獨立 spike `cargo check` 通過，無 warnings。全程使用 `CARGO_TARGET_DIR=/tmp/opencode/vendor-images-target`、dev/test debug=0、incremental=0。最後一輪 logs：`/tmp/opencode/rig-migration-{fmt,clippy-final,tests-final,build,release,spike}.log`。未重跑歷史 spike 情境、真 AI eval、frontend／gen-api／E2E（無契約變更）；未讀取 `.env`／provider secrets，未 commit／push。
+
+## 升級前執行結果摘要（歷史）
 
 | 情境 | 結果 |
 |---|---|
@@ -335,7 +345,7 @@ let agent = AgentBuilder::new(client.completion(CLAUDE_OPUS_5_5))
 - Proposal 的 args 型別放在 application 層但 `JsonSchema` derive 需要 `schemars`；若不想讓 application 依賴 schemars，則 args 型別放 infrastructure、application 只收 domain 型別（`ProposeVendorArgs → domain` 轉換在 infra tool wrapper 內）。建議後者（符合 design 的「Tool 是薄包裝」）。
 
 **T4.2（infrastructure + API）**
-- 依賴：`rig = { git = …, rev = "36f287be…" }`（預設 features），`schemars = "1"`；rig 會帶入 reqwest 0.13 + rustls（aws-lc-sys，需 cmake/C 編譯器，**Dockerfile 的 build stage 要確認有 cmake**；本機建置已通過）。已記錄在 `spikes/rig-spike/Cargo.lock`。
+- 目前依賴：`rig = "=0.46.0"`（官方 registry，預設 features），`schemars = "1"`；rig 會帶入 reqwest 0.13 + rustls（aws-lc-sys，需 cmake/C 編譯器，**Dockerfile 的 build stage 要確認有 cmake**）。已記錄在 `spikes/rig-spike/Cargo.lock`；下列 spike 歷史輸出不代表本次線上模型評測。
 - `RigImportAgent::run`：每次請求 `AnthropicConfig::from_env()`（啟動時建一次 `Anthropic` client 存進 state，clone 便宜）→ `completion(cfg.model)` → `with_strict_tools()` → `AgentBuilder::new(..).preamble().reasoning(Effort::Low).max_tokens(8192).default_max_turns(8).add_hook(TurnSpy).tool(..)×6.build()`；外層 `tokio::time::timeout(90s, …)`。
 - 錯誤映射表：`Elapsed`→`Timeout`；spy 看到 `raw.stop_reason=="refusal"`→`Refused`；`PromptError::Report(r)` 且 `r.http_status ∈ {401,403}`→`Auth`（ops 告警、對外仍 502）；`r.retryable`→`Unavailable{retryable:true}`（重試 1 次）；`MaxTurns`/`UnknownToolCall`/其餘→`Internal`。全部對外 `502 ai_unavailable`，refusal 另帶 code 讓前端提示改手動輸入。
 - 測試：repo 內可放一個以 `axum` mock 為基礎的 `RigImportAgent` 整合測試（本 spike 的 `mock.rs` 可直接搬，`ANTHROPIC_BASE_URL`/`with_base_url` 指向它），CI 不需要 key，涵蓋 happy／refusal／invalid-args／529／timeout。

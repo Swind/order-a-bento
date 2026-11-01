@@ -84,6 +84,27 @@ enum Wire {
     Responses,
 }
 
+/// Go's official 0.46.0 endpoint layout (not the legacy `/zen/go` alias).
+pub async fn start_go(script: Vec<Reply>) -> (String, Arc<Mock>) {
+    let mock = Arc::new(Mock {
+        script,
+        bodies: Mutex::new(vec![]),
+        headers: Mutex::new(vec![]),
+    });
+    let app = Router::new()
+        .route("/inference/go/anthropic/v1/messages", post(messages))
+        .route(
+            "/inference/go/openai/v1/chat/completions",
+            post(chat_completions),
+        )
+        .route("/inference/go/openai/v1/responses", post(responses))
+        .with_state(mock.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (url, mock)
+}
+
 impl Mock {
     pub fn calls(&self) -> usize {
         self.bodies.lock().unwrap().len()

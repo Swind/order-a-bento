@@ -78,7 +78,7 @@
 
 | Task | 內容 | 依賴 |
 |------|------|------|
-| **T4.0 Spike：rig** | 在 `backend/spikes/rig-spike`（不進 workspace 成員或以 feature 隔離）用 Swind/rig（鎖定 git rev）建立：Anthropic client、1 個自訂 `Tool`、`attach_files` 圖片、`default_max_turns`；確認能編譯；若有 `ANTHROPIC_API_KEY` 則實跑一次；查明 refusal 的呈現方式與 usage 取得方式；寫 `docs/spikes/rig.md` | T0.1 |
+| **T4.0 Spike：rig** | 在 `spikes/rig-spike`（獨立 workspace）建立 Anthropic client、自訂 `Tool`、圖片與 `default_max_turns`；目前已改用官方 crates.io `rig = "=0.46.0"`，圖片放 `Message::User`；確認能編譯、mock refusal 與 usage；歷史結果與 migration 見 `docs/spikes/rig.md` | T0.1 |
 | **T4.1 Domain + Application** | `ImportRun`、`Proposal`、`ProposedChange`；`application::ai_import::tools`（6 個 tools 的業務邏輯、驗證錯誤訊息、重複 propose 取代）；`ApplyImportRun`（重新驗證、重算差異、單一 transaction）；`ImportAgent` port + `FakeImportAgent`；測試 | T1.3、T4.0 |
 | **T4.2 Infrastructure + API** | rig `Tool` 包裝、`RigImportAgent`、`prompts/import_agent.md`（design §9.4，常數替換）、`/ai/import-runs` 四個端點、圖片驗證（magic bytes、5MB）、逾時 90 秒、速率限制與每日額度 | T4.1 |
 | **T4.3 前端：匯入確認畫面** | 上傳（壓縮）、指示輸入、等待動畫、design §8.7 確認畫面（勾選、編輯、issue 阻擋套用）、套用後導回 | T4.2 |
