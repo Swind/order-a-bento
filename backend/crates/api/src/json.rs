@@ -17,8 +17,20 @@ where
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match axum::Json::<T>::from_request(req, state).await {
-            Ok(axum::Json(v)) => Ok(Self(v)),
+        match axum::Json::<Box<serde_json::value::RawValue>>::from_request(req, state).await {
+            Ok(axum::Json(raw)) => {
+                let invalid = |detail| AppError::Problem {
+                    status: StatusCode::UNPROCESSABLE_ENTITY,
+                    code: "validation_failed".into(),
+                    detail,
+                    field: None,
+                    existing_id: None,
+                };
+                domain::shared::amount::validate_prices(raw.get()).map_err(invalid)?;
+                serde_json::from_str(raw.get())
+                    .map(Self)
+                    .map_err(|e| invalid(e.to_string()))
+            }
             Err(e) => Err(match e {
                 JsonRejection::JsonDataError(e) => AppError::Problem {
                     status: StatusCode::UNPROCESSABLE_ENTITY,

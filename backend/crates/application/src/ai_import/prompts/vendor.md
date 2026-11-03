@@ -29,7 +29,7 @@ Menu items:
    - Copy the full name inside the cell; when characters are separated by spaces (「牛　肉　麵」), join them into 「牛肉麵」.
    - A one-character item name is almost always a misread; look at that cell again.
    - Each table row / cell yields at most one item; do not stitch a category heading and another item's name into a new item name, and do not invent items that are not in the photo.
-2. price: an integer in New Taiwan dollars, in the range {{MIN_PRICE}}–{{MAX_PRICE}}.
+2. price: New Taiwan dollars in the range {{MIN_PRICE}}–{{MAX_PRICE}}, at most two decimal places. Preserve decimal unit prices (e.g. dumplings 7.5); never round to whole dollars.
    - Remove symbols such as 「$」「元」「NT」: 「$85」→ 85.
    - When one item has several sizes or prices, split it into several items and put the difference in the name: 「排骨飯 小 80／大 95」→「排骨飯（小）」80, 「排骨飯（大）」95.
    - Surcharge options such as 「加飯 +10」「加蛋 +15」 are not items; write them in the vendor note.

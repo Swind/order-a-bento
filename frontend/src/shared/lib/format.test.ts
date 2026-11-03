@@ -7,6 +7,12 @@ describe("formatMoney", () => {
     expect(formatMoney(85)).toBe("$85");
     expect(formatMoney(1234)).toBe("$1,234");
     expect(formatMoney(100000)).toBe("$100,000");
+    expect(formatMoney(7.5)).toBe("$7.5");
+    expect(formatMoney(7.25)).toBe("$7.25");
+    expect(formatMoney(22.5)).toBe("$22.5");
+    expect(formatMoney(-0.25)).toBe("$-0.25");
+    expect(formatMoney(Number.NaN)).toBe("—");
+    expect(formatMoney(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
 

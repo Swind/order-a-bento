@@ -81,6 +81,7 @@ pub struct Usage {
 /// `Running -> Proposed -> Applied | Discarded`, `Running -> Failed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRun {
+    pub draft: Option<super::DraftState>,
     /// Metadata only; bytes live in a run-owned child table.
     pub pending_photo_expires_at: Option<SystemTime>,
     pub sharing_group_id: Option<crate::sharing::SharingGroupId>,
@@ -116,6 +117,7 @@ impl ImportRun {
         now: SystemTime,
     ) -> Self {
         Self {
+            draft: None,
             pending_photo_expires_at: None,
             id: ImportRunId::new(),
             sharing_group_id: None,

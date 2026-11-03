@@ -22,6 +22,7 @@ import {
   UnchangedList,
 } from "./ConfirmRows";
 import { useApplyImport, useDiscardImport, useImportRun } from "./hooks";
+import { draftToState, useDraftConversation } from "./draft";
 import {
   buildApplyBody,
   countChanges,
@@ -106,7 +107,9 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
   const [savePhoto, setSavePhoto] = useState(() => run.mode === "vendor" && photoAvailable);
   const apply = useApplyImport(run.id, run.mode === "vendor" ? savePhoto : undefined);
   const discard = useDiscardImport(run.id);
-  const [state, setState] = useState<TargetState[]>(() => initState(run.proposal));
+  const [state, setState] = useState<TargetState[]>(() => run.draft ? draftToState(run.draft) : initState(run.proposal));
+  const conversation = useDraftConversation(run, state, setState);
+  const [saving, setSaving] = useState(false);
   const [serverErrors, setServerErrors] = useState<MappedErrors>({ rows: {}, unmapped: [] });
 
   const n = countChanges(state);
@@ -122,7 +125,7 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
     queryFn: () => sharingRequest<VendorDetail>(`vendors/${existingId}`),
     enabled: run.mode === "vendor" && !!existingId,
   });
-  const busy = apply.isPending || discard.isPending || verificationFailed;
+  const busy = apply.isPending || discard.isPending || verificationFailed || conversation.busy || saving;
 
   function clearErr(key: string) {
     if (!serverErrors.rows[key]) return;
@@ -149,11 +152,16 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
     update(ti, (t) => (t.type === "vendor" ? { ...t, info: { ...t.info, ...patch } } : t));
   }
 
-  function submit() {
-    if (busy || n === 0 || blocked || photoBlocked) return;
+  async function submit() {
+    if (busy || n === 0 || blocked || photoBlocked || conversation.blocked) return;
     const { accepted, map } = buildApplyBody(state);
     setServerErrors({ rows: {}, unmapped: [] });
-    apply.mutate(accepted, {
+    setSaving(true);
+    let revision: number | undefined;
+    try { revision = await conversation.persist(); }
+    catch (err) { toast.error(errorMessage(err)); return; }
+    finally { setSaving(false); }
+    apply.mutate(revision === undefined ? accepted : { accepted, draftRevision: revision }, {
       onSuccess: (res) => {
         toast.success("已套用");
         const rosterId = res.rosterIds[0];
@@ -212,6 +220,7 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
 
       {state.length === 0 && <p className="text-muted-foreground">AI 沒有找到可匯入的內容。</p>}
 
+      <fieldset disabled={busy || conversation.blocked} className="space-y-5 min-w-0">
       {state.map((t, ti) => {
         if (t.type === "roster") {
           const unchanged = t.members.filter((m) => m.action === "unchanged").map((m) => m.name);
@@ -291,6 +300,9 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
           </section>
         );
       })}
+      </fieldset>
+
+      <fieldset disabled={apply.isPending || discard.isPending || verificationFailed || saving} className="min-w-0">{conversation.panel}</fieldset>
 
       {run.mode === "vendor" && (
         <section aria-label="菜單照片" className="space-y-1 rounded-lg border p-3 text-sm">
@@ -316,7 +328,7 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
           pending={busy}
           onConfirm={doDiscard}
         />
-        <Button className="h-11" disabled={n === 0 || blocked || photoBlocked || busy} onClick={submit}>
+        <Button className="h-11" disabled={n === 0 || blocked || photoBlocked || busy || conversation.blocked} onClick={() => void submit()}>
           套用 {n} 筆變更
         </Button>
       </div>

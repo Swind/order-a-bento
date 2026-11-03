@@ -663,6 +663,18 @@ pub trait UaParser: Send + Sync {
 /// `ai_import_runs` persistence. Every lookup is scoped by `organizer_id`.
 #[async_trait]
 pub trait ImportRunRepo: Send + Sync {
+    async fn draft(&self, run: &ImportRun) -> RepoResult<domain::ai_import::DraftState>;
+    /// CAS plus run status, owner, scope and 24-hour expiry checks in one transaction.
+    /// A turn reservation atomically consumes the shared daily quota once.
+    async fn save_draft(
+        &self,
+        run: &ImportRun,
+        state: &domain::ai_import::DraftState,
+        expected: i64,
+        now: SystemTime,
+        quota: Option<u32>,
+    ) -> RepoResult<()>;
+    async fn draft_image(&self, run: &ImportRun, now: SystemTime) -> PortResult<Option<Vec<u8>>>;
     async fn create(&self, run: &ImportRun, photo: Option<NormalizedVendorImage>)
     -> PortResult<()>;
     async fn find(
@@ -708,5 +720,12 @@ pub trait ImportApplyRepo: Send + Sync {
         run: &ImportRun,
         steps: Vec<ImportApplyStep>,
         photo_target: Option<VendorId>,
+    ) -> RepoResult<()>;
+    async fn apply_draft(
+        &self,
+        run: &ImportRun,
+        steps: Vec<ImportApplyStep>,
+        photo_target: Option<VendorId>,
+        draft_revision: Option<i64>,
     ) -> RepoResult<()>;
 }

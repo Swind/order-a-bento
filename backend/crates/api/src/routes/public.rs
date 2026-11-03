@@ -39,6 +39,8 @@ pub struct PublicParticipantDto {
 pub struct PublicMenuItemDto {
     pub id: String,
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -67,7 +69,11 @@ pub struct OrderLineDto {
     pub item_id: String,
     pub name: String,
     pub quantity: u32,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub unit_price: i64,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub subtotal: i64,
     pub note: Option<String>,
 }
@@ -81,6 +87,8 @@ pub struct EffectiveOrderDto {
     /// The latest submission had no lines.
     pub cancelled: bool,
     pub note: Option<String>,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub total: i64,
     pub lines: Vec<OrderLineDto>,
 }

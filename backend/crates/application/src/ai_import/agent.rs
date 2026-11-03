@@ -13,6 +13,7 @@ use crate::ports::{Clock, RosterRepo, VendorRepo};
 /// by the backend, never tool parameters: the model cannot address other
 /// organizers' data.
 pub struct ImportToolContext {
+    pub editing: tokio::sync::Mutex<Option<EditSession>>,
     pub sharing_group_id: Option<domain::sharing::SharingGroupId>,
     pub organizer_id: OrganizerId,
     pub run_id: ImportRunId,
@@ -40,6 +41,7 @@ impl ImportToolContext {
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
+            editing: tokio::sync::Mutex::new(None),
             sharing_group_id: None,
             organizer_id,
             run_id,
@@ -124,6 +126,42 @@ impl ImportToolContext {
     /// Usage and the tool-call log are kept: they describe what happened.
     pub async fn reset(&self) {
         *self.proposal.lock().await = Proposal::default();
+        if let Some(e) = self.editing.lock().await.as_mut() {
+            e.draft = e.baseline.clone();
+            e.changes.clear();
+            e.submitted = false;
+        }
+    }
+}
+
+pub struct EditSession {
+    pub baseline: Vec<domain::ai_import::VendorDraft>,
+    pub draft: Vec<domain::ai_import::VendorDraft>,
+    pub changes: Vec<String>,
+    pub submitted: bool,
+}
+
+impl ImportToolContext {
+    pub async fn submit_edits(
+        &self,
+        edits: Vec<domain::ai_import::DraftEdit>,
+    ) -> Result<(), super::tools::ToolError> {
+        self.authorize().await?;
+        let mut g = self.editing.lock().await;
+        let e = g
+            .as_mut()
+            .ok_or_else(|| super::tools::ToolError("not editing a draft".into()))?;
+        if e.submitted {
+            return Err(super::tools::ToolError(
+                "submit exactly once per turn".into(),
+            ));
+        }
+        let (draft, changes) = domain::ai_import::apply_edits(&e.baseline, edits)
+            .map_err(|e| super::tools::ToolError(e.to_string()))?;
+        e.draft = draft;
+        e.changes = changes;
+        e.submitted = true;
+        Ok(())
     }
 }
 

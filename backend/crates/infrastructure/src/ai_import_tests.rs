@@ -1,4 +1,6 @@
 //! Tests of the AI import tools and service against real SQLite repositories.
+#[path = "ai_draft_tests.rs"]
+mod draft_tests;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -136,7 +138,7 @@ impl Env {
                 .iter()
                 .map(|(n, p)| MenuItemInput {
                     name: (*n).into(),
-                    price: *p,
+                    price: *p * 100,
                     description: None,
                     category: None,
                 })
@@ -252,7 +254,7 @@ async fn read_tools_are_scoped_by_organizer() {
     .unwrap() else {
         panic!()
     };
-    assert_eq!((d.menu[0].name.as_str(), d.menu[0].price), ("飯", 80));
+    assert_eq!((d.menu[0].name.as_str(), d.menu[0].price), ("飯", 8000));
     assert!(matches!(
         tools::get_vendor(
             &ctx,
@@ -569,7 +571,7 @@ async fn propose_vendor_new_and_existing_by_name() {
     assert_eq!(out.price_changes.len(), 1);
     assert_eq!(
         (out.price_changes[0].from, out.price_changes[0].to),
-        (100, 105)
+        (10000, 10500)
     );
     assert!(
         out.errors.is_empty(),
@@ -589,8 +591,8 @@ async fn propose_vendor_new_and_existing_by_name() {
     assert_eq!(t.info.before.as_ref().unwrap().address, None);
     assert_eq!(t.info.after.address.as_deref(), Some("台北市"));
     assert_eq!(t.info.after.phone.as_deref(), Some("02-1234")); // kept
-    assert_eq!(t.menu[0].before.as_ref().unwrap().price, 100);
-    assert_eq!(t.menu[0].price, Some(105));
+    assert_eq!(t.menu[0].before.as_ref().unwrap().price, 10000);
+    assert_eq!(t.menu[0].price, Some(10500));
     assert_eq!(t.menu[2].price, None);
     assert_eq!(t.menu[2].issues, [Issue::PriceMissing]);
     assert_eq!(t.menu[2].action, ChangeAction::Create);
@@ -637,7 +639,7 @@ async fn propose_vendor_existing_target_is_not_renamed_and_price_errors() {
     assert!(
         out.errors[0]
             .message
-            .contains("price must be between 1 and 100000")
+            .contains("price must be between 0.01 and 100000")
     );
     let p = ctx.snapshot().await;
     let ProposalTarget::Vendor(t) = &p.targets[0] else {
@@ -2079,7 +2081,10 @@ async fn apply_vendor_and_new_targets_in_one_transaction() {
         .iter()
         .map(|m| (m.name.as_str(), m.price.get()))
         .collect();
-    assert_eq!(items, [("排骨飯", 105), ("素食便當", 90), ("雞腿飯", 120)]);
+    assert_eq!(
+        items,
+        [("排骨飯", 105), ("素食便當", 9000), ("雞腿飯", 120)]
+    );
 
     let nv = e
         .vendors
@@ -2295,7 +2300,7 @@ fn accepted_change_json_shape() {
     let AcceptedChange::Vendor(v) = c else {
         panic!()
     };
-    assert_eq!(v.menu[0].price, Some(60));
+    assert_eq!(v.menu[0].price, Some(6000));
     assert_eq!(v.menu[0].description, None);
     let c: AcceptedChange = serde_json::from_value(json!({
         "type": "roster",

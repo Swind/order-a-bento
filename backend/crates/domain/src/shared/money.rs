@@ -2,7 +2,7 @@ use std::{iter::Sum, ops::Add};
 
 use super::DomainError;
 
-/// TWD whole dollars. The type itself is unbounded (totals may exceed
+/// TWD integer cents (100 = NT$1). Totals may exceed
 /// `MAX_PRICE`); use [`Money::try_new`] to validate a *unit price*
 /// (`MIN_PRICE..=MAX_PRICE`) and [`Money::new`] for unchecked amounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -10,7 +10,7 @@ pub struct Money(i64);
 
 impl Money {
     pub const MIN_PRICE: i64 = 1;
-    pub const MAX_PRICE: i64 = 100_000;
+    pub const MAX_PRICE: i64 = 10_000_000;
 
     /// Unchecked amount (totals, differences).
     pub const fn new(v: i64) -> Self {
@@ -26,7 +26,7 @@ impl Money {
         } else {
             Err(DomainError::invalid(
                 "price",
-                format!("必須介於 {} 到 {}", Self::MIN_PRICE, Self::MAX_PRICE),
+                "必須介於 0.01 到 100000 元，最多小數兩位",
             ))
         }
     }
@@ -36,12 +36,16 @@ impl Money {
     pub fn checked_mul(self, qty: i64) -> Option<Self> {
         self.0.checked_mul(qty).map(Self)
     }
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.0.checked_add(other.0).map(Self)
+    }
 }
 
 impl Add for Money {
     type Output = Money;
     fn add(self, o: Money) -> Money {
-        Money(self.0 + o.0)
+        self.checked_add(o)
+            .expect("money total exceeds bounded aggregate size")
     }
 }
 impl Sum for Money {
@@ -60,7 +64,7 @@ mod tests {
         assert!(Money::try_new(-5).is_err());
         assert_eq!(Money::try_new(1).unwrap().get(), 1);
         assert_eq!(Money::try_new(100_000).unwrap().get(), 100_000);
-        assert!(Money::try_new(100_001).is_err());
+        assert!(Money::try_new(10_000_001).is_err());
     }
 
     #[test]
@@ -68,6 +72,11 @@ mod tests {
         let m = Money::try_new(100_000).unwrap();
         assert_eq!(m.checked_mul(3), Some(Money::new(300_000)));
         assert_eq!(Money::new(i64::MAX).checked_mul(2), None);
+        assert_eq!(Money::new(i64::MAX).checked_add(Money::new(1)), None);
+        assert_eq!(
+            Money::try_new(750).unwrap().checked_mul(3),
+            Some(Money::new(2250))
+        );
         let s: Money = [Money::new(5), Money::new(7)].into_iter().sum();
         assert_eq!(s, Money::new(12));
         assert_eq!(Money::zero() + s, s);

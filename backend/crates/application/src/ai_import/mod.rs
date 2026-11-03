@@ -7,7 +7,11 @@ pub mod prompt;
 mod service;
 pub mod tools;
 
-pub use agent::{AgentInput, AgentOutcome, AiError, ImageInput, ImportAgent, ImportToolContext};
+pub use agent::{
+    AgentInput, AgentOutcome, AiError, EditSession, ImageInput, ImportAgent, ImportToolContext,
+};
+mod draft_service;
+pub use draft_service::DraftTurnCmd;
 pub use fake::{FakeImportAgent, FakeToolCall};
 pub use service::{
     AcceptedChange, AcceptedDeliveryAddress, AcceptedMember, AcceptedMenuItem, AcceptedRoster,

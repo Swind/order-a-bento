@@ -114,6 +114,78 @@ impl Drop for TempDir {
 mod tests {
     use super::*;
 
+    async fn legacy_money_db() -> (Db, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db = Db::connect_path(&dir.path().join("money.db"))
+            .await
+            .unwrap();
+        MIGRATOR.run_to(9, &db.write).await.unwrap();
+        sqlx::raw_sql("INSERT INTO organizers(id,oidc_issuer,oidc_sub,email,display_name,created_at,last_login_at) VALUES('o','issuer','sub','a@b.test','A','t','t');
+            INSERT INTO vendors(id,organizer_id,name,name_key,created_at,updated_at) VALUES('v','o','Lunch','lunch','t','t');
+            INSERT INTO menu_items(id,vendor_id,name,name_key,price,updated_at) VALUES('m','v','Rice','rice',100,'t');
+            INSERT INTO menu_items(id,vendor_id,name,name_key,price,updated_at) VALUES('max','v','Max','max',100000,'t');
+            INSERT INTO group_orders(id,organizer_id,title,share_token,status,vendor_name,created_at) VALUES('g','o','Order','token','open','Lunch','t');
+            INSERT INTO participants(id,group_order_id,name) VALUES('p','g','Person');
+            INSERT INTO offered_items(id,group_order_id,name,price) VALUES('i','g','Rice',100);
+            INSERT INTO order_submissions(id,group_order_id,participant_id,idempotency_key,submitted_by,submitted_at) VALUES('s','g','p','once','participant','t');
+            INSERT INTO submission_lines(submission_id,line_no,offered_item_id,quantity,unit_price) VALUES('s',0,'i',3,100);
+            INSERT INTO settlements(group_order_id,participant_id,paid_at,paid_amount,updated_at) VALUES('g','p','t',300,'t');
+            INSERT INTO ai_import_runs(id,organizer_id,mode_hint,status,model,created_at,proposal_json) VALUES('r','o','vendor','proposed','test','t','{\"targets\":[],\"warnings\":[],\"price\":100}');")
+            .execute(&db.write).await.unwrap();
+        (db, dir)
+    }
+
+    #[tokio::test]
+    async fn cents_migration_preserves_menu_history_settlement_json_and_is_once_only() {
+        let (db, _dir) = legacy_money_db().await;
+        db.migrate().await.unwrap();
+        db.migrate().await.unwrap();
+        let values: (i64,i64,i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT price FROM menu_items WHERE id='m'),(SELECT price FROM menu_items WHERE id='max'),(SELECT price FROM offered_items WHERE id='i'),(SELECT unit_price FROM submission_lines WHERE submission_id='s'),(SELECT SUM(quantity*unit_price) FROM submission_lines),(SELECT paid_amount FROM settlements)").fetch_one(&db.read).await.unwrap();
+        assert_eq!(values, (10000, 10000000, 10000, 10000, 30000, 30000));
+        let (json,): (String,) =
+            sqlx::query_as("SELECT proposal_json FROM ai_import_runs WHERE id='r'")
+                .fetch_one(&db.read)
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).unwrap()["price"],
+            100
+        );
+        sqlx::query("UPDATE menu_items SET price=750 WHERE id='m'")
+            .execute(&db.write)
+            .await
+            .unwrap();
+        let (old,): (i64,) = sqlx::query_as("SELECT unit_price FROM submission_lines")
+            .fetch_one(&db.read)
+            .await
+            .unwrap();
+        assert_eq!(old, 10000);
+        assert!(
+            sqlx::query("UPDATE menu_items SET price=7.5 WHERE id='m'")
+                .execute(&db.write)
+                .await
+                .is_err()
+        );
+        let broken: Vec<(String, i64, String, i64)> = sqlx::query_as("PRAGMA foreign_key_check")
+            .fetch_all(&db.read)
+            .await
+            .unwrap();
+        assert!(broken.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cents_migration_overflow_rolls_back_without_changing_historical_values() {
+        let (db, _dir) = legacy_money_db().await;
+        sqlx::query("UPDATE offered_items SET price=? WHERE id='i'")
+            .bind(i64::MAX)
+            .execute(&db.write)
+            .await
+            .unwrap();
+        assert!(db.migrate().await.is_err());
+        let (price, snapshot): (i64,i64) = sqlx::query_as("SELECT (SELECT price FROM menu_items WHERE id='m'),(SELECT price FROM offered_items WHERE id='i')").fetch_one(&db.read).await.unwrap();
+        assert_eq!((price, snapshot), (100, i64::MAX));
+    }
+
     #[tokio::test]
     async fn vendor_image_migration_preserves_v6_data_and_enforces_constraints() {
         let dir = TempDir::new().unwrap();
@@ -137,7 +209,7 @@ mod tests {
             .fetch_one(&db.read).await.unwrap();
         assert_eq!(
             (note, price, title, quantity, images),
-            ("keep".into(), 100, "Order".into(), 1, 0)
+            ("keep".into(), 10000, "Order".into(), 1, 0)
         );
         let (role,): (String,) = sqlx::query_as("SELECT role FROM sharing_group_members WHERE sharing_group_id='team' AND organizer_id='o'").fetch_one(&db.read).await.unwrap();
         assert_eq!(role, "admin");

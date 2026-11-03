@@ -115,6 +115,8 @@ pub struct ProposedVendorInfoDto {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuItemSnapshotDto {
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -127,6 +129,8 @@ pub struct ProposedMenuItemDto {
     pub name: String,
     pub before: Option<MenuItemSnapshotDto>,
     /// `null` = the price could not be read (issue `price_missing`).
+    #[serde(with = "domain::shared::amount::optional")]
+    #[schema(value_type = Option<f64>)]
     pub price: Option<i64>,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -224,8 +228,10 @@ pub struct AcceptedVendorInfoDto {
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedMenuItemDto {
     pub name: String,
-    /// Whole TWD dollars; required (fill in `price_missing` items first).
+    /// TWD dollars, at most two decimal places; fill in missing prices first.
     #[serde(default)]
+    #[serde(with = "domain::shared::amount::optional")]
+    #[schema(value_type = Option<f64>)]
     pub price: Option<i64>,
     #[serde(default)]
     pub description: Option<String>,
@@ -262,6 +268,8 @@ pub struct UsageDto {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportRunDto {
+    #[schema(value_type = Option<DraftStateDto>, required = false)]
+    pub draft: Option<serde_json::Value>,
     /// True only while running/proposed with an unexpired pending JPEG.
     pub has_pending_photo: bool,
     #[schema(required = true)]
@@ -291,6 +299,10 @@ pub struct ImportRunDto {
 impl From<&ImportRunView> for ImportRunDto {
     fn from(r: &ImportRunView) -> Self {
         Self {
+            draft: r
+                .draft
+                .as_ref()
+                .map(|d| serde_json::to_value(d).expect("draft serializes")),
             has_pending_photo: r.pending_photo_expires_at.is_some(),
             pending_photo_expires_at: r.pending_photo_expires_at.map(time_text),
             id: r.id.to_string(),
@@ -350,6 +362,8 @@ pub struct StartImportForm {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyRequest {
+    #[serde(default)]
+    pub draft_revision: Option<i64>,
     /// Omitted defaults to the currently available pending photo. False imports data only.
     pub save_photo: Option<bool>,
     /// The changes the user confirmed (possibly edited); anything not listed is ignored.
@@ -748,13 +762,14 @@ pub async fn apply_import(
 ) -> Result<Json<ApplyResponse>, AppError> {
     let ai = service(&state)?;
     let r = ai
-        .apply(
+        .apply_at_revision(
             org(&o),
             parse_id(&run_id)?,
             ApplyCmd {
                 save_photo: body.save_photo,
                 accepted: body.accepted,
             },
+            body.draft_revision,
         )
         .await
         .map_err(ai_error)?;
@@ -809,10 +824,163 @@ pub fn router() -> OpenApiRouter<AppState> {
     let upload = OpenApiRouter::new()
         .routes(routes!(start_import))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
-    upload.merge(
-        OpenApiRouter::new()
-            .routes(routes!(get_import))
-            .routes(routes!(apply_import))
-            .routes(routes!(discard_import)),
+    upload
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(get_import))
+                .routes(routes!(apply_import))
+                .routes(routes!(discard_import)),
+        )
+        .merge(
+            OpenApiRouter::new()
+                .routes(routes!(get_draft, put_draft))
+                .routes(routes!(draft_turn))
+                .routes(routes!(undo_turn))
+                .layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+}
+
+#[derive(ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftItemDto {
+    pub id: String,
+    pub selected: bool,
+    pub name: String,
+    #[schema(value_type = Option<f64>)]
+    pub price: Option<i64>,
+    pub category: Option<String>,
+    pub description: Option<String>,
+}
+#[derive(ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftVendorDto {
+    pub id: String,
+    pub vendor: TargetRefDto,
+    pub selected: bool,
+    pub info_selected: bool,
+    pub info: VendorInfoSnapshotDto,
+    pub menu: Vec<DraftItemDto>,
+}
+#[derive(ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftTurnDto {
+    pub id: String,
+    pub instruction: String,
+    pub reply: String,
+    pub status: String,
+    pub changes: Vec<String>,
+    pub undone: bool,
+}
+#[derive(ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftStateDto {
+    pub revision: i64,
+    pub vendors: Vec<DraftVendorDto>,
+    pub turns: Vec<DraftTurnDto>,
+    pub undo: Option<Vec<DraftVendorDto>>,
+    pub pending: Option<String>,
+    pub pending_until: Option<u64>,
+}
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DraftRequest {
+    pub revision: i64,
+    #[schema(value_type = Vec<DraftVendorDto>)]
+    pub vendors: Vec<domain::ai_import::VendorDraft>,
+}
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnRequest {
+    pub revision: i64,
+    pub turn_id: String,
+    pub instruction: String,
+    #[schema(value_type = Vec<DraftVendorDto>)]
+    pub vendors: Vec<domain::ai_import::VendorDraft>,
+}
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UndoRequest {
+    pub revision: i64,
+    pub turn_id: String,
+}
+
+#[utoipa::path(get, path = "/ai/import-runs/{runId}/draft", tag = TAG_AI_IMPORT,
+    security(("cookieAuth" = [])), params(("runId" = String, Path)),
+    responses((status = 200, body = DraftStateDto), (status = 409, body = ProblemDetails)))]
+async fn get_draft(
+    State(state): State<AppState>,
+    AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Path(id): Path<String>,
+) -> Result<Json<domain::ai_import::DraftState>, AppError> {
+    Ok(Json(
+        service(&state)?
+            .get_draft(org(&o), parse_id(&id)?)
+            .await
+            .map_err(ai_error)?,
+    ))
+}
+#[utoipa::path(put, path = "/ai/import-runs/{runId}/draft", tag = TAG_AI_IMPORT,
+    security(("cookieAuth" = [])), params(("runId" = String, Path)), request_body = DraftRequest,
+    responses((status = 200, body = DraftStateDto), (status = 409, body = ProblemDetails)))]
+async fn put_draft(
+    State(state): State<AppState>,
+    AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<DraftRequest>,
+) -> Result<Json<domain::ai_import::DraftState>, AppError> {
+    Ok(Json(
+        service(&state)?
+            .save_draft(org(&o), parse_id(&id)?, body.revision, body.vendors)
+            .await
+            .map_err(ai_error)?,
+    ))
+}
+#[utoipa::path(post, path = "/ai/import-runs/{runId}/turns", tag = TAG_AI_IMPORT,
+    security(("cookieAuth" = [])), params(("runId" = String, Path)), request_body = TurnRequest,
+    responses((status = 200, body = DraftStateDto), (status = 409, body = ProblemDetails), (status = 429, body = ProblemDetails)))]
+async fn draft_turn(
+    State(state): State<AppState>,
+    AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<TurnRequest>,
+) -> Result<Response, AppError> {
+    let ai = service(&state)?;
+    let id = parse_id(&id)?;
+    let current = ai.get_draft(org(&o), id).await.map_err(ai_error)?;
+    if !current.turns.iter().any(|t| t.id == body.turn_id)
+        && let Err(retry) = state.ai_limiter.check(o.id.to_string(), Instant::now())
+    {
+        return Ok(crate::client::rate_limited(retry));
+    }
+    Ok(Json(
+        ai.turn(
+            org(&o),
+            id,
+            application::ai_import::DraftTurnCmd {
+                revision: body.revision,
+                turn_id: body.turn_id,
+                instruction: body.instruction,
+                vendors: body.vendors,
+            },
+        )
+        .await
+        .map_err(ai_error)?,
     )
+    .into_response())
+}
+#[utoipa::path(post, path = "/ai/import-runs/{runId}/undo", tag = TAG_AI_IMPORT,
+    security(("cookieAuth" = [])), params(("runId" = String, Path)), request_body = UndoRequest,
+    responses((status = 200, body = DraftStateDto), (status = 409, body = ProblemDetails)))]
+async fn undo_turn(
+    State(state): State<AppState>,
+    AuthenticatedOrganizer(o): AuthenticatedOrganizer,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<UndoRequest>,
+) -> Result<Json<domain::ai_import::DraftState>, AppError> {
+    Ok(Json(
+        service(&state)?
+            .undo_turn(org(&o), parse_id(&id)?, body.revision, body.turn_id)
+            .await
+            .map_err(ai_error)?,
+    ))
 }

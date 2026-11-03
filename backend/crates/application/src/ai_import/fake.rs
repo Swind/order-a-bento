@@ -13,6 +13,7 @@ use super::{AgentInput, AgentOutcome, AiError, ImportAgent, ImportToolContext};
 /// One scripted tool invocation.
 #[derive(Debug, Clone)]
 pub enum FakeToolCall {
+    SubmitDraftEdits(Vec<domain::ai_import::DraftEdit>),
     ProposeDeliveryAddress(tools::ProposeDeliveryAddressArgs),
     ListRosters,
     GetRoster(GetRosterArgs),
@@ -27,6 +28,7 @@ impl FakeToolCall {
     /// tools of the chosen mode).
     fn mode(&self) -> ImportMode {
         match self {
+            Self::SubmitDraftEdits(_) => ImportMode::Vendor,
             Self::ProposeDeliveryAddress(_) => ImportMode::DeliveryAddress,
             Self::ListRosters | Self::GetRoster(_) | Self::ProposeRosterMembers(_) => {
                 ImportMode::Roster
@@ -82,6 +84,7 @@ impl ImportAgent for FakeImportAgent {
                 });
             }
             let r = match call {
+                FakeToolCall::SubmitDraftEdits(edits) => ctx.submit_edits(edits).await,
                 FakeToolCall::ProposeDeliveryAddress(a) => {
                     tools::propose_delivery_address(&ctx, a).await.map(drop)
                 }

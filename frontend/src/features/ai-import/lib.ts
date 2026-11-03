@@ -7,6 +7,7 @@ import type {
   TargetRef,
 } from "@/shared/api/types";
 import type { ProblemFieldError } from "@/shared/api/client";
+import { parseCents } from "@/shared/lib/money";
 
 /** Same limits as the backend domain types. */
 export const LIMITS = {
@@ -16,13 +17,13 @@ export const LIMITS = {
   category: 30,
   phone: 30,
   address: 200,
-  priceMin: 1,
+  priceMin: 0.01,
   priceMax: 100_000,
 } as const;
 
 const ISSUE_MESSAGES: Record<ImportIssue, string> = {
   price_missing: "請填寫價格",
-  price_out_of_range: `價格需為 ${LIMITS.priceMin}–${LIMITS.priceMax} 的整數`,
+  price_out_of_range: `價格需為 ${LIMITS.priceMin}–${LIMITS.priceMax}，最多小數兩位`,
   name_empty: "名稱不可為空白",
   name_too_long: `名稱不可超過 ${LIMITS.name} 字`,
   note_too_long: `備註不可超過 ${LIMITS.note} 字`,
@@ -49,6 +50,7 @@ export interface MemberRow {
 }
 
 export interface MenuRow {
+  draftId?: string;
   action: ChangeAction;
   name: string;
   /** Raw input text (may be empty / invalid while editing). */
@@ -84,6 +86,7 @@ export interface RosterTargetState {
 }
 
 export interface VendorTargetState {
+  draftId?: string;
   type: "vendor";
   ref: TargetRef;
   info: InfoRow;
@@ -141,11 +144,12 @@ export function initState(proposal: ImportProposal): TargetState[] {
 
 const len = (s: string) => [...s.trim()].length;
 
-/** Parses the price input; `null` when empty, `NaN` when not a plain integer. */
+/** Dollars with at most two decimal places; null when empty, NaN when invalid. */
 export function parsePrice(raw: string): number | null {
   const t = raw.trim();
   if (t === "") return null;
-  return /^\d+$/.test(t) ? Number(t) : Number.NaN;
+  const cents = parseCents(t);
+  return cents === null ? Number.NaN : cents / 100;
 }
 
 function dupNames(rows: { name: string; checked: boolean; action: ChangeAction }[]): Set<string> {

@@ -1,6 +1,7 @@
 /** `1234` -> `$1,234`. */
 export function formatMoney(amount: number): string {
-  return `$${Math.trunc(amount).toLocaleString("en-US")}`;
+  if (!Number.isFinite(amount)) return "—";
+  return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
 /** Relative time for recent timestamps (zh-TW), local date otherwise. */

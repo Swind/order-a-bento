@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { errorMessage } from "@/shared/api/errors";
 import type { GroupOrderDetail } from "@/shared/api/types";
 import { formatMoney } from "@/shared/lib/format";
+import { orderTotal } from "@/shared/lib/money";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -67,7 +68,7 @@ export function OrganizerOrderEditor({
       ...(notes[i.id]?.trim() ? { note: notes[i.id].trim() } : {}),
     }));
   const count = lines.reduce((n, l) => n + l.quantity, 0);
-  const total = menu.reduce((s, i) => s + i.price * (qty[i.id] ?? 0), 0);
+  const total = orderTotal(menu.map((i) => ({ price: i.price, quantity: qty[i.id] ?? 0 })));
   const soldOutSelected = menu.some((i) => i.soldOut && (qty[i.id] ?? 0) > 0);
 
   function setQuantity(id: string, next: number) {

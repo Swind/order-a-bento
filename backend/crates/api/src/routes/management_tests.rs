@@ -10,6 +10,102 @@ fn gid(f: &Fixture) -> String {
 }
 
 #[tokio::test]
+async fn decimal_snapshot_totals_history_statistics_and_settlement_stay_exact() {
+    let original = Fixture::new().await;
+    let (_, vendors) = original.c.get("/vendors").await;
+    let (_, rosters) = original.c.get("/rosters").await;
+    let vid = vendors[0]["id"].as_str().unwrap();
+    let (_, vendor) = original.c.get(&format!("/vendors/{vid}")).await;
+    let mid = vendor["menuItems"][0]["id"].as_str().unwrap();
+    assert_eq!(
+        original
+            .c
+            .patch(
+                &format!("/vendors/{vid}/menu-items/{mid}"),
+                json!({"price":7.5})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (s, group) = original
+        .c
+        .post(
+            "/group-orders",
+            json!({"title":"水餃團","vendorId":vid,"rosterId":rosters[0]["id"]}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let token = group["shareUrl"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        original
+            .c
+            .patch(
+                &format!("/vendors/{vid}/menu-items/{mid}"),
+                json!({"price":8.25})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let f = Fixture {
+        c: original.c,
+        group,
+        token,
+    };
+    let (s, result) = order(&f, "Amy", &[("排骨飯", 3)]).await;
+    assert_eq!(s, StatusCode::OK, "{result}");
+    assert_eq!(result["order"]["total"], json!(22.5));
+    assert_eq!(result["order"]["lines"][0]["unitPrice"], json!(7.5));
+    assert_eq!(result["order"]["lines"][0]["subtotal"], json!(22.5));
+    let id = gid(&f);
+    let pid = f.pid("Amy");
+    assert_eq!(
+        f.c.put(
+            &format!("/group-orders/{id}/participants/{pid}/settlement"),
+            json!({"pickedUp":false,"paid":true})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let stats = f.c.get(&format!("/group-orders/{id}/summary")).await.1;
+    assert_eq!(stats["totalAmount"], json!(22.5));
+    assert_eq!(stats["items"][0]["subtotal"], json!(22.5));
+    assert_eq!(stats["settlement"]["paidAmount"], json!(22.5));
+    assert_eq!(order(&f, "Amy", &[("排骨飯", 4)]).await.0, StatusCode::OK);
+    let ps = participants(&f).await;
+    let amy = row(&ps, "Amy");
+    assert_eq!(amy["amountDue"], 30);
+    assert_eq!(amy["paidAmount"], json!(22.5));
+    assert_eq!(amy["balance"], json!(7.5));
+    let (_, history) =
+        f.c.get(&format!(
+            "/group-orders/{id}/participants/{pid}/submissions"
+        ))
+        .await;
+    assert_eq!(history[0]["total"], 30);
+    assert_eq!(history[1]["total"], json!(22.5));
+    assert_eq!(history[1]["lines"][0]["unitPrice"], json!(7.5));
+    let (_, groups) = f.c.get("/group-orders").await;
+    assert_eq!(
+        groups
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == id)
+            .unwrap()["totalAmount"],
+        30
+    );
+}
+
+#[tokio::test]
 async fn delivery_address_snapshot_survives_edits_and_deletion_and_can_be_replaced() {
     let f = Fixture::new().await;
     let other = f.c.other().await;

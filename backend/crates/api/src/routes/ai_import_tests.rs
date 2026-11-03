@@ -26,11 +26,242 @@ const JPEG: &[u8] = &[
 ];
 const BOUNDARY: &str = "XBOUNDARYX";
 
+struct DraftApiAgent;
+
+struct DecimalApiAgent;
+#[async_trait]
+impl ImportAgent for DecimalApiAgent {
+    async fn run(
+        &self,
+        ctx: Arc<ImportToolContext>,
+        input: AgentInput,
+    ) -> Result<AgentOutcome, AiError> {
+        let call = if ctx.editing.lock().await.is_some() {
+            FakeToolCall::SubmitDraftEdits(vec![domain::ai_import::DraftEdit::UpdateItem {
+                item_id: "v0-m0".into(),
+                name: None,
+                price: Some(775),
+                category: None,
+                description: None,
+            }])
+        } else {
+            FakeToolCall::ProposeVendor(serde_json::from_str(r#"{"target":"new","info":{"name":"八方雲集"},"menuItems":[{"name":"水餃","price":7.5}],"warnings":[]}"#).unwrap())
+        };
+        FakeImportAgent::new(vec![call], "已調整水餃單價")
+            .run(ctx, input)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn decimal_ai_initial_import_chat_undo_and_commit_keep_cents_exact() {
+    let c = client_with(test_app_ai(Arc::new(DecimalApiAgent), 30, None, false).await).await;
+    let (_, run) = upload(&c, JPEG, &[]).await;
+    assert_eq!(
+        run["proposal"]["targets"][0]["menu"][0]["price"],
+        json!(7.5)
+    );
+    let path = format!("/ai/import-runs/{}", run["id"].as_str().unwrap());
+    let (_, draft) = c.get(&format!("{path}/draft")).await;
+    let (status,edited) = c.post(&format!("{path}/turns"),json!({"revision":draft["revision"],"turnId":"decimal-one","instruction":"水餃改7.75","vendors":draft["vendors"]})).await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["vendors"][0]["menu"][0]["price"], json!(7.75));
+    assert!(
+        edited["turns"][0]["changes"][0]
+            .as_str()
+            .unwrap()
+            .contains("7.5 → 7.75")
+    );
+    let (_, restored) = c
+        .post(
+            &format!("{path}/undo"),
+            json!({"revision":edited["revision"],"turnId":"decimal-one"}),
+        )
+        .await;
+    assert_eq!(restored["vendors"][0]["menu"][0]["price"], json!(7.5));
+    let (_,edited) = c.post(&format!("{path}/turns"),json!({"revision":restored["revision"],"turnId":"decimal-two","instruction":"水餃改7.75","vendors":restored["vendors"]})).await;
+    let (status, result) = c
+        .post(
+            &format!("{path}/apply"),
+            json!({"accepted":[],"savePhoto":false,"draftRevision":edited["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let (_, vendor) = c
+        .get(&format!(
+            "/vendors/{}",
+            result["vendorIds"][0].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(vendor["menuItems"][0]["price"], json!(7.75));
+    let (minor,): (i64,) = sqlx::query_as("SELECT price FROM menu_items")
+        .fetch_one(&c._t.as_ref().unwrap().state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(minor, 775);
+}
+#[async_trait]
+impl ImportAgent for DraftApiAgent {
+    async fn run(
+        &self,
+        ctx: Arc<ImportToolContext>,
+        input: AgentInput,
+    ) -> Result<AgentOutcome, AiError> {
+        if ctx.editing.lock().await.is_some() {
+            FakeImportAgent::new(
+                vec![FakeToolCall::SubmitDraftEdits(vec![
+                    domain::ai_import::DraftEdit::UpdateItem {
+                        item_id: "v0-m1".into(),
+                        name: None,
+                        price: Some(12_500),
+                        category: Some("主餐".into()),
+                        description: None,
+                    },
+                ])],
+                "雞腿飯改為 125 元",
+            )
+            .run(ctx, input)
+            .await
+        } else {
+            fake_vendor_agent().run(ctx, input).await
+        }
+    }
+}
+
+#[tokio::test]
+async fn vendor_draft_api_manual_turn_undo_replay_and_confirmation() {
+    let c = client_with(test_app_ai(Arc::new(DraftApiAgent), 30, None, false).await).await;
+    let (status, run) = upload(&c, JPEG, &[]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let path = format!("/ai/import-runs/{}", run["id"].as_str().unwrap());
+    let (s, mut draft) = c.get(&format!("{path}/draft")).await;
+    assert_eq!(s, StatusCode::OK);
+    draft["vendors"][0]["info"]["name"] = json!("手改阿財");
+    let request = json!({"revision":0,"turnId":"one","instruction":"雞腿飯 125 元，分類主餐","vendors":draft["vendors"]});
+    let (s, edited) = c.post(&format!("{path}/turns"), request.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{edited}");
+    assert_eq!(edited["vendors"][0]["menu"][1]["price"], 125);
+    assert_eq!(edited["vendors"][0]["info"]["name"], "手改阿財");
+    assert_eq!(c.post(&format!("{path}/turns"), request).await.1, edited);
+    assert_eq!(c.get("/vendors").await.1.as_array().unwrap().len(), 0);
+    let (_, reloaded) = c.get(&path).await;
+    assert_eq!(reloaded["draft"], edited);
+    let undo = json!({"revision":edited["revision"],"turnId":"one"});
+    let (s, restored) = c.post(&format!("{path}/undo"), undo.clone()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(restored["vendors"], draft["vendors"]);
+    assert_eq!(c.post(&format!("{path}/undo"), undo).await.1, restored);
+    let (s, edited) = c.post(&format!("{path}/turns"), json!({"revision":restored["revision"],"turnId":"two","instruction":"雞腿飯125","vendors":restored["vendors"]})).await;
+    assert_eq!(s, StatusCode::OK);
+    // Legacy apply must not bypass a revisioned draft.
+    assert_eq!(
+        c.post(
+            &format!("{path}/apply"),
+            json!({"accepted":[],"savePhoto":false})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let (s, result) = c
+        .post(
+            &format!("{path}/apply"),
+            json!({"accepted":[],"draftRevision":edited["revision"],"savePhoto":false}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{result}");
+    let (_, vendor) = c
+        .get(&format!(
+            "/vendors/{}",
+            result["vendorIds"][0].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(vendor["name"], "手改阿財");
+    assert_eq!(
+        c.post(
+            &format!("{path}/undo"),
+            json!({"revision":edited["revision"],"turnId":"two"})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn draft_endpoints_require_owner_valid_body_and_current_revision() {
+    let c = client_with(test_app_ai(Arc::new(DraftApiAgent), 2, None, false).await).await;
+    let (_, run) = upload(&c, JPEG, &[]).await;
+    let path = format!("/ai/import-runs/{}", run["id"].as_str().unwrap());
+    let (_, draft) = c.get(&format!("{path}/draft")).await;
+    let other = c.other().await;
+    for suffix in ["draft", "turns", "undo"] {
+        let body = if suffix == "draft" {
+            json!({"revision":0,"vendors":draft["vendors"]})
+        } else if suffix == "undo" {
+            json!({"revision":0,"turnId":"one"})
+        } else {
+            json!({"revision":0,"turnId":"one","instruction":"改價","vendors":draft["vendors"]})
+        };
+        assert_eq!(
+            other
+                .send(
+                    if suffix == "draft" { "PUT" } else { "POST" },
+                    &format!("{path}/{suffix}"),
+                    Some(body.clone())
+                )
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let (s, _, headers) = raw(
+            &c.app,
+            Request::builder()
+                .method(if suffix == "draft" { "PUT" } else { "POST" })
+                .uri(format!("/api/v1{path}/{suffix}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+    }
+    assert_eq!(
+        c.put(
+            &format!("{path}/draft"),
+            json!({"revision":99,"vendors":draft["vendors"]})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let mut bad = draft["vendors"].clone();
+    bad[0]["menu"][0]["price"] = json!(-1);
+    assert_eq!(
+        c.put(
+            &format!("{path}/draft"),
+            json!({"revision":0,"vendors":bad})
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let request =
+        json!({"revision":0,"turnId":"one","instruction":"改價","vendors":draft["vendors"]});
+    let (_, edited) = c.post(&format!("{path}/turns"), request.clone()).await;
+    assert_eq!(
+        c.post(&format!("{path}/turns"), request).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(c.post(&format!("{path}/turns"), json!({"revision":edited["revision"],"turnId":"two","instruction":"改價","vendors":edited["vendors"]})).await.0, StatusCode::TOO_MANY_REQUESTS);
+}
+
 fn fake_vendor_agent() -> Arc<dyn ImportAgent> {
     use application::ai_import::tools::MenuItemArg;
     let item = |name: &str, price: Option<i64>| MenuItemArg {
         name: name.into(),
-        price,
+        price: price.map(|p| p * 100),
         description: None,
         category: None,
         confidence: ConfidenceArg::High,

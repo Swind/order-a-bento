@@ -15,8 +15,9 @@ export const MAX_PRICE = 100_000;
 /** Parse `85`, `$85`, `NT$85`, `85元`, `１２０` (full-width). Returns null when not a price. */
 export function parsePrice(raw: string): number | null {
   const s = raw.normalize("NFKC").trim().replace(/,/g, "");
-  const m = /^(?:nt\s*\$?|\$)?\s*(\d+)\s*(?:元|塊)?$/i.exec(s);
-  return m ? Number(m[1]) : null;
+  const m = /^(?:nt\s*\$?|\$)?\s*(\d+(?:\.\d{1,2})?)\s*(?:元|塊)?$/i.exec(s);
+  const cents = m ? parseCents(m[1]) : null;
+  return cents === null ? null : cents / 100;
 }
 
 /**
@@ -60,11 +61,12 @@ export function parseMenuLines(text: string): { items: ParsedMenuItem[]; errors:
       errors.push({ line: lineNo, reason: `價格格式不正確：${priceText}` });
       return;
     }
-    if (price < 1 || price > MAX_PRICE) {
-      errors.push({ line: lineNo, reason: `價格需介於 1 到 ${MAX_PRICE.toLocaleString("en-US")}` });
+    if (price < 0.01 || price > MAX_PRICE) {
+      errors.push({ line: lineNo, reason: `價格需介於 0.01 到 ${MAX_PRICE.toLocaleString("en-US")}，最多小數兩位` });
       return;
     }
     items.push(description ? { name, price, description } : { name, price });
   });
   return { items, errors };
 }
+import { parseCents } from "@/shared/lib/money";

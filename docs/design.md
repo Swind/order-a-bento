@@ -858,7 +858,7 @@ AI 摘要：辨識出「好吃便當」的 12 個品項，其中 1 個價格不�
 2. **寫入類 tools 只寫「待確認變更」**，不碰正式資料。使用者在 8.7 的畫面確認後，由 `ApplyImportRun` use case 寫入。
 3. **不提供刪除 tool**，agent 只能提出新增與覆蓋。
 4. **所有 tools 都限定在登入者自己的資料**：`organizer_id` 由後端在建立 tool 時注入，不是 tool 參數，agent 無法指定別人的資料。
-5. **tool 回傳驗證結果**：參數不合規則時，tool 回傳具體錯誤（例如「price 必須介於 1–100000」），讓 agent 修正後重新呼叫。
+5. **tool 回傳驗證結果**：參數不合規則時，tool 回傳具體錯誤（例如「price 必須介於 0.01–100000，最多小數兩位」），讓 agent 修正後重新呼叫。
 
 ### 9.2 流程
 
@@ -1074,7 +1074,7 @@ Menu items:
    - Copy the full name inside the cell; when characters are separated by spaces (「牛　肉　麵」), join them into 「牛肉麵」.
    - A one-character item name is almost always a misread; look at that cell again.
    - Each table row / cell yields at most one item; do not stitch a category heading and another item's name into a new item name, and do not invent items that are not in the photo.
-2. price: an integer in New Taiwan dollars, in the range 1–100000.
+2. price: New Taiwan dollars in the range 0.01–100000, at most two decimal places. Preserve decimal unit prices (e.g. dumplings 7.5); never round to whole dollars.
    - Remove symbols such as 「$」「元」「NT」: 「$85」→ 85.
    - When one item has several sizes or prices, split it into several items and put the difference in the name: 「排骨飯 小 80／大 95」→「排骨飯（小）」80, 「排骨飯（大）」95.
    - Surcharge options such as 「加飯 +10」「加蛋 +15」 are not items; write them in the vendor note.
@@ -1116,7 +1116,7 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 - 24 小時是嚴格可用期限，非精準磁碟刪除承諾：到期後 apply 即拒絕保存，待下一輪既有 maintenance 邏輯刪除（啟動約 30 秒後首跑、預設每 24 小時，停機可更久）；failed／discard／成功 apply 也清 pending。不保證 DB 空間立即回收、WAL／磁碟頁面／舊備份安全抹除。保存後的店家照片沿用店家權限，不公開至點餐／OG／LINE。
 - 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、compatible provider 預設 300 秒）；失敗回 `502`（`code: "ai_unavailable"`），前端顯示「辨識失敗，請重試或手動輸入」。
 - Claude 可能回傳 `stop_reason: "refusal"`（照片觸發安全分類器）。由 9.3 的 hook 判定為 `AiError::Refused`，回 `422`（`code: "ai_refused"`），前端提示改用手動輸入。
-- 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 計數。
+- 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 加 `ai_import_turn_usage` 計數；Vendor 多輪草稿的狀態、復原與並行保護見 [草稿對話說明](vendor-import-conversation.md)。
 - 金鑰 `AI_API_KEY`（舊名 `ANTHROPIC_API_KEY`）只存在後端環境變數，絕不送到前端。
 - 測試：`FakeImportAgent` 實作同一個 port，直接呼叫 tools 的業務邏輯產生固定提案，CI 不呼叫真實 API。
 

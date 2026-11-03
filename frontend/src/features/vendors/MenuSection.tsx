@@ -52,8 +52,8 @@ function ItemEditForm({
     const errs: Record<string, string> = {};
     const priceNum = Number(price);
     if (!name.trim()) errs.name = "請輸入品名";
-    if (!/^\d+$/.test(price.trim()) || priceNum < 1 || priceNum > MAX_PRICE) {
-      errs.price = `價格需為 1 到 ${MAX_PRICE.toLocaleString("en-US")} 的整數`;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(price.trim()) || priceNum < 0.01 || priceNum > MAX_PRICE) {
+      errs.price = `價格需為 0.01 到 ${MAX_PRICE.toLocaleString("en-US")}，最多小數兩位`;
     }
     setErrors(errs);
     if (Object.keys(errs).length) return;
@@ -92,7 +92,8 @@ function ItemEditForm({
         <Label htmlFor={id("price")}>價格</Label>
         <Input
           id={id("price")}
-          inputMode="numeric"
+          inputMode="decimal"
+          step="0.01"
           value={price}
           onChange={(e) => setPrice(e.target.value)}
           aria-invalid={!!errors.price}

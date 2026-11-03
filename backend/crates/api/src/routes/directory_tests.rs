@@ -113,6 +113,64 @@ fn id(v: &Value) -> String {
 }
 
 #[tokio::test]
+async fn decimal_menu_create_edit_and_exact_precision_validation() {
+    let c = Client::new().await;
+    let (s, v) = c
+        .post(
+            "/vendors",
+            json!({"name":"八方雲集","menuItems":[{"name":"水餃","price":7.5}]}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["menuItems"][0]["price"], json!(7.5));
+    let path = format!(
+        "/vendors/{}/menu-items/{}",
+        v["id"].as_str().unwrap(),
+        v["menuItems"][0]["id"].as_str().unwrap()
+    );
+    let (s, edited) = c.patch(&path, json!({"price":7.25})).await;
+    assert_eq!(s, StatusCode::OK, "{edited}");
+    let vendor_path = format!("/vendors/{}", v["id"].as_str().unwrap());
+    assert_eq!(
+        c.get(&vendor_path).await.1["menuItems"][0]["price"],
+        json!(7.25)
+    );
+    for amount in [
+        "7.501",
+        "7.5000000000000001",
+        "-7.5",
+        "0",
+        "100000.01",
+        "1e999",
+        "92233720368547758.08",
+        "\"7.5\"",
+    ] {
+        let req = Request::patch(format!("/api/v1{path}"))
+            .header(header::COOKIE, &c.cookie)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(format!("{{\"price\":{amount}}}")))
+            .unwrap();
+        assert_eq!(
+            raw(&c.app, req).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{amount}"
+        );
+    }
+    assert_eq!(
+        c.get(&vendor_path).await.1["menuItems"][0]["price"],
+        json!(7.25)
+    );
+    assert_eq!(
+        c.patch(&path, json!({"price":0.01})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        c.patch(&path, json!({"price":100000})).await.0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn delivery_address_crud_validation_and_ownership() {
     let c = Client::new().await;
     let other = c.other().await;

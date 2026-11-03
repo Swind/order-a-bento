@@ -244,8 +244,9 @@ async fn delete_image(
 
 /// Outer middleware so session, origin and extractor rejections are private too.
 pub async fn no_store(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    let private_image =
-        req.uri().path().starts_with("/api/v1/vendors/") && req.uri().path().ends_with("/image");
+    let private_image = (req.uri().path().starts_with("/api/v1/vendors/")
+        && req.uri().path().ends_with("/image"))
+        || req.uri().path().starts_with("/api/v1/ai/import-runs");
     let mut response = next.run(req).await;
     if private_image {
         response.headers_mut().insert(

@@ -76,6 +76,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/import-runs/{runId}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_draft"];
+        put: operations["put_draft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/import-runs/{runId}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["draft_turn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/import-runs/{runId}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["undo_turn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/config": {
         parameters: {
             query?: never;
@@ -773,8 +821,8 @@ export interface components {
             description?: string | null;
             name: string;
             /**
-             * Format: int64
-             * @description Whole TWD dollars; required (fill in `price_missing` items first).
+             * Format: double
+             * @description TWD dollars, at most two decimal places; fill in missing prices first.
              */
             price?: number | null;
         };
@@ -803,6 +851,8 @@ export interface components {
         ApplyRequest: {
             /** @description The changes the user confirmed (possibly edited); anything not listed is ignored. */
             accepted: components["schemas"]["AcceptedChangeDto"][];
+            /** Format: int64 */
+            draftRevision?: number | null;
             /** @description Omitted defaults to the currently available pending photo. False imports data only. */
             savePhoto?: boolean | null;
         };
@@ -892,6 +942,46 @@ export interface components {
             displayName?: string | null;
             email: string;
         };
+        DraftItemDto: {
+            category?: string | null;
+            description?: string | null;
+            id: string;
+            name: string;
+            /** Format: double */
+            price?: number | null;
+            selected: boolean;
+        };
+        DraftRequest: {
+            /** Format: int64 */
+            revision: number;
+            vendors: components["schemas"]["DraftVendorDto"][];
+        };
+        DraftStateDto: {
+            pending?: string | null;
+            /** Format: int64 */
+            pendingUntil?: number | null;
+            /** Format: int64 */
+            revision: number;
+            turns: components["schemas"]["DraftTurnDto"][];
+            undo?: components["schemas"]["DraftVendorDto"][] | null;
+            vendors: components["schemas"]["DraftVendorDto"][];
+        };
+        DraftTurnDto: {
+            changes: string[];
+            id: string;
+            instruction: string;
+            reply: string;
+            status: string;
+            undone: boolean;
+        };
+        DraftVendorDto: {
+            id: string;
+            info: components["schemas"]["VendorInfoSnapshotDto"];
+            infoSelected: boolean;
+            menu: components["schemas"]["DraftItemDto"][];
+            selected: boolean;
+            vendor: components["schemas"]["TargetRefDto"];
+        };
         EffectiveOrderDto: {
             /** @description The latest submission had no lines. */
             cancelled: boolean;
@@ -900,7 +990,7 @@ export interface components {
             submissionId: string;
             /** Format: date-time */
             submittedAt: string;
-            /** Format: int64 */
+            /** Format: double */
             total: number;
         };
         EffectiveOrderResponse: {
@@ -927,7 +1017,7 @@ export interface components {
             status: components["schemas"]["GroupStatusDto"];
             title: string;
             /**
-             * Format: int64
+             * Format: double
              * @description Sum of the effective orders.
              */
             totalAmount: number;
@@ -971,7 +1061,7 @@ export interface components {
             participants: components["schemas"]["SummaryParticipantsDto"];
             settlement: components["schemas"]["SummarySettlementDto"];
             status: components["schemas"]["GroupStatusDto"];
-            /** Format: int64 */
+            /** Format: double */
             totalAmount: number;
             /** Format: int32 */
             totalQuantity: number;
@@ -992,7 +1082,7 @@ export interface components {
             note?: string | null;
             /** Format: int32 */
             quantity: number;
-            /** Format: int64 */
+            /** Format: double */
             unitPrice: number;
         };
         /** Format: binary */
@@ -1004,6 +1094,7 @@ export interface components {
         ImportRunDto: {
             appliedAt?: string | null;
             createdAt: string;
+            draft?: components["schemas"]["DraftStateDto"] | null;
             /** @description Why the run failed (`status = failed`). */
             error?: string | null;
             finishedAt?: string | null;
@@ -1083,8 +1174,8 @@ export interface components {
             id: string;
             name: string;
             /**
-             * Format: int64
-             * @description Whole TWD dollars.
+             * Format: double
+             * @description TWD dollars, at most two decimal places.
              */
             price: number;
             /** Format: int32 */
@@ -1095,15 +1186,15 @@ export interface components {
             description?: string | null;
             name: string;
             /**
-             * Format: int64
-             * @description Whole TWD dollars, 1..=100000.
+             * Format: double
+             * @description TWD dollars, 0.01..=100000, at most two decimal places.
              */
             price: number;
         };
         MenuItemSnapshotDto: {
             category?: string | null;
             description?: string | null;
-            /** Format: int64 */
+            /** Format: double */
             price: number;
         };
         OfferedItemDto: {
@@ -1111,7 +1202,7 @@ export interface components {
             description?: string | null;
             id: string;
             name: string;
-            /** Format: int64 */
+            /** Format: double */
             price: number;
             soldOut: boolean;
             /** Format: int32 */
@@ -1123,9 +1214,9 @@ export interface components {
             note?: string | null;
             /** Format: int32 */
             quantity: number;
-            /** Format: int64 */
+            /** Format: double */
             subtotal: number;
-            /** Format: int64 */
+            /** Format: double */
             unitPrice: number;
         };
         OrganizerSubmitRequest: {
@@ -1156,12 +1247,12 @@ export interface components {
         };
         ParticipantRowDto: {
             /**
-             * Format: int64
+             * Format: double
              * @description Total of the effective order (0 when none or cancelled).
              */
             amountDue: number;
             /**
-             * Format: int64
+             * Format: double
              * @description `amountDue - paidAmount`: positive = 尚差, negative = 應退, 0 = settled; `null` when unpaid.
              */
             balance?: number | null;
@@ -1173,7 +1264,7 @@ export interface components {
             orderNote?: string | null;
             paid: boolean;
             /**
-             * Format: int64
+             * Format: double
              * @description Amount due recorded when marked paid.
              */
             paidAmount?: number | null;
@@ -1220,7 +1311,7 @@ export interface components {
             category?: string | null;
             description?: string | null;
             name?: string | null;
-            /** Format: int64 */
+            /** Format: double */
             price?: number | null;
             /** Format: int32 */
             sortOrder?: number | null;
@@ -1309,7 +1400,7 @@ export interface components {
             issues: components["schemas"]["IssueDto"][];
             name: string;
             /**
-             * Format: int64
+             * Format: double
              * @description `null` = the price could not be read (issue `price_missing`).
              */
             price?: number | null;
@@ -1337,7 +1428,7 @@ export interface components {
             description?: string | null;
             id: string;
             name: string;
-            /** Format: int64 */
+            /** Format: double */
             price: number;
             soldOut: boolean;
         };
@@ -1464,7 +1555,7 @@ export interface components {
             submittedAt: string;
             /** @description `participant` or `organizer`. */
             submittedBy: string;
-            /** Format: int64 */
+            /** Format: double */
             total: number;
         };
         SubmitLineDto: {
@@ -1490,12 +1581,12 @@ export interface components {
         SummaryItemDto: {
             itemId: string;
             name: string;
-            /** Format: int64 */
+            /** Format: double */
             price: number;
             /** Format: int32 */
             quantity: number;
             /**
-             * Format: int64
+             * Format: double
              * @description Sum of `quantity * unitPrice` of the effective lines (stored prices).
              */
             subtotal: number;
@@ -1518,7 +1609,7 @@ export interface components {
              */
             paid: number;
             /**
-             * Format: int64
+             * Format: double
              * @description Sum of the `paidAmount` recorded when each participant was marked paid.
              */
             paidAmount: number;
@@ -1528,7 +1619,7 @@ export interface components {
              */
             pickedUp: number;
             /**
-             * Format: int64
+             * Format: double
              * @description `totalAmount` minus the current amount due of the participants marked paid:
              *     what is still expected from those who have not paid. A paid participant whose
              *     order changed afterwards contributes only their current due here; the
@@ -1545,6 +1636,18 @@ export interface components {
             /** @enum {string} */
             kind: "new";
             name: string;
+        };
+        TurnRequest: {
+            instruction: string;
+            /** Format: int64 */
+            revision: number;
+            turnId: string;
+            vendors: components["schemas"]["DraftVendorDto"][];
+        };
+        UndoRequest: {
+            /** Format: int64 */
+            revision: number;
+            turnId: string;
         };
         UpsertItemsRequest: {
             items: components["schemas"]["MenuItemInputDto"][];
@@ -1888,6 +1991,142 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    get_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftStateDto"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    put_draft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftStateDto"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    draft_turn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftStateDto"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    undo_turn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UndoRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftStateDto"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetails"];
                 };
             };
         };

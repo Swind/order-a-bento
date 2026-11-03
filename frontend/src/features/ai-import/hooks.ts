@@ -62,11 +62,11 @@ export function useApplyImport(runId: string, savePhoto?: boolean) {
         await qc.invalidateQueries({ queryKey: runKey(runId) });
       }
     },
-    mutationFn: async (accepted: AcceptedChange[]) =>
+    mutationFn: async (input: AcceptedChange[] | { accepted: AcceptedChange[]; draftRevision: number }) =>
       unwrap(
         await api.POST("/api/v1/ai/import-runs/{runId}/apply", {
           params: { path: { runId } },
-          body: { accepted, ...(savePhoto === undefined ? {} : { savePhoto }) },
+          body: { ...(Array.isArray(input) ? { accepted: input } : input), ...(savePhoto === undefined ? {} : { savePhoto }) },
         }),
       ),
     onSuccess: () => {

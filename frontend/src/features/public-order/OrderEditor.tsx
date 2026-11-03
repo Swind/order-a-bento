@@ -8,6 +8,7 @@ import type { EffectiveOrder, PublicGroup } from "@/shared/api/types";
 import { formatHHmm } from "@/shared/lib/datetime";
 import { collectClientInfo } from "@/shared/lib/deviceInfo";
 import { formatMoney } from "@/shared/lib/format";
+import { orderTotal } from "@/shared/lib/money";
 import { cn } from "@/shared/lib/utils";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { Button } from "@/shared/ui/button";
@@ -71,7 +72,7 @@ export function OrderEditor({ token, group, participantId, order, readOnly, acti
       ...(notes[i.id]?.trim() ? { note: notes[i.id].trim() } : {}),
     }));
   const count = lines.reduce((n, l) => n + l.quantity, 0);
-  const total = group.menu.reduce((s, i) => s + i.price * (qty[i.id] ?? 0), 0);
+  const total = orderTotal(group.menu.map((i) => ({ price: i.price, quantity: qty[i.id] ?? 0 })));
   const soldOutSelected = group.menu.some((i) => i.soldOut && (qty[i.id] ?? 0) > 0);
   const dirty = orderContent(lines, orderNote) !== orderContent(effective?.lines ?? [], effective?.note);
 

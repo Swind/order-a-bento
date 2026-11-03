@@ -75,8 +75,14 @@ pub fn import_agent_system_prompt(mode: ImportMode) -> String {
         ("{{MAX_NAME_LEN}}", PersonName::MAX_LEN.to_string()),
         ("{{MAX_MEMBERS}}", Roster::MAX_MEMBERS.to_string()),
         ("{{MAX_ITEM_NAME_LEN}}", ItemName::MAX_LEN.to_string()),
-        ("{{MIN_PRICE}}", Money::MIN_PRICE.to_string()),
-        ("{{MAX_PRICE}}", Money::MAX_PRICE.to_string()),
+        (
+            "{{MIN_PRICE}}",
+            domain::shared::amount::text(Money::MIN_PRICE),
+        ),
+        (
+            "{{MAX_PRICE}}",
+            domain::shared::amount::text(Money::MAX_PRICE),
+        ),
         ("{{MAX_MENU_ITEMS}}", Vendor::MAX_MENU_ITEMS.to_string()),
     ] {
         p = p.replace(k, &v);
@@ -102,8 +108,8 @@ mod tests {
         assert!(r.contains("1–50 characters"));
         assert!(r.contains(&format!("At most {} people", Roster::MAX_MEMBERS)));
         let v = import_agent_system_prompt(ImportMode::Vendor);
-        assert!(v.contains("in the range 1–100000"));
-        assert!(v.contains(&format!("{}–{}", Money::MIN_PRICE, Money::MAX_PRICE)));
+        assert!(v.contains("in the range 0.01–100000"));
+        assert!(v.contains("at most two decimal places"));
         assert!(v.contains("At most 200 items"));
         assert!(v.contains("1–50 characters, using the original name"));
     }

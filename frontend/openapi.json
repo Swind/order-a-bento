@@ -350,6 +350,215 @@
         ]
       }
     },
+    "/api/v1/ai/import-runs/{runId}/draft": {
+      "get": {
+        "tags": [
+          "ai-import"
+        ],
+        "operationId": "get_draft",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftStateDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "ai-import"
+        ],
+        "operationId": "put_draft",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftStateDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ai/import-runs/{runId}/turns": {
+      "post": {
+        "tags": [
+          "ai-import"
+        ],
+        "operationId": "draft_turn",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftStateDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/ai/import-runs/{runId}/undo": {
+      "post": {
+        "tags": [
+          "ai-import"
+        ],
+        "operationId": "undo_turn",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftStateDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/config": {
       "get": {
         "tags": [
@@ -3830,11 +4039,11 @@
           },
           "price": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
-            "description": "Whole TWD dollars; required (fill in `price_missing` items first)."
+            "format": "double",
+            "description": "TWD dollars, at most two decimal places; fill in missing prices first."
           }
         }
       },
@@ -3951,6 +4160,13 @@
               "$ref": "#/components/schemas/AcceptedChangeDto"
             },
             "description": "The changes the user confirmed (possibly edited); anything not listed is ignored."
+          },
+          "draftRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
           },
           "savePhoto": {
             "type": [
@@ -4317,6 +4533,181 @@
           }
         }
       },
+      "DraftItemDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "selected",
+          "name"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "selected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DraftRequest": {
+        "type": "object",
+        "required": [
+          "revision",
+          "vendors"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftVendorDto"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DraftStateDto": {
+        "type": "object",
+        "required": [
+          "revision",
+          "vendors",
+          "turns"
+        ],
+        "properties": {
+          "pending": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pendingUntil": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftTurnDto"
+            }
+          },
+          "undo": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DraftVendorDto"
+            }
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftVendorDto"
+            }
+          }
+        }
+      },
+      "DraftTurnDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "instruction",
+          "reply",
+          "status",
+          "changes",
+          "undone"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "reply": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "undone": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DraftVendorDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "vendor",
+          "selected",
+          "infoSelected",
+          "info",
+          "menu"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "info": {
+            "$ref": "#/components/schemas/VendorInfoSnapshotDto"
+          },
+          "infoSelected": {
+            "type": "boolean"
+          },
+          "menu": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftItemDto"
+            }
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "vendor": {
+            "$ref": "#/components/schemas/TargetRefDto"
+          }
+        }
+      },
       "EffectiveOrderDto": {
         "type": "object",
         "required": [
@@ -4351,8 +4742,8 @@
             "format": "date-time"
           },
           "total": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -4442,8 +4833,8 @@
             "type": "string"
           },
           "totalAmount": {
-            "type": "integer",
-            "format": "int64",
+            "type": "number",
+            "format": "double",
             "description": "Sum of the effective orders."
           },
           "vendorName": {
@@ -4596,8 +4987,8 @@
             "$ref": "#/components/schemas/GroupStatusDto"
           },
           "totalAmount": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           },
           "totalQuantity": {
             "type": "integer",
@@ -4652,8 +5043,8 @@
             "minimum": 0
           },
           "unitPrice": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -4696,6 +5087,16 @@
           },
           "createdAt": {
             "type": "string"
+          },
+          "draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DraftStateDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "error": {
             "type": [
@@ -5008,9 +5409,9 @@
             "type": "string"
           },
           "price": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Whole TWD dollars."
+            "type": "number",
+            "format": "double",
+            "description": "TWD dollars, at most two decimal places."
           },
           "sortOrder": {
             "type": "integer",
@@ -5041,9 +5442,12 @@
             "type": "string"
           },
           "price": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Whole TWD dollars, 1..=100000."
+            "type": "number",
+            "format": "double",
+            "description": "TWD dollars, 0.01..=100000, at most two decimal places.",
+            "multipleOf": 0.01,
+            "maximum": 100000,
+            "minimum": 0.01
           }
         }
       },
@@ -5066,8 +5470,8 @@
             ]
           },
           "price": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -5100,8 +5504,8 @@
             "type": "string"
           },
           "price": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           },
           "soldOut": {
             "type": "boolean"
@@ -5140,12 +5544,12 @@
             "minimum": 0
           },
           "subtotal": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           },
           "unitPrice": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -5247,16 +5651,16 @@
         ],
         "properties": {
           "amountDue": {
-            "type": "integer",
-            "format": "int64",
+            "type": "number",
+            "format": "double",
             "description": "Total of the effective order (0 when none or cancelled)."
           },
           "balance": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
+            "format": "double",
             "description": "`amountDue - paidAmount`: positive = 尚差, negative = 應退, 0 = settled; `null` when unpaid."
           },
           "deviceShort": {
@@ -5289,10 +5693,10 @@
           },
           "paidAmount": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
+            "format": "double",
             "description": "Amount due recorded when marked paid."
           },
           "paidAt": {
@@ -5425,10 +5829,10 @@
           },
           "price": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64"
+            "format": "double"
           },
           "sortOrder": {
             "type": [
@@ -5765,10 +6169,10 @@
           },
           "price": {
             "type": [
-              "integer",
+              "number",
               "null"
             ],
-            "format": "int64",
+            "format": "double",
             "description": "`null` = the price could not be read (issue `price_missing`)."
           }
         }
@@ -5878,8 +6282,8 @@
             "type": "string"
           },
           "price": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           },
           "soldOut": {
             "type": "boolean"
@@ -6340,8 +6744,8 @@
             "description": "`participant` or `organizer`."
           },
           "total": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           }
         }
       },
@@ -6423,8 +6827,8 @@
             "type": "string"
           },
           "price": {
-            "type": "integer",
-            "format": "int64"
+            "type": "number",
+            "format": "double"
           },
           "quantity": {
             "type": "integer",
@@ -6432,8 +6836,8 @@
             "minimum": 0
           },
           "subtotal": {
-            "type": "integer",
-            "format": "int64",
+            "type": "number",
+            "format": "double",
             "description": "Sum of `quantity * unitPrice` of the effective lines (stored prices)."
           }
         }
@@ -6480,8 +6884,8 @@
             "minimum": 0
           },
           "paidAmount": {
-            "type": "integer",
-            "format": "int64",
+            "type": "number",
+            "format": "double",
             "description": "Sum of the `paidAmount` recorded when each participant was marked paid."
           },
           "pickedUp": {
@@ -6491,8 +6895,8 @@
             "minimum": 0
           },
           "unpaidAmount": {
-            "type": "integer",
-            "format": "int64",
+            "type": "number",
+            "format": "double",
             "description": "`totalAmount` minus the current amount due of the participants marked paid:\nwhat is still expected from those who have not paid. A paid participant whose\norder changed afterwards contributes only their current due here; the\ndifference (尚差/應退) is their per-participant `balance`."
           }
         }
@@ -6537,6 +6941,51 @@
           }
         ],
         "description": "`{ \"kind\": \"existing\", \"existingId\": \"..\" }` or `{ \"kind\": \"new\", \"name\": \"..\" }`."
+      },
+      "TurnRequest": {
+        "type": "object",
+        "required": [
+          "revision",
+          "turnId",
+          "instruction",
+          "vendors"
+        ],
+        "properties": {
+          "instruction": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DraftVendorDto"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "UndoRequest": {
+        "type": "object",
+        "required": [
+          "revision",
+          "turnId"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "UpsertItemsRequest": {
         "type": "object",

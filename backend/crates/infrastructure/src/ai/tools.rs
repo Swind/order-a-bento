@@ -15,6 +15,54 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum EditArgs {
+    #[serde(rename_all = "camelCase")]
+    RenameVendor { vendor_id: String, name: String },
+    #[serde(rename_all = "camelCase")]
+    UpdateItem {
+        item_id: String,
+        name: Option<String>,
+        #[serde(default, with = "domain::shared::amount::optional")]
+        #[schemars(with = "Option<f64>")]
+        price: Option<i64>,
+        category: Option<String>,
+        description: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    DeleteItem { item_id: String },
+    #[serde(rename_all = "camelCase")]
+    AddItem {
+        vendor_id: String,
+        name: String,
+        #[serde(default, with = "domain::shared::amount::optional")]
+        #[schemars(with = "Option<f64>")]
+        price: Option<i64>,
+        category: Option<String>,
+        description: Option<String>,
+    },
+}
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SubmitEditsArgs {
+    pub edits: Vec<EditArgs>,
+}
+
+impl<'de> Deserialize<'de> for SubmitEditsArgs {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            edits: Box<serde_json::value::RawValue>,
+        }
+        let raw = Raw::deserialize(d)?;
+        domain::shared::amount::validate_prices(raw.edits.get())
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            edits: serde_json::from_str(raw.edits.get()).map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
 /// JSON Schema of `T` in the subset Anthropic's strict tool use accepts:
 /// inlined subschemas, every object closed (`additionalProperties: false`) with
 /// all properties required. (rig's `with_strict_tools` sanitizes too; this keeps
@@ -115,6 +163,21 @@ macro_rules! tool {
 }
 
 tool!(
+    SubmitDraftEdits,
+    "submit_draft_edits",
+    SubmitEditsArgs,
+    String,
+    "Submit exactly one atomic batch of edits to the CURRENT DRAFT, using its stable IDs. Prices are TWD dollars with at most two decimal places (e.g. 7.5), never rounded to whole dollars. Null fields mean unchanged; empty category/description clears it. Delete removes a draft row only, never a saved vendor item. If ambiguous, ask a question WITHOUT calling this tool. Never regenerate the menu or modify unrelated fields.",
+    |ctx, a| async move {
+        let edits = serde_json::from_value(
+            serde_json::to_value(a.edits).map_err(|e| ToolError(e.to_string()))?,
+        )
+        .map_err(|e| ToolError(e.to_string()))?;
+        ctx.submit_edits(edits).await?;
+        Ok("Draft edits staged; organizer confirmation is still required.".into())
+    }
+);
+tool!(
     ListRosters,
     "list_rosters",
     NoArgs,
@@ -193,3 +256,27 @@ macro_rules! add_vendor_tools {
     };
 }
 pub(crate) use add_vendor_tools;
+
+#[cfg(test)]
+mod decimal_tests {
+    use super::*;
+    #[test]
+    fn draft_tool_validates_original_decimal_spelling_before_tagged_enum_buffering() {
+        let args: SubmitEditsArgs =
+            serde_json::from_str(r#"{"edits":[{"type":"updateItem","itemId":"m1","price":7.5}]}"#)
+                .unwrap();
+        assert!(matches!(
+            &args.edits[0],
+            EditArgs::UpdateItem {
+                price: Some(750),
+                ..
+            }
+        ));
+        assert!(
+            serde_json::from_str::<SubmitEditsArgs>(
+                r#"{"edits":[{"type":"updateItem","itemId":"m1","price":7.5000000000000001}]}"#
+            )
+            .is_err()
+        );
+    }
+}

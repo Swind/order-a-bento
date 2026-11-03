@@ -32,7 +32,7 @@ pub const INSTRUCTION_MAX_LEN: usize = 500;
 pub struct AiImportConfig {
     /// Model name recorded on a run before the agent reports the real one.
     pub model: String,
-    /// `AI_DAILY_QUOTA_PER_USER`: runs created in the last 24 h per organizer.
+    /// `AI_DAILY_QUOTA_PER_USER`: image runs plus logical draft turns in the last 24 h.
     pub daily_quota: u32,
     /// Total time for the agent including the retry (design: 90 s).
     pub timeout: Duration,
@@ -132,8 +132,9 @@ pub struct AcceptedVendorInfo {
 #[serde(rename_all = "camelCase")]
 pub struct AcceptedMenuItem {
     pub name: String,
-    /// Required (the user fills in `price_missing` items before applying).
+    /// Integer cents internally; JSON dollars, at most two decimal places.
     #[serde(default)]
+    #[serde(with = "domain::shared::amount::optional")]
     pub price: Option<i64>,
     #[serde(default)]
     pub description: Option<String>,
@@ -196,6 +197,7 @@ impl From<PortError> for AiImportError {
 impl From<DomainError> for AiImportError {
     fn from(e: DomainError) -> Self {
         match e {
+            DomainError::Invalid { field: "quota", .. } => Self::QuotaExceeded,
             DomainError::NotFound { .. } => Self::NotFound,
             DomainError::Invalid {
                 field: "status",
@@ -352,7 +354,7 @@ impl AiImportService {
     }
 
     /// The agent call with one retry of a retryable failure, all under the timeout.
-    async fn run_agent(
+    pub(super) async fn run_agent(
         &self,
         ctx: &Arc<ImportToolContext>,
         input: AgentInput,
@@ -428,7 +430,24 @@ impl AiImportService {
         id: ImportRunId,
         cmd: ApplyCmd,
     ) -> Result<ApplyResult, AiImportError> {
+        self.apply_at_revision(org, id, cmd, None).await
+    }
+
+    pub async fn apply_at_revision(
+        &self,
+        org: OrganizerId,
+        id: ImportRunId,
+        mut cmd: ApplyCmd,
+        draft_revision: Option<i64>,
+    ) -> Result<ApplyResult, AiImportError> {
         let mut run = self.get(org, id).await?;
+        if let Some(revision) = draft_revision {
+            let state = self.get_draft(org, id).await?;
+            if state.revision != revision || state.pending.is_some() {
+                return Err(AiImportError::Conflict);
+            }
+            cmd.accepted = super::draft_service::accepted(&state.vendors);
+        }
         self.rosters
             .check_scope(org, run.sharing_group_id, true)
             .await?;
@@ -651,7 +670,9 @@ impl AiImportService {
             None
         };
         run.apply(self.clock.now())?;
-        self.apply_repo.apply(&run, steps, photo_target).await?;
+        self.apply_repo
+            .apply_draft(&run, steps, photo_target, draft_revision)
+            .await?;
         Ok(result)
     }
 }

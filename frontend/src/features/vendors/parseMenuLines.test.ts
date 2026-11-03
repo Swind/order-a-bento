@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { parseMenuLines, parsePrice } from "./parseMenuLines";
 
 describe("parsePrice", () => {
+  it("keeps decimal dumpling unit prices", () => {
+    expect(parsePrice("7.5")).toBe(7.5);
+    expect(parsePrice("NT$7.50")).toBe(7.5);
+    expect(parseMenuLines("水餃 7.5\n鍋貼,7.25").items.map((i) => i.price)).toEqual([7.5, 7.25]);
+  });
   it("accepts common notations", () => {
     for (const s of ["85", "$85", "NT$85", "nt$ 85", "85元", "NT$85元", "８５", "1,200"]) {
       expect(parsePrice(s), s).not.toBeNull();
@@ -9,8 +14,8 @@ describe("parsePrice", () => {
     expect(parsePrice("1,200")).toBe(1200);
     expect(parsePrice("８５")).toBe(85);
   });
-  it("rejects garbage and decimals", () => {
-    for (const s of ["abc", "8.5", "-5", "", "$"]) expect(parsePrice(s), s).toBeNull();
+  it("rejects garbage, excess precision and negatives", () => {
+    for (const s of ["abc", "8.501", "-5", "", "$", "NaN", "Infinity"]) expect(parsePrice(s), s).toBeNull();
   });
 });
 

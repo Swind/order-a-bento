@@ -382,7 +382,7 @@ mod tests {
         let mut v = domain::directory::Vendor::new(a, "Old").unwrap();
         v.upsert_menu_items(vec![domain::directory::MenuItemInput {
             name: "Rice".into(),
-            price: 80,
+            price: 8000,
             description: None,
             category: None,
         }])

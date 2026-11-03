@@ -203,6 +203,8 @@ pub struct GetVendorArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MenuItemView {
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
+    #[schemars(with = "f64")]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -298,7 +300,11 @@ pub struct ProposalError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PriceChange {
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
+    #[schemars(with = "f64")]
     pub from: i64,
+    #[serde(with = "domain::shared::amount")]
+    #[schemars(with = "f64")]
     pub to: i64,
 }
 
@@ -634,8 +640,13 @@ pub struct VendorInfoArg {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MenuItemArg {
     pub name: String,
-    /// New Taiwan dollars, integer. `null` when unreadable (never guess).
+    /// TWD dollars, at most two decimal places (e.g. 7.5). Null when unreadable.
     #[serde(default)]
+    #[serde(
+        serialize_with = "domain::shared::amount::optional::serialize",
+        deserialize_with = "domain::shared::amount::raw_optional::deserialize"
+    )]
+    #[schemars(with = "Option<f64>")]
     pub price: Option<i64>,
     #[serde(default)]
     pub description: Option<String>,
@@ -851,9 +862,10 @@ pub async fn propose_vendor(
                         Some(i),
                         "price",
                         format!(
-                            "price must be between {} and {} (got {p}); use null when it is unreadable, do not guess",
-                            Money::MIN_PRICE,
-                            Money::MAX_PRICE
+                            "price must be between {} and {} (got {}); use null when it is unreadable, do not guess",
+                            domain::shared::amount::text(Money::MIN_PRICE),
+                            domain::shared::amount::text(Money::MAX_PRICE),
+                            domain::shared::amount::text(p)
                         ),
                     );
                     None
@@ -977,6 +989,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn tool_prices_keep_decimal_units_and_reject_excess_precision_before_rounding() {
+        let item: MenuItemArg = serde_json::from_str(r#"{"name":"水餃","price":7.5}"#).unwrap();
+        assert_eq!(item.price, Some(750));
+        assert_eq!(serde_json::to_value(&item).unwrap()["price"], json!(7.5));
+        assert!(
+            serde_json::from_str::<MenuItemArg>(r#"{"name":"水餃","price":7.5000000000000001}"#)
+                .is_err()
+        );
+    }
 
     #[test]
     fn target_unions_parse() {

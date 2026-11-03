@@ -54,7 +54,9 @@ impl From<VendorSummary> for VendorSummaryDto {
 pub struct MenuItemDto {
     pub id: String,
     pub name: String,
-    /// Whole TWD dollars.
+    /// TWD dollars, at most two decimal places.
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -158,7 +160,9 @@ fn report_dto(inputs: &[String], r: &UpsertReport<MenuItemId>) -> ItemUpsertRepo
 #[serde(rename_all = "camelCase")]
 pub struct MenuItemInputDto {
     pub name: String,
-    /// Whole TWD dollars, 1..=100000.
+    /// TWD dollars, 0.01..=100000, at most two decimal places.
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64, minimum = 0.01, maximum = 100000, multiple_of = 0.01)]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -234,6 +238,8 @@ pub struct VendorUpsertResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PatchItemRequest {
     pub name: Option<String>,
+    #[serde(default, with = "domain::shared::amount::optional")]
+    #[schema(value_type = Option<f64>)]
     pub price: Option<i64>,
     #[serde(default, deserialize_with = "double_option")]
     #[schema(value_type = Option<String>)]

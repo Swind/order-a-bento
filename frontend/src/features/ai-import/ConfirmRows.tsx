@@ -169,7 +169,8 @@ export function MenuRowView({
           </span>
           <Input
             className={cn("h-11 pl-6", priceBad && row.checked && "border-destructive")}
-            inputMode="numeric"
+            inputMode="decimal"
+            step="0.01"
             value={row.price}
             aria-label={`${row.name || "此列"} 價格`}
             aria-invalid={priceBad && row.checked}

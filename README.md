@@ -177,6 +177,10 @@ bento.example.com {
 
 AI 匯入的請求最長會等 `AI_RUN_TIMEOUT_SECS`（預設 90 秒，compatible provider 300 秒），代理的讀取逾時要大於這個值。
 
+Vendor 圖片匯入後可在同份草稿繼續文字對話修改、手動編輯與復原上一輪，最後確認才寫入；額度、保存與並行保護見 [草稿對話說明](docs/vendor-import-conversation.md)。
+
+菜單支援小數兩位（例如水餃單價 7.5 元、3 顆 22.5 元）。API 金額仍用元，資料庫改用整數分；升級與回退注意事項見 [小數金額說明](docs/decimal-money.md)。
+
 ### 5. AI provider 範例
 
 ```sh
@@ -283,7 +287,7 @@ docker start bento
 | `AI_SESSION_HEADER` | 否 | 空 | 標頭名稱 | 以此標頭送出匯入 run id（供依 session 路由的閘道，例 `x-opencode-session`） | no |
 | `AI_MAX_TURNS` | 否 | `8` | 正整數 | 每次匯入最多呼叫模型次數 | no |
 | `AI_MAX_TOKENS` | 否 | `16384` | 正整數（u64） | 所有 provider 每次模型呼叫的輸出 token 額度（非整個 run）；推理也可能占用。須符合模型／gateway 的輸出與 context 限制，小模型請調低；不改變 reasoning／tool 策略 | no |
-| `AI_DAILY_QUOTA_PER_USER` | 否 | `30` | 整數 | 每位使用者每日 AI 匯入次數上限 | no |
+| `AI_DAILY_QUOTA_PER_USER` | 否 | `30` | 整數 | 每位使用者 24 小時圖片匯入與新草稿對話輪次共用上限 | no |
 | `AI_FALLBACKS` | 否 | `anthropic`：`default`；其他 provider：`off` | `default`、`off` | 請求被拒時是否讓 API 退回其他模型。**`default` 只在 `AI_PROVIDER=anthropic` 有效**，其他 provider 設 `default` 會拒絕啟動 | no |
 | `AI_STRICT_TOOLS` | 否 | `anthropic`：`true`；其他：`false` | 布林 | 工具 schema 使用 strict 模式 | no |
 | `AI_REASONING` | 否 | `anthropic`：`low`；其他：`off` | `low`、`off` | `low`＝送出低推理強度參數；`off`＝不送推理參數 | no |

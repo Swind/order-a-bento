@@ -107,7 +107,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `AI_MODEL` | `claude-opus-5-5` | 使用的模型；`openai-compatible`／`openai-responses` 必須明確設定 |
 | `AI_MAX_TURNS` | `8` | 每次匯入最多呼叫模型次數 |
 | `AI_MAX_TOKENS` | `16384` | 所有 provider 每次模型呼叫的輸出 token 額度（正整數 u64，非整個 run）；推理也可能占用。須符合模型／gateway 的輸出與 context 限制，小模型請調低；不改變 reasoning／tool 策略 |
-| `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者每日匯入次數上限 |
+| `AI_DAILY_QUOTA_PER_USER` | `30` | 每位開團者 24 小時圖片匯入與新草稿對話輪次共用上限 |
 | `AI_PROVIDER` | `anthropic` | `anthropic`＝Anthropic 官方 API（Claude 預設值）；`anthropic-compatible`＝相容 Messages API 的 gateway 後面接其他模型（見下方「改用 Anthropic 相容 gateway」）；`openai-compatible`＝相容 OpenAI Chat Completions 的伺服器（DeepSeek、vLLM、LiteLLM、opencode…，見下方「改用 OpenAI 相容伺服器」）；`openai-responses`＝只支援 OpenAI Responses API（`/v1/responses`）的模型，如 opencode Go 上的 `gpt-6-luna`（見下方「Responses API」） |
 | `AI_FALLBACKS` | `default`（compatible 為 `off`） | `default`＝被拒絕時允許 API 端 fallback；`off`＝關閉。fallback 是 Anthropic 專屬功能，compatible provider 設 `default` 會拒絕啟動 |
 | `AI_STRICT_TOOLS` | `true`（compatible 為 `false`） | 是否送出 `strict: true` 的 tool schema |

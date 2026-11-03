@@ -57,6 +57,8 @@ pub struct ParticipantDto {
 pub struct OfferedItemDto {
     pub id: String,
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -258,6 +260,8 @@ pub struct GroupListItemDto {
     /// Participants whose effective order has at least one line.
     pub ordered_count: u32,
     /// Sum of the effective orders.
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub total_amount: i64,
 }
 
@@ -325,9 +329,13 @@ pub struct SetSoldOutRequest {
 pub struct SummaryItemDto {
     pub item_id: String,
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub price: i64,
     pub quantity: u32,
     /// Sum of `quantity * unitPrice` of the effective lines (stored prices).
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub subtotal: i64,
 }
 
@@ -348,11 +356,15 @@ pub struct SummarySettlementDto {
     /// Participants marked paid.
     pub paid: u32,
     /// Sum of the `paidAmount` recorded when each participant was marked paid.
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub paid_amount: i64,
     /// `totalAmount` minus the current amount due of the participants marked paid:
     /// what is still expected from those who have not paid. A paid participant whose
     /// order changed afterwards contributes only their current due here; the
     /// difference (尚差/應退) is their per-participant `balance`.
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub unpaid_amount: i64,
 }
 
@@ -364,6 +376,8 @@ pub struct GroupSummaryDto {
     /// Every offered item in menu order (quantity 0 included).
     pub items: Vec<SummaryItemDto>,
     pub total_quantity: u32,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub total_amount: i64,
     pub participants: SummaryParticipantsDto,
     pub settlement: SummarySettlementDto,
@@ -419,6 +433,8 @@ pub struct ParticipantRowDto {
     pub name: String,
     pub sort_order: i32,
     /// Total of the effective order (0 when none or cancelled).
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub amount_due: i64,
     pub items: Vec<ParticipantItemDto>,
     pub order_note: Option<String>,
@@ -434,8 +450,12 @@ pub struct ParticipantRowDto {
     #[schema(format = "date-time")]
     pub paid_at: Option<String>,
     /// Amount due recorded when marked paid.
+    #[serde(with = "domain::shared::amount::optional")]
+    #[schema(value_type = Option<f64>)]
     pub paid_amount: Option<i64>,
     /// `amountDue - paidAmount`: positive = 尚差, negative = 應退, 0 = settled; `null` when unpaid.
+    #[serde(with = "domain::shared::amount::optional")]
+    #[schema(value_type = Option<f64>)]
     pub balance: Option<i64>,
     /// A device id used by this participant was also used for another participant in this group.
     pub suspicious_device: bool,
@@ -482,6 +502,8 @@ pub struct HistoryLineDto {
     pub item_id: String,
     pub name: String,
     pub quantity: u32,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub unit_price: i64,
     pub note: Option<String>,
 }
@@ -509,6 +531,8 @@ pub struct SubmissionHistoryDto {
     /// `participant` or `organizer`.
     pub submitted_by: String,
     pub cancelled: bool,
+    #[serde(with = "domain::shared::amount")]
+    #[schema(value_type = f64)]
     pub total: i64,
     pub note: Option<String>,
     pub lines: Vec<HistoryLineDto>,

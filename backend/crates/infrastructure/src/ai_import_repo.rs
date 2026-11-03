@@ -47,6 +47,7 @@ impl SqliteImportRunRepo {
 
 #[derive(sqlx::FromRow)]
 struct RunRow {
+    draft_json: Option<String>,
     sharing_group_id: Option<String>,
     id: String,
     organizer_id: String,
@@ -83,6 +84,10 @@ fn opt_ts(s: Option<String>) -> PortResult<Option<SystemTime>> {
 impl RunRow {
     fn into_run(self) -> PortResult<ImportRun> {
         Ok(ImportRun {
+            draft: self
+                .draft_json
+                .map(|j| serde_json::from_str(&j).map_err(port))
+                .transpose()?,
             pending_photo_expires_at: opt_ts(self.pending_photo_expires_at)?,
             sharing_group_id: self
                 .sharing_group_id
@@ -131,6 +136,65 @@ impl RunRow {
 
 #[async_trait]
 impl ImportRunRepo for SqliteImportRunRepo {
+    async fn draft(&self, run: &ImportRun) -> RepoResult<domain::ai_import::DraftState> {
+        let state = domain::ai_import::DraftState::from_proposal(&run.proposal);
+        // Initialization is idempotent; all later writes use a revision CAS.
+        sqlx::query("INSERT OR IGNORE INTO ai_import_drafts(run_id,revision,state_json) SELECT id,0,? FROM ai_import_runs WHERE id=? AND organizer_id=? AND status='proposed'")
+            .bind(serde_json::to_string(&state).map_err(port)?).bind(run.id.to_string()).bind(run.organizer_id.to_string()).execute(&self.db.write).await.map_err(port)?;
+        let row: Option<(String,)> = sqlx::query_as("SELECT d.state_json FROM ai_import_drafts d JOIN ai_import_runs r ON r.id=d.run_id WHERE r.id=? AND r.organizer_id=? AND r.status='proposed'")
+            .bind(run.id.to_string()).bind(run.organizer_id.to_string()).fetch_optional(&self.db.read).await.map_err(port)?;
+        serde_json::from_str(&row.ok_or_else(bad_status)?.0).map_err(|e| port(e).into())
+    }
+
+    async fn save_draft(
+        &self,
+        run: &ImportRun,
+        state: &domain::ai_import::DraftState,
+        expected: i64,
+        now: SystemTime,
+        quota: Option<u32>,
+    ) -> RepoResult<()> {
+        let mut tx = self
+            .db
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(port)?;
+        crate::directory_repo::scope_admin(&mut tx, run.organizer_id, run.sharing_group_id).await?;
+        if let Some(quota) = quota {
+            let since = now
+                .checked_sub(std::time::Duration::from_secs(86400))
+                .unwrap_or(std::time::UNIX_EPOCH);
+            let (n,): (i64,) = sqlx::query_as("SELECT (SELECT count(*) FROM ai_import_runs WHERE organizer_id=? AND created_at>=?) + (SELECT count(*) FROM ai_import_turn_usage WHERE organizer_id=? AND created_at>=?)")
+                .bind(run.organizer_id.to_string()).bind(to_text(since)).bind(run.organizer_id.to_string()).bind(to_text(since)).fetch_one(&mut *tx).await.map_err(port)?;
+            if n >= i64::from(quota) {
+                return Err(RepoError::Domain(DomainError::invalid(
+                    "quota",
+                    "daily AI quota exceeded",
+                )));
+            }
+        }
+        let since = now
+            .checked_sub(std::time::Duration::from_secs(86400))
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let done = sqlx::query("UPDATE ai_import_drafts SET revision=?,state_json=? WHERE run_id=? AND revision=? AND EXISTS(SELECT 1 FROM ai_import_runs r WHERE r.id=run_id AND r.organizer_id=? AND r.status='proposed' AND r.mode_hint='vendor' AND r.created_at>?)")
+            .bind(state.revision).bind(serde_json::to_string(state).map_err(port)?).bind(run.id.to_string()).bind(expected).bind(run.organizer_id.to_string()).bind(to_text(since)).execute(&mut *tx).await.map_err(port)?;
+        if done.rows_affected() != 1 {
+            return Err(RepoError::UniqueViolation);
+        }
+        if quota.is_some() {
+            sqlx::query("INSERT INTO ai_import_turn_usage(run_id,turn_id,organizer_id,created_at) VALUES(?,?,?,?)")
+                .bind(run.id.to_string()).bind(state.pending.as_deref()).bind(run.organizer_id.to_string()).bind(to_text(now)).execute(&mut *tx).await.map_err(port)?;
+        }
+        tx.commit().await.map_err(port)?;
+        Ok(())
+    }
+
+    async fn draft_image(&self, run: &ImportRun, now: SystemTime) -> PortResult<Option<Vec<u8>>> {
+        let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT p.data FROM ai_import_photos p JOIN ai_import_runs r ON r.id=p.run_id WHERE r.id=? AND r.organizer_id=? AND r.status='proposed' AND p.expires_at>?")
+            .bind(run.id.to_string()).bind(run.organizer_id.to_string()).bind(to_text(now)).fetch_optional(&self.db.read).await.map_err(port)?;
+        Ok(row.map(|r| r.0))
+    }
     async fn create(
         &self,
         run: &ImportRun,
@@ -183,7 +247,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
         sqlx::query_as::<_, RunRow>(concat!(
             "SELECT ",
             columns!(),
-            ", (SELECT expires_at FROM ai_import_photos p WHERE p.run_id=ai_import_runs.id) AS pending_photo_expires_at FROM ai_import_runs WHERE id = ? AND organizer_id = ?"
+            ", (SELECT state_json FROM ai_import_drafts d WHERE d.run_id=ai_import_runs.id) AS draft_json, (SELECT expires_at FROM ai_import_photos p WHERE p.run_id=ai_import_runs.id) AS pending_photo_expires_at FROM ai_import_runs WHERE id = ? AND organizer_id = ?"
         ))
         .bind(id.to_string())
         .bind(org.to_string())
@@ -243,8 +307,10 @@ impl ImportRunRepo for SqliteImportRunRepo {
 
     async fn count_since(&self, org: OrganizerId, since: SystemTime) -> PortResult<u64> {
         let (n,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ai_import_runs WHERE organizer_id = ? AND created_at >= ?",
+            "SELECT (SELECT COUNT(*) FROM ai_import_runs WHERE organizer_id = ? AND created_at >= ?) + (SELECT COUNT(*) FROM ai_import_turn_usage WHERE organizer_id = ? AND created_at >= ?)",
         )
+        .bind(org.to_string())
+        .bind(to_text(since))
         .bind(org.to_string())
         .bind(to_text(since))
         .fetch_one(&self.db.read)
@@ -278,6 +344,15 @@ impl ImportApplyRepo for SqliteImportRunRepo {
         steps: Vec<ImportApplyStep>,
         photo_target: Option<domain::directory::VendorId>,
     ) -> RepoResult<()> {
+        self.apply_draft(run, steps, photo_target, None).await
+    }
+    async fn apply_draft(
+        &self,
+        run: &ImportRun,
+        steps: Vec<ImportApplyStep>,
+        photo_target: Option<domain::directory::VendorId>,
+        draft_revision: Option<i64>,
+    ) -> RepoResult<()> {
         let now = run.applied_at.unwrap_or(run.created_at);
         let mut tx = self
             .db
@@ -301,6 +376,23 @@ impl ImportApplyRepo for SqliteImportRunRepo {
         }
         let org = run.organizer_id;
         crate::directory_repo::scope_admin(&mut tx, org, run.sharing_group_id).await?;
+        let draft: Option<(i64, String)> =
+            sqlx::query_as("SELECT revision,state_json FROM ai_import_drafts WHERE run_id=?")
+                .bind(run.id.to_string())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(port)?;
+        if let Some((revision, json)) = draft {
+            let state: domain::ai_import::DraftState = serde_json::from_str(&json).map_err(port)?;
+            if draft_revision != Some(revision)
+                || state.pending.is_some()
+                || now >= run.created_at + std::time::Duration::from_secs(86400)
+            {
+                return Err(RepoError::UniqueViolation);
+            }
+        } else if draft_revision.is_some() {
+            return Err(RepoError::UniqueViolation);
+        }
         let mut photo_target_written = false;
         for step in steps {
             match step {

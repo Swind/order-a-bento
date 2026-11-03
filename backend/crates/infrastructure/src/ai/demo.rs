@@ -45,7 +45,7 @@ fn member(name: &str, note: Option<&str>, confidence: ConfidenceArg) -> MemberAr
 fn item(name: &str, price: Option<i64>, category: &str, confidence: ConfidenceArg) -> MenuItemArg {
     MenuItemArg {
         name: name.into(),
-        price,
+        price: price.map(|p| p * 100),
         description: None,
         category: Some(category.into()),
         confidence,
@@ -60,6 +60,41 @@ impl ImportAgent for DemoImportAgent {
         input: AgentInput,
     ) -> Result<AgentOutcome, AiError> {
         tokio::time::sleep(self.delay).await;
+        if ctx.editing.lock().await.is_some() {
+            let first = ctx
+                .editing
+                .lock()
+                .await
+                .as_ref()
+                .and_then(|e| e.baseline.first())
+                .and_then(|v| v.menu.first())
+                .cloned();
+            let summary = if input
+                .instruction
+                .as_deref()
+                .is_some_and(|s| s.ends_with("\nOrganizer instruction: 示範改價"))
+                && first.as_ref().is_some_and(|m| m.price.is_some())
+            {
+                let item = first.unwrap();
+                ctx.submit_edits(vec![domain::ai_import::DraftEdit::UpdateItem {
+                    item_id: item.id,
+                    name: None,
+                    price: item.price.map(|p| p + 500),
+                    category: None,
+                    description: None,
+                }])
+                .await
+                .map_err(fail)?;
+                "（示範模式）第一個品項已加 5 元；尚未正式儲存。"
+            } else {
+                "（示範模式）要修改哪個品項？可輸入「示範改價」測試第一項加 5 元；其他文字不會修改草稿。"
+            };
+            return Ok(AgentOutcome {
+                summary: summary.into(),
+                usage: Usage::default(),
+                model: "demo".into(),
+            });
+        }
         let roster = input.mode == ImportMode::Roster;
         let summary = if input.mode == ImportMode::DeliveryAddress {
             let args = tools::ProposeDeliveryAddressArgs {
@@ -134,12 +169,8 @@ impl ImportAgent for DemoImportAgent {
                     });
                     // One price change against the first existing item.
                     if let Some(first) = v.menu.first() {
-                        items[0] = item(
-                            &first.name,
-                            Some(first.price + 5),
-                            "飯類",
-                            ConfidenceArg::High,
-                        );
+                        items[0] = item(&first.name, None, "飯類", ConfidenceArg::High);
+                        items[0].price = Some(first.price + 500);
                     }
                 }
             } else {

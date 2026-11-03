@@ -113,6 +113,7 @@ pub struct ProposedVendorInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MenuItemSnapshot {
+    #[serde(with = "crate::shared::amount")]
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,
@@ -125,6 +126,7 @@ pub struct ProposedMenuItem {
     pub name: String,
     pub before: Option<MenuItemSnapshot>,
     /// `None` = price unknown (issue `price_missing`); the user must fill it in.
+    #[serde(with = "crate::shared::amount::optional")]
     pub price: Option<i64>,
     pub description: Option<String>,
     pub category: Option<String>,

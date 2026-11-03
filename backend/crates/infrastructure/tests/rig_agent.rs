@@ -76,7 +76,7 @@ fn vendor_args() -> Value {
         "target": "new",
         "info": { "name": "阿財排骨便當", "phone": "02-2345-6789", "address": null, "note": null },
         "menuItems": [
-            { "name": "排骨飯", "price": 85, "description": null, "category": "飯類", "confidence": "high" },
+            { "name": "排骨飯", "price": 7.5, "description": null, "category": "飯類", "confidence": "high" },
             { "name": "雞腿飯", "price": null, "description": null, "category": "飯類", "confidence": "low" }
         ],
         "warnings": ["『雞腿飯』價格被摺痕遮住"]
@@ -100,6 +100,83 @@ fn happy_script() -> Vec<Reply> {
 
 fn first_body(mock: &Mock) -> Value {
     mock.bodies.lock().unwrap()[0].clone()
+}
+
+#[tokio::test]
+async fn draft_edit_tool_works_for_all_providers_without_directory_tools_or_required_image() {
+    for provider in [
+        AiProvider::Anthropic,
+        AiProvider::AnthropicCompatible,
+        AiProvider::OpenAiCompatible,
+        AiProvider::OpenAiResponses,
+    ] {
+        let e = env().await;
+        let vendors = serde_json::from_value(json!([{
+            "id":"v0", "vendor":{"kind":"new","name":"店"},"selected":true,"infoSelected":true,
+            "info":{"name":"手動店名","phone":null,"address":null,"note":null},
+            "menu":[{"id":"m1","selected":true,"name":"手改飯","price":80,"category":"保留","description":null}]
+        }])).unwrap();
+        *e.ctx.editing.lock().await = Some(application::ai_import::EditSession {
+            baseline: vendors,
+            draft: vec![],
+            changes: vec![],
+            submitted: false,
+        });
+        let args = json!({"edits":[{"type":"updateItem","itemId":"m1","name":null,"price":7.5,"category":null,"description":null}]});
+        let (url, mock) = match provider {
+            AiProvider::Anthropic | AiProvider::AnthropicCompatible => {
+                start(vec![
+                    Reply::Message(tool_turn(vec![tool_use("e1", "submit_draft_edits", args)])),
+                    Reply::Message(end_turn("已修改價格")),
+                ])
+                .await
+            }
+            AiProvider::OpenAiCompatible => {
+                start_openai(vec![
+                    Reply::Message(chat_tool_turn(
+                        None,
+                        vec![chat_tool_call("e1", "submit_draft_edits", args)],
+                    )),
+                    Reply::Message(chat_end_turn("已修改價格")),
+                ])
+                .await
+            }
+            AiProvider::OpenAiResponses => {
+                start_responses(vec![
+                    Reply::Message(responses_reply(json!([responses_call(
+                        "e1",
+                        "submit_draft_edits",
+                        args
+                    )]))),
+                    Reply::Message(responses_text("已修改價格")),
+                ])
+                .await
+            }
+        };
+        let mut cfg = RigAgentConfig::new("mock-key", "mock-model");
+        cfg.provider = provider;
+        cfg.base_url = Some(url);
+        cfg.fallbacks = false;
+        let mut inp = input();
+        inp.image.bytes.clear();
+        inp.instruction = Some("CURRENT DRAFT: 手改飯；只改價格".into());
+        RigImportAgent::new(cfg)
+            .unwrap()
+            .run(e.ctx.clone(), inp)
+            .await
+            .unwrap();
+        let body = first_body(&mock);
+        assert_eq!(body["tools"].as_array().unwrap().len(), 1, "{provider:?}");
+        assert!(body["tools"][0].to_string().contains("submit_draft_edits"));
+        assert!(!body.to_string().contains("image_url"));
+        assert!(!body.to_string().contains("list_vendors"));
+        let edit = e.ctx.editing.lock().await;
+        let v = &edit.as_ref().unwrap().draft[0];
+        assert_eq!(v.menu[0].price, Some(750));
+        assert_eq!(v.menu[0].name, "手改飯");
+        assert_eq!(v.menu[0].category.as_deref(), Some("保留"));
+        assert!(e.ctx.snapshot().await.targets.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -132,6 +209,11 @@ async fn every_provider_uses_the_configured_token_budget_on_every_turn() {
                 .await
                 .unwrap();
             assert_eq!(mock.calls(), 3);
+            let proposal = e.ctx.snapshot().await;
+            let ProposalTarget::Vendor(v) = &proposal.targets[0] else {
+                panic!()
+            };
+            assert_eq!(v.menu[0].price, Some(750));
             let field = if provider == AiProvider::OpenAiResponses {
                 "max_output_tokens"
             } else {

@@ -39,6 +39,7 @@ pub struct MenuItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItemInput {
     pub name: String,
+    /// Integer TWD cents; external JSON dollars are converted at the boundary.
     pub price: i64,
     pub description: Option<String>,
     pub category: Option<String>,

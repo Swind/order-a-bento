@@ -31,6 +31,29 @@ const useRun = (run: object) =>
   server.use(http.get("*/api/v1/ai/import-runs/run1", () => HttpResponse.json(run)));
 
 describe("AiImportPage vendor proposal", () => {
+  it("locks manual fields after an uncertain turn until the same request is reconciled", async () => {
+    useRun(VENDOR_RUN);
+    let first = true;
+    server.use(http.post("*/api/v1/ai/import-runs/run1/turns", async ({ request }) => {
+      const body = await request.json() as { vendors: unknown[]; turnId: string; instruction: string };
+      if (first) { first = false; return problem(503, "ai_unavailable"); }
+      return HttpResponse.json({ revision: 2, vendors: body.vendors, undo: null, pending: null, pendingUntil: null, turns: [{ id: body.turnId, instruction: body.instruction, reply: "請確認價格", status: "completed", changes: [], undone: false }] });
+    }));
+    renderApp("/ai-import/run1");
+    const price = await screen.findByLabelText("滷肉飯 價格");
+    await userEvent.clear(price);
+    await userEvent.type(price, "112");
+    await userEvent.type(screen.getByLabelText(/後續指示/), "調整價格");
+    await userEvent.click(screen.getByRole("button", { name: "送出修改指示" }));
+    const retry = await screen.findByRole("button", { name: /重試本輪/ });
+    expect(price).toHaveValue("112");
+    expect(price).toBeDisabled();
+    await userEvent.click(retry);
+    await screen.findByText("AI：請確認價格");
+    expect(price).toHaveValue("112");
+    expect(price).toBeEnabled();
+  });
+
   const pendingRun = (): ImportRun => ({
     ...VENDOR_RUN,
     hasPendingPhoto: true,
@@ -39,6 +62,37 @@ describe("AiImportPage vendor proposal", () => {
       warnings: [],
       targets: VENDOR_RUN.proposal.targets.map((t) => t.type === "vendor" ? { ...t, menu: t.menu.filter((m) => m.price !== null) } : t),
     },
+  });
+
+  it("can confirm latest manual edits after a turn is rejected by quota", async () => {
+    useRun(pendingRun());
+    let synced = false;
+    let revision: number | undefined;
+    server.use(
+      http.post("*/api/v1/ai/import-runs/run1/turns", () => problem(429, "ai_quota_exceeded")),
+      http.put("*/api/v1/ai/import-runs/run1/draft", async ({ request }) => {
+        const body = await request.json() as { vendors: unknown[] };
+        synced = true;
+        return HttpResponse.json({ revision: 1, vendors: body.vendors, turns: [], undo: null, pending: null, pendingUntil: null });
+      }),
+      http.post("*/api/v1/ai/import-runs/run1/apply", async ({ request }) => {
+        revision = (await request.json() as { draftRevision: number }).draftRevision;
+        return HttpResponse.json({ rosterIds: [], vendorIds: ["v1"] });
+      }),
+    );
+    const { router } = renderApp("/ai-import/run1");
+    const price = await screen.findByLabelText("滷肉飯 價格");
+    await userEvent.clear(price);
+    await userEvent.type(price, "112");
+    await userEvent.type(screen.getByLabelText(/後續指示/), "改價");
+    await userEvent.click(screen.getByRole("button", { name: "送出修改指示" }));
+    await screen.findByText(/畫面上的草稿仍保留/);
+    expect(price).toBeEnabled();
+    expect(price).toHaveValue("112");
+    await userEvent.click(screen.getByRole("button", { name: /套用 \d+ 筆變更/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/vendors/v1"));
+    expect(synced).toBe(true);
+    expect(revision).toBe(1);
   });
 
   it.each([false, true])("reloads pending metadata and applies an explicit photo choice (optOut=%s)", async (optOut) => {

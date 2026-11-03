@@ -46,6 +46,7 @@ pub struct ExpectedMember {
 #[serde(deny_unknown_fields)]
 pub struct ExpectedItem {
     pub name: String,
+    #[serde(with = "domain::shared::amount")]
     pub price: i64,
     #[serde(default)]
     pub category: Option<String>,
@@ -343,8 +344,8 @@ pub fn score(expected: &Expected, p: &Proposal) -> Metrics {
                         format!(
                             "{} {} (expected {})",
                             e.name,
-                            i.price.map_or("null".into(), |p| p.to_string()),
-                            e.price
+                            i.price.map_or("null".into(), domain::shared::amount::text),
+                            domain::shared::amount::text(e.price)
                         )
                     })
                 })
@@ -787,7 +788,7 @@ mod tests {
             action: ChangeAction::Create,
             name: name.into(),
             before: None,
-            price,
+            price: price.map(|p| p * 100),
             description: None,
             category: category.map(str::to_owned),
             confidence: Confidence::High,
@@ -819,6 +820,22 @@ mod tests {
 
     fn expected(json: &str) -> Expected {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn decimal_eval_compares_cents_and_reports_external_dollars() {
+        let exp = expected(r#"{"kind":"vendor","menu":[{"name":"水餃","price":7.5}]}"#);
+        let mut dumpling = item("水餃", None, None);
+        dumpling.price = Some(750);
+        assert_eq!(
+            score(&exp, &vendor("", vec![dumpling.clone()])).price_exact,
+            Some(1.0)
+        );
+        dumpling.price = Some(775);
+        assert_eq!(
+            score(&exp, &vendor("", vec![dumpling])).wrong_prices,
+            ["水餃 7.75 (expected 7.5)"]
+        );
     }
 
     #[test]

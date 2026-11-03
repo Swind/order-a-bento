@@ -1760,7 +1760,7 @@ mod tests {
         assert_eq!(
             count(
                 &db,
-                "SELECT count(*) FROM offered_items WHERE id='i' AND price=80"
+                "SELECT count(*) FROM offered_items WHERE id='i' AND price=8000"
             )
             .await,
             1
@@ -1776,7 +1776,7 @@ mod tests {
         assert_eq!(
             count(
                 &db,
-                "SELECT count(*) FROM submission_lines WHERE quantity=2 AND unit_price=80"
+                "SELECT count(*) FROM submission_lines WHERE quantity=2 AND unit_price=8000"
             )
             .await,
             1
@@ -1784,7 +1784,7 @@ mod tests {
         assert_eq!(
             count(
                 &db,
-                "SELECT count(*) FROM settlements WHERE paid_amount=160"
+                "SELECT count(*) FROM settlements WHERE paid_amount=16000"
             )
             .await,
             1

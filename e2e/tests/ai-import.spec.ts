@@ -51,7 +51,7 @@ test("flyer upload is downscaled to JPEG and applied to the vendor menu", async 
   await expect(page.getByText("今日特餐").first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
 
-  const priceInputs = page.locator('input[inputmode="numeric"], input[type="number"]');
+  const priceInputs = page.locator('input[inputmode="decimal"], input[type="number"]');
   const n = await priceInputs.count();
   let filled = false;
   for (let i = 0; i < n; i++) {
@@ -75,6 +75,48 @@ test("flyer upload is downscaled to JPEG and applied to the vendor menu", async 
 });
 
 const photoLabel = "確認匯入後，同時儲存菜單照片";
+
+test("vendor draft keeps manual edits across conversation, undo, reload and final confirmation", async ({ page }) => {
+  await devLogin(page, "ai-draft-chat");
+  const run = await startPhoto(page, undefined, false);
+  await readyToApply(page);
+  const prices = page.locator('input[inputmode="decimal"], input[type="number"]');
+  await prices.first().fill("7.5");
+  const chat = page.getByRole("region", { name: "草稿對話" });
+  await page.getByLabel(/後續指示/).fill("示範改價");
+  await page.getByRole("button", { name: "送出修改指示" }).click();
+  await expect(chat.getByText(/第一個品項已加 5 元/)).toBeVisible();
+  await expect(prices.first()).toHaveValue("12.5");
+  expect((await (await page.request.get("/api/v1/vendors")).json()).length).toBe(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "復原上一輪" }).click();
+  await expect(chat.getByText("已復原", { exact: true })).toBeVisible();
+  await expect(prices.first()).toHaveValue("7.5");
+  await page.getByLabel(/後續指示/).fill("不確定要怎麼改");
+  await page.getByRole("button", { name: "送出修改指示" }).click();
+  await expect(chat.getByText("本輪未修改草稿", { exact: true })).toBeVisible();
+  await expect(prices.first()).toHaveValue("7.5");
+  await prices.first().fill("7.75");
+  await page.getByRole("button", { name: "儲存草稿", exact: true }).click();
+  await expect(page.getByRole("button", { name: "儲存草稿", exact: true })).toBeEnabled();
+  await page.reload();
+  await expect(prices.first()).toHaveValue("7.75");
+  await expect(chat.getByText("已復原", { exact: true })).toBeVisible();
+  await chat.scrollIntoViewIfNeeded();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: test.info().outputPath("vendor-draft-conversation.png"), fullPage: true });
+  const response = page.waitForResponse((r) => r.url().endsWith(`/${run.id}/apply`));
+  await page.getByRole("button", { name: /套用 \d+ 筆變更/ }).click();
+  const res = await response;
+  expect(res.ok(), await res.text()).toBeTruthy();
+  expect(res.request().postDataJSON().draftRevision).toBeGreaterThan(0);
+  const id = (await res.json()).vendorIds[0];
+  await expect(page).toHaveURL(new RegExp(`/vendors/${id}$`));
+  const saved = await detail(page, id);
+  expect(saved.menuItems.find((m: { name: string }) => m.name === "排骨飯").price).toBe(7.75);
+  const closed = await page.request.post(`/api/v1/ai/import-runs/${run.id}/undo`, { data: { revision: 0, turnId: "one" } });
+  expect(closed.status()).toBe(409);
+});
 
 // Only the harness's disposable database; never inspect or mutate backend/data.
 function pendingPhoto(runId: string, expire = false): { count: number; hex: string | null } {
@@ -108,7 +150,7 @@ async function canvasFile(page: Page, type: "image/webp" | "image/png") {
 
 async function readyToApply(page: Page) {
   await expect(page.getByRole("heading", { name: "AI 匯入確認" })).toBeVisible();
-  for (const input of await page.locator('input[inputmode="numeric"], input[type="number"]').all()) {
+  for (const input of await page.locator('input[inputmode="decimal"], input[type="number"]').all()) {
     if ((await input.inputValue()) === "") await input.fill("120");
   }
   await expect(page.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeEnabled();
@@ -319,7 +361,7 @@ test("AI unverifiable apply result blocks resubmission and preserves the confirm
   await expect(page.getByRole("button", { name: /套用 \d+ 筆變更/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "重試查詢" })).toBeVisible();
   await expect(page.getByLabel(photoLabel)).toBeChecked();
-  await expect(page.locator('input[inputmode="numeric"]').last()).toHaveValue("120");
+  await expect(page.locator('input[inputmode="decimal"]').last()).toHaveValue("120");
   expect(pendingPhoto(run.id).count).toBe(1);
 });
 

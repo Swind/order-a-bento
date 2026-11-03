@@ -9,6 +9,40 @@ import {
   submitOrder,
 } from "../helpers";
 
+test("decimal dumpling prices stay exact through manual editing, public ordering and settlement", async ({ page }) => {
+  await devLogin(page, "decimal-dumplings");
+  const roster = await createRoster(page,"水餃名單",["王小明"]);
+  const vendor = await createVendor(page,"八方雲集",[{name:"水餃",price:8}]);
+  await page.goto(`/vendors/${vendor.id}`);
+  await page.getByRole("button", {name:"編輯 水餃"}).click();
+  await page.getByLabel("價格", {exact:true}).fill("7.5");
+  await page.getByRole("form",{name:"編輯 水餃"}).getByRole("button",{name:"儲存",exact:true}).click();
+  await expect(page.getByText("$7.5", {exact:true})).toBeVisible();
+  const group = await createGroupOrder(page,"水餃小數驗收",roster.id,vendor.id);
+  await page.goto(group.shareUrl);
+  await page.getByRole("button",{name:"王小明",exact:true}).click();
+  for (let i=0;i<3;i++) await page.getByRole("button",{name:"增加 水餃"}).click();
+  await expect(page.getByRole("region",{name:"訂單送出操作"})).toContainText("$22.5");
+  await page.getByRole("button",{name:"送出訂單",exact:true}).click();
+  await expect(page.getByRole("region",{name:"已送出訂單",exact:true})).toContainText("總額 $22.5");
+  await expect(page.getByRole("region",{name:"已送出訂單",exact:true})).toContainText("$7.5 × 3");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path:test.info().outputPath("decimal-dumplings-order.png"),fullPage:true});
+  await page.goto(`/group-orders/${group.id}`);
+  await page.getByRole("tab",{name:"統計"}).click();
+  await expect(page.getByText("$22.5",{exact:true}).first()).toBeVisible();
+  await page.getByRole("tab",{name:/領取/}).click();
+  const paid = page.getByRole("switch",{name:"王小明 繳費"});
+  await paid.click();
+  await expect(paid).toHaveAttribute("aria-checked","true");
+  await expect(page.getByText(/已收 \$22.5/)).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({path:test.info().outputPath("decimal-dumplings-settlement.png"),fullPage:true,animations:"disabled"});
+  const summary = await (await page.request.get(`/api/v1/group-orders/${group.id}/summary`)).json();
+  expect(summary.totalAmount).toBe(22.5); expect(summary.items[0].price).toBe(7.5); expect(summary.items[0].subtotal).toBe(22.5);
+  expect(summary.settlement.paidAmount).toBe(22.5);
+});
+
 test("stats, checklist, history, close and rotate", async ({ page, browser }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await devLogin(page, "management");
