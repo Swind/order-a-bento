@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use clap::Parser;
 use infrastructure::sqlite::Db;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,12 +16,12 @@ async fn main() -> anyhow::Result<()> {
         return run_admin(&config, cmd).await;
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
-        )
-        .init();
+    server::logging::subscriber(
+        config.log_format,
+        server::logging::env_filter(),
+        std::io::stdout,
+    )
+    .init();
 
     let db = Db::connect(&config.database_url)
         .await

@@ -256,6 +256,7 @@ docker start bento
 | `DEV_LOGIN` | 否 | `false` | 布林 | 開發用登入捷徑。**`APP_ENV=production` 時設為 true 會拒絕啟動** | no |
 | `DISPLAY_UTC_OFFSET` | 否 | `+08:00` | `±HH:MM` | 連結預覽（OG）中截止時間顯示的時區 | no |
 | `RUST_LOG` | 否 | `info,tower_http=info` | tracing filter 語法 | 日誌等級 | no |
+| `LOG_FORMAT` | 否 | `text` | 嚴格 `text` 或 `json`（空值、其他大小寫不接受） | stdout 日誌格式；JSON 無 ANSI，每行一個物件，詳見[JSON 日誌](docs/json-logging.md) | no |
 
 ### 資料庫
 

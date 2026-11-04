@@ -23,3 +23,8 @@ tracing-subscriber.workspace = true
 thiserror.workspace = true
 time.workspace = true
 url = "2"
+
+[dev-dependencies]
+async-trait.workspace = true
+http-body-util.workspace = true
+tower = { workspace = true, features = ["util"] }

@@ -3,4 +3,5 @@
 pub mod ai_eval;
 pub mod cli;
 pub mod config;
+pub mod logging;
 pub mod wiring;

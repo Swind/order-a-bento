@@ -107,6 +107,23 @@ fn event<'a>(log: &'a str, name: &str, request_id: &str) -> &'a str {
     lines[0]
 }
 
+#[test]
+fn http_service_failure_does_not_print_raw_error() {
+    use tower_http::classify::ServerErrorsFailureClass;
+    use tower_http::trace::OnFailure;
+    let capture = Capture::default();
+    tracing::dispatcher::with_default(&capture.dispatch(), || {
+        crate::logging::FailureLog.on_failure(
+            ServerErrorsFailureClass::Error(format!("provider echoed {KEY} {PROMPT}")),
+            std::time::Duration::from_millis(12),
+            &tracing::Span::none(),
+        );
+    });
+    let log = capture.text();
+    assert!(log.contains("service_error") && log.contains("duration_ms=12"));
+    assert!(!log.contains(KEY) && !log.contains(PROMPT));
+}
+
 struct LoggedAgent(AtomicUsize);
 #[async_trait]
 impl ImportAgent for LoggedAgent {
@@ -185,10 +202,10 @@ async fn request_ai_and_replay_events_are_correlated_without_payloads_and_teleme
         for (name, id) in [("ai_import_started", &initial_id), ("ai_import_completed", &initial_id), ("ai_turn_started", &chat_id), ("ai_turn_completed", &chat_id), ("ai_turn_replay", &replay_id)] {
             let line = event(&log, name, id);
             assert!(line.contains(run_id), "{line}");
-            for field in ["model=", "input_tokens=", "output_tokens=", "duration_ms=", "execution=", "outcome=", "error_code="] { assert!(line.contains(field), "missing {field}: {line}"); }
+            for field in ["duration_ms=", "execution=", "outcome="] { assert!(line.contains(field), "missing {field}: {line}"); }
         }
         let completed = event(&log, "ai_turn_completed", &chat_id);
-        for value in ["safe-turn", "safe-model", "Some(11)", "Some(3)", "completed", "unchanged", "observed_tokens_not_invoice"] { assert!(completed.contains(value), "{completed}"); }
+        for value in ["safe-turn", "safe-model", "input_tokens=11", "output_tokens=3", "completed", "unchanged", "observed_tokens_not_invoice"] { assert!(completed.contains(value), "{completed}"); }
         let replay = event(&log, "ai_turn_replay", &replay_id);
         assert!(replay.contains("quota_reserved=false"));
         assert!(replay.contains("not_started"));
@@ -211,8 +228,8 @@ async fn failed_initial_and_turn_requests_log_codes_and_unknown_usage_not_raw_pr
         let line = event(&log, "ai_import_completed", &id);
         assert!(line.contains(body["runId"].as_str().unwrap()));
         assert!(line.contains("unavailable") && line.contains("rejected") && line.contains("failed"));
-        assert!(line.contains("Some(700)"));
-        assert!(line.contains("model=None"));
+        assert!(line.contains("input_tokens=700"));
+        assert!(!line.contains("model="));
         assert!(log.lines().any(|line| line.contains(&id) && line.contains("status=502")));
         assert_private(&log, &c);
 
@@ -226,7 +243,8 @@ async fn failed_initial_and_turn_requests_log_codes_and_unknown_usage_not_raw_pr
         assert_eq!(out["turns"][0]["status"], "failed");
         let log = capture.text();
         let line = event(&log, "ai_turn_completed", &id);
-        for value in [run_id, "failed-turn", "input_tokens=None", "output_tokens=None", "model=None", "unavailable", "unchanged", "failed"] { assert!(line.contains(value), "{line}"); }
+        for value in [run_id, "failed-turn", "unavailable", "unchanged", "failed"] { assert!(line.contains(value), "{line}"); }
+        for field in ["input_tokens=", "output_tokens=", "model="] { assert!(!line.contains(field), "{line}"); }
         assert_private(&log, &c);
     }.with_subscriber(capture.dispatch()).await;
 }
@@ -325,7 +343,7 @@ async fn concurrent_subscribers_are_isolated_and_success_error_http_ids_keep_red
         assert!(!bad_ids[..i].contains(bad_id));
         assert!(b.contains(bad_id) && !a.contains(bad_id));
     }
-    assert!(a.contains("method=GET") && a.contains("status=200") && a.contains("latency="));
+    assert!(a.contains("method=GET") && a.contains("status=200") && a.contains("duration_ms="));
     assert!(b.contains("/api/v1/public/g/:token") && b.contains("status=404"));
     assert!(b.contains("/g/:token") && b.contains("status=403"));
     for log in [&a, &b] {

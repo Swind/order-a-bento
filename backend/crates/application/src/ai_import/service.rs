@@ -336,13 +336,13 @@ impl AiImportService {
             quota_reserved = true,
             quota_unit = "internal_operation_24h",
             usage_kind = "observed_tokens_not_invoice",
-            model = ?model,
-            input_tokens = ?observed.input_tokens,
-            output_tokens = ?observed.output_tokens,
+            model = model.as_deref(),
+            input_tokens = observed.input_tokens,
+            output_tokens = observed.output_tokens,
             duration_ms = 0_u64,
             execution = "pending",
             outcome = "pending",
-            error_code = ?None::<&str>,
+            error_code = None::<&str>,
         );
         let result = async {
             let agent_result = self.run_agent(&ctx, input).await;
@@ -404,13 +404,17 @@ impl AiImportService {
             quota_reserved = true,
             quota_unit = "internal_operation_24h",
             usage_kind = "observed_tokens_not_invoice",
-            model = ?model,
-            input_tokens = ?observed.input_tokens,
-            output_tokens = ?observed.output_tokens,
-            duration_ms = started.elapsed().as_millis(),
+            model = model.as_deref(),
+            input_tokens = observed.input_tokens,
+            output_tokens = observed.output_tokens,
+            duration_ms = started.elapsed().as_millis() as u64,
             execution,
-            outcome = if result.is_ok() { "proposed" } else { "rejected" },
-            error_code = ?result.as_ref().err().map(AiImportError::log_code),
+            outcome = if result.is_ok() {
+                "proposed"
+            } else {
+                "rejected"
+            },
+            error_code = result.as_ref().err().map(AiImportError::log_code),
         );
         result
     }

@@ -11,6 +11,12 @@ pub enum AppEnv {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiMode {
     /// A real model behind `AI_PROVIDER`.
     Live,
@@ -47,6 +53,7 @@ pub enum ConfigError {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
+    pub log_format: LogFormat,
     pub app_env: AppEnv,
     pub dev_login: bool,
     pub app_base_url: String,
@@ -134,6 +141,17 @@ impl Config {
             }
         }
 
+        let log_format = match env.get("LOG_FORMAT").map(String::as_str) {
+            None | Some("text") => LogFormat::Text,
+            Some("json") => LogFormat::Json,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    key: "LOG_FORMAT",
+                    value: other.to_owned(),
+                    reason: "expected text or json",
+                });
+            }
+        };
         let app_env = match get("APP_ENV").map(str::to_ascii_lowercase).as_deref() {
             None | Some("development") => AppEnv::Development,
             Some("production") => AppEnv::Production,
@@ -444,6 +462,7 @@ impl Config {
 
         Ok(Self {
             port: num(get("PORT"), "PORT", 3000)?,
+            log_format,
             app_env,
             dev_login,
             app_base_url: string("APP_BASE_URL", "http://localhost:3000"),
@@ -576,6 +595,7 @@ mod tests {
     fn defaults() {
         let c = Config::from_map(&HashMap::new()).unwrap();
         assert_eq!(c.port, 3000);
+        assert_eq!(c.log_format, LogFormat::Text);
         assert_eq!(c.app_env, AppEnv::Development);
         assert!(!c.dev_login);
         assert!(c.oidc_client_id.is_none() && c.ai_api_key.is_none());
@@ -599,6 +619,28 @@ mod tests {
         let bad: HashMap<String, String> =
             [("DISPLAY_UTC_OFFSET".to_string(), "Taipei".to_string())].into();
         assert!(Config::from_map(&bad).is_err());
+    }
+
+    #[test]
+    fn log_format_is_strict() {
+        for (value, expected) in [("text", LogFormat::Text), ("json", LogFormat::Json)] {
+            let c = Config::from_map(&env(&[
+                ("LOG_FORMAT", value),
+                ("AI_API_KEY", "private-key"),
+            ]))
+            .unwrap();
+            assert_eq!(c.log_format, expected);
+            assert!(!format!("{c:?}").contains("private-key"));
+        }
+        for value in ["", "JSON", " text ", "yaml"] {
+            assert!(matches!(
+                Config::from_map(&env(&[("LOG_FORMAT", value)])),
+                Err(ConfigError::Invalid {
+                    key: "LOG_FORMAT",
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]

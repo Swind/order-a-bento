@@ -30,8 +30,8 @@ AI 菜單匯入預設勾選「確認匯入後，同時儲存菜單照片」，�
 - Vendor 匯入可在同一草稿文字修正、手動保存及 Undo，最後確認才寫正式店家。每輪使用最新草稿、最近最多六輪歷史及仍有效的 opt-in 暫存圖；每份草稿最多 20 輪、每次指示最多 500 字，run 建立後 24h 不再可編輯。revision CAS／turn ID／pending lease 防止晚回應覆蓋手改或重跑相同 turn；詳見[草稿對話說明](vendor-import-conversation.md)。
 - `AI_DAILY_QUOTA_PER_USER` 是**每人滾動 24h 操作次數**，不是日曆日、token 或帳單上限。初次 run＋可選照片與新 turn 共享 `BEGIN IMMEDIATE` 內的配額檢查／保留；滿額為 `429/ai_quota_exceeded`，沒有超額 run／photo 殘留。失敗保留一次配額，內部 retry 不再加扣，相同 turn replay 不再模型呼叫或扣次數；初次重新上傳尚無 client-operation 冪等。
 - `ImportRun.usage` 只代表初次辨識。`0011` 在既有 `ai_import_turn_usage` 追加 nullable 的 input／output tokens、model、duration_ms、finished_at、execution_outcome、draft_outcome、error_code；是可能不完整的**已觀測**用量。舊資料、未觀測欄位及硬中斷後未知摘要保持 NULL，不補零。CAS／撤權／期限阻擋草稿套用時仍可記內部用量，不繞過權限回傳草稿；telemetry 落盤失敗不回滾成功草稿。
-- 每個 HTTP 回應的 `x-request-id` 由 server 產生 UUID v7，不沿用 client ID，可用它關聯 method／遮罩 path／status／latency 與 AI run／turn started／completed／replay 摘要。摘要含 model、monotonic duration、nullable tokens、execution／draft outcome 及固定錯誤類別；`quota_unit=internal_operation_24h`、`usage_kind=observed_tokens_not_invoice` 不是供應商帳單，replay 為 `not_started/not_reobserved`。文字日誌 `None` 表示未知。
-- 新增診斷日誌不記 public token、query、Authorization／Cookie、prompt、圖片或 provider raw error；client turn ID 以 debug escape 處理換行。沿用 `RUST_LOG` 文字格式，沒有新增 JSON 開關、OTel 或完整業務 audit log。
+- 每個 HTTP 回應的 `x-request-id` 由 server 產生 UUID v7，不沿用 client ID，可用它關聯 method／遮罩 path／status／`duration_ms` 與 AI run／turn started／completed／replay 摘要。摘要含 model、monotonic duration、nullable tokens、execution／draft outcome 及固定錯誤類別；`quota_unit=internal_operation_24h`、`usage_kind=observed_tokens_not_invoice` 不是供應商帳單，replay 為 `not_started/not_reobserved`。未知 tokens／model／error_code 省略，不能當成零。
+- 新增診斷日誌不記 public token、query、Authorization／Cookie、prompt、圖片或 provider raw error；client turn ID 使用原生字串欄位，text formatter 安全轉義換行，JSON 解析後保留原始 ID。預設 `LOG_FORMAT=text` 保留文字格式；可設 `LOG_FORMAT=json`，兩者沿用 `RUST_LOG`。詳見 [JSON 日誌](json-logging.md)；不含 collector、OTel 或完整業務 audit log。
 - 初次及文字對話仍是同步 HTTP，沒有 durable worker／程序重啟續跑；取消等待不保證外部已停止計費。模型斷線、程序 crash 或 telemetry DB 失敗可能留下未知用量，不能聲稱零消耗或 billing exactly-once。24h 期限不是對話／ledger 的刪除政策，目前尚無整體歷史用量保留期限。
 
 ## 2. 建置映像
@@ -131,6 +131,7 @@ make admin EMAIL=you@example.com NAME="你的名字"
 | `PUBLIC_RATE_LIMIT_BURST` / `PUBLIC_RATE_LIMIT_PER_SEC` | `30` / `2` | 公開端點每個 client IP 的 token bucket |
 | `DISPLAY_UTC_OFFSET` | `+08:00` | 連結預覽（OG）中截止時間顯示的時區 |
 | `RUST_LOG` | `info,tower_http=info` | 日誌等級 |
+| `LOG_FORMAT` | `text` | 嚴格 `text`／`json`；JSON 為 stdout 單行物件、無 ANSI，保留完整父 spans |
 
 清除 ClientInfo 的依據是 `group_orders.closed_at`（關閉時寫入；封存只能從已關閉狀態進行且保留 `closed_at`；重新開啟會清空 `closed_at`）。因此「開放中」與「重新開啟」的團不會被清除，已關閉／已封存且關閉時間早於保存期限的團會被清除。訂單內容、備註與品項明細不受影響。
 

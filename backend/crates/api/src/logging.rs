@@ -6,8 +6,9 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use tower_http::trace::{DefaultOnResponse, OnRequest, TraceLayer};
-use tracing::{Level, Span};
+use tower_http::classify::ServerErrorsFailureClass;
+use tower_http::trace::{OnFailure, OnRequest, OnResponse, TraceLayer};
+use tracing::Span;
 
 pub const TOKEN_PLACEHOLDER: &str = ":token";
 
@@ -63,11 +64,57 @@ impl<B> OnRequest<B> for NoRequestLog {
     fn on_request(&mut self, _: &Request<B>, _: &Span) {}
 }
 
+#[derive(Clone, Copy)]
+pub struct ResponseLog;
+
+impl<B> OnResponse<B> for ResponseLog {
+    fn on_response(
+        self,
+        response: &axum::http::Response<B>,
+        latency: std::time::Duration,
+        _: &Span,
+    ) {
+        tracing::info!(
+            target: "tower_http::trace::on_response",
+            status = response.status().as_u16(),
+            duration_ms = latency.as_millis() as u64,
+            "finished processing request"
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct FailureLog;
+
+impl OnFailure<ServerErrorsFailureClass> for FailureLog {
+    fn on_failure(
+        &mut self,
+        failure: ServerErrorsFailureClass,
+        latency: std::time::Duration,
+        _: &Span,
+    ) {
+        // Service errors can contain private payloads; only status classifications are printable.
+        let classification = match failure {
+            ServerErrorsFailureClass::StatusCode(status) => format!("Status code: {status}"),
+            ServerErrorsFailureClass::Error(_) => "service_error".into(),
+        };
+        tracing::error!(
+            target: "tower_http::trace::on_failure",
+            classification,
+            duration_ms = latency.as_millis() as u64,
+            "response failed"
+        );
+    }
+}
+
 pub type HttpTraceLayer = TraceLayer<
     tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>,
     fn(&Request<Body>) -> Span,
     NoRequestLog,
-    DefaultOnResponse,
+    ResponseLog,
+    tower_http::trace::DefaultOnBodyChunk,
+    tower_http::trace::DefaultOnEos,
+    FailureLog,
 >;
 
 /// HTTP trace layer: one INFO line per response, inside the redacted span.
@@ -75,7 +122,8 @@ pub fn trace_layer() -> HttpTraceLayer {
     TraceLayer::new_for_http()
         .make_span_with(make_span as fn(&Request<Body>) -> Span)
         .on_request(NoRequestLog)
-        .on_response(DefaultOnResponse::new().level(Level::INFO))
+        .on_response(ResponseLog)
+        .on_failure(FailureLog)
 }
 
 #[cfg(test)]

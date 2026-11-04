@@ -104,20 +104,20 @@ impl AiImportService {
             if turn.instruction != instruction.trim() {
                 return Err(AiImportError::Conflict);
             }
-            tracing::Span::current().record("turn", tracing::field::debug(&turn.id));
+            tracing::Span::current().record("turn", turn.id.as_str());
             // Replay does not imply another model execution or exactly-once provider billing.
             tracing::info!(
                 event = "ai_turn_replay",
                 quota_reserved = false,
                 quota_unit = "internal_operation_24h",
                 usage_kind = "not_reobserved",
-                model = ?None::<&str>,
-                input_tokens = ?None::<u64>,
-                output_tokens = ?None::<u64>,
-                duration_ms = request_started.elapsed().as_millis(),
+                model = None::<&str>,
+                input_tokens = None::<u64>,
+                output_tokens = None::<u64>,
+                duration_ms = request_started.elapsed().as_millis() as u64,
                 execution = "not_started",
                 outcome = "replay",
-                error_code = ?None::<&str>,
+                error_code = None::<&str>,
             );
             return Ok(state); // A lost response never repeats model work or quota.
         }
@@ -133,7 +133,7 @@ impl AiImportService {
             );
         }
         validate_draft(&vendors, &state.vendors)?;
-        tracing::Span::current().record("turn", tracing::field::debug(&turn_id));
+        tracing::Span::current().record("turn", turn_id.as_str());
         if vendors != state.vendors {
             state.undo = None;
         }
@@ -186,13 +186,13 @@ impl AiImportService {
             quota_reserved = true,
             quota_unit = "internal_operation_24h",
             usage_kind = "observed_tokens_not_invoice",
-            model = ?metrics.model,
-            input_tokens = ?metrics.usage.input_tokens,
-            output_tokens = ?metrics.usage.output_tokens,
+            model = metrics.model.as_deref(),
+            input_tokens = metrics.usage.input_tokens,
+            output_tokens = metrics.usage.output_tokens,
             duration_ms = 0_u64,
             execution = "pending",
             outcome = "pending",
-            error_code = ?None::<&str>,
+            error_code = None::<&str>,
         );
         let mut ctx = ImportToolContext::new(
             org,
@@ -222,7 +222,7 @@ impl AiImportService {
                         .await
                         .is_err()
                     {
-                        tracing::error!(run = %id, turn = ?turn_id, "AI turn image cleanup failed");
+                        tracing::error!(run = %id, turn = turn_id.as_str(), "AI turn image cleanup failed");
                     }
                     return Err(AiImportError::from(error));
                 }
@@ -315,13 +315,13 @@ impl AiImportService {
             quota_reserved = true,
             quota_unit = "internal_operation_24h",
             usage_kind = "observed_tokens_not_invoice",
-            model = ?metrics.model,
-            input_tokens = ?metrics.usage.input_tokens,
-            output_tokens = ?metrics.usage.output_tokens,
-            duration_ms = metrics.duration.as_millis(),
+            model = metrics.model.as_deref(),
+            input_tokens = metrics.usage.input_tokens,
+            output_tokens = metrics.usage.output_tokens,
+            duration_ms = metrics.duration.as_millis() as u64,
             execution = metrics.execution.as_str(),
             outcome = metrics.draft.as_str(),
-            error_code = ?metrics.error_code,
+            error_code = metrics.error_code,
         );
         if self
             .runs
@@ -330,7 +330,7 @@ impl AiImportService {
             .is_err()
         {
             // Telemetry must not turn a committed draft into an HTTP failure.
-            tracing::error!(run = %id, turn = ?turn_id, "AI turn metrics persistence failed");
+            tracing::error!(run = %id, turn = turn_id.as_str(), "AI turn metrics persistence failed");
         }
         outcome
     }
