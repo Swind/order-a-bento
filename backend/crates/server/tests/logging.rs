@@ -180,6 +180,7 @@ async fn app() -> Router {
         &[
             ("DEV_LOGIN".into(), "true".into()),
             ("AI_DEMO".into(), "true".into()),
+            ("TRUSTED_PROXIES".into(), "10.0.0.5".into()),
         ]
         .into(),
     )
@@ -264,6 +265,51 @@ fn event<'a>(lines: &'a [Value], name: &str, id: &str) -> &'a Value {
     matches[0]
 }
 
+#[tokio::test]
+async fn api_logs_resolve_client_ip_only_through_trusted_proxies() {
+    let capture = Capture::default();
+    async {
+        let app = app().await;
+        for (peer, xff, expected) in [
+            (
+                Some("10.0.0.5:1234"),
+                "192.0.2.99, 198.51.100.7",
+                Some("198.51.100.7"),
+            ),
+            (
+                Some("203.0.113.9:1234"),
+                "198.51.100.7",
+                Some("203.0.113.9"),
+            ),
+            (Some("10.0.0.5:1234"), "not-an-ip", Some("10.0.0.5")),
+            (Some("10.0.0.5:1234"), "2001:db8::7", Some("2001:db8::7")),
+            (None, "198.51.100.7", None),
+        ] {
+            let mut request = Request::builder()
+                .uri("/api/v1/does-not-exist")
+                .header("x-forwarded-for", xff)
+                .body(Body::empty())
+                .unwrap();
+            if let Some(peer) = peer {
+                request.extensions_mut().insert(axum::extract::ConnectInfo(
+                    peer.parse::<std::net::SocketAddr>().unwrap(),
+                ));
+            }
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let id = response.headers()["x-request-id"].to_str().unwrap();
+            let lines = capture.json();
+            let line = lines
+                .iter()
+                .find(|v| v["span"]["request_id"] == id)
+                .unwrap();
+            assert_eq!(line["span"]["client_ip"].as_str(), expected);
+        }
+    }
+    .with_subscriber(capture.dispatch(LogFormat::Json, "info"))
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn json_http_ai_replay_failure_and_parallel_requests_keep_safe_context() {
     let capture = Capture::default();
@@ -291,6 +337,10 @@ async fn json_http_ai_replay_failure_and_parallel_requests_keep_safe_context() {
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         for (path, expected) in [("/healthz".into(), StatusCode::OK), (format!("/api/v1/public/g/{PRIVATE}"), StatusCode::NOT_FOUND)] {
             assert_eq!(call(&app, "GET", &path, &cookie, "application/json", String::new()).await.0, expected);
+        }
+        for path in ["/", "/assets/app.js", "/assets/app.css", "/favicon.ico", "/vendors", "/apiary"] {
+            let (_, _, id, _) = call(&app, "GET", path, &cookie, "application/json", String::new()).await;
+            assert!(!id.is_empty());
         }
         let lines = capture.json();
         assert!(!capture.text().contains(&cookie));
@@ -321,8 +371,9 @@ async fn json_http_ai_replay_failure_and_parallel_requests_keep_safe_context() {
         assert_eq!(failed["fields"]["execution"], "failed");
         for field in ["input_tokens", "output_tokens", "model"] { assert!(failed["fields"][field].is_null()); }
         let responses: Vec<_> = lines.iter().filter(|v| v["fields"]["message"] == "finished processing request").collect();
-        assert_eq!(responses.len(), 10); // login, two imports, draft, turn, replay, failed turn/import, health, public
+        assert_eq!(responses.len(), 8); // two imports, draft, turn, replay, failed turn/import, public
         for line in responses {
+            assert!(line["span"]["path"].as_str().unwrap().starts_with("/api/"));
             assert!(line["fields"]["status"].is_u64());
             assert!(line["fields"]["duration_ms"].is_u64());
             assert!(line["span"]["request_id"].is_string());

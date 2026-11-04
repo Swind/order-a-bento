@@ -6,14 +6,38 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
+use tower::{Layer, ServiceExt};
 use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::trace::{OnFailure, OnRequest, OnResponse, TraceLayer};
 use tracing::Span;
 
 pub const TOKEN_PLACEHOLDER: &str = ":token";
 
+/// Trace API requests only, including errors returned by downstream middleware.
+pub async fn trace_api(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    mut req: Request<Body>,
+    next: Next,
+) -> Response {
+    let path = req.uri().path();
+    if path == "/api" || path.starts_with("/api/") {
+        let ip =
+            crate::client::request_ip(req.headers(), req.extensions(), &state.web.trusted_proxies);
+        req.extensions_mut().insert(ClientIp(ip));
+        match trace_layer().layer(next).oneshot(req).await {
+            Ok(response) => response.map(Body::new),
+            Err(never) => match never {},
+        }
+    } else {
+        next.run(req).await
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RequestId(uuid::Uuid);
+
+#[derive(Clone, Copy)]
+struct ClientIp(Option<std::net::IpAddr>);
 
 /// Always generate locally; never trust a caller's correlation header.
 pub async fn request_id(mut req: Request<Body>, next: Next) -> Response {
@@ -54,6 +78,7 @@ pub fn make_span(req: &Request<Body>) -> Span {
         request_id = %req.extensions().get::<RequestId>().map(|id| id.0.to_string()).unwrap_or_default(),
         method = %req.method(),
         path = %redact_path(req.uri().path()),
+        client_ip = req.extensions().get::<ClientIp>().and_then(|ip| ip.0).map(|ip| ip.to_string()),
     )
 }
 

@@ -299,7 +299,9 @@ async fn concurrent_subscribers_are_isolated_and_success_error_http_ids_keep_red
         tokio::task::yield_now().await;
         let (status, _, headers) = raw(
             &c.app,
-            request(&c, "GET", "/healthz").body(Body::empty()).unwrap(),
+            request(&c, "GET", "/api/v1/rosters")
+                .body(Body::empty())
+                .unwrap(),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -341,11 +343,12 @@ async fn concurrent_subscribers_are_isolated_and_success_error_http_ids_keep_red
     for (i, bad_id) in bad_ids.iter().enumerate() {
         assert_ne!(&good_id, bad_id);
         assert!(!bad_ids[..i].contains(bad_id));
-        assert!(b.contains(bad_id) && !a.contains(bad_id));
+        assert_eq!(b.contains(bad_id), i != 1); // Share pages are not API requests.
+        assert!(!a.contains(bad_id));
     }
     assert!(a.contains("method=GET") && a.contains("status=200") && a.contains("duration_ms="));
     assert!(b.contains("/api/v1/public/g/:token") && b.contains("status=404"));
-    assert!(b.contains("/g/:token") && b.contains("status=403"));
+    assert!(!b.contains("path=/g/:token") && b.contains("status=403"));
     for log in [&a, &b] {
         assert!(!log.contains(token));
         assert_private(log, &c);

@@ -108,6 +108,18 @@ fn header_values(headers: &HeaderMap, name: header::HeaderName) -> Vec<&str> {
         .collect()
 }
 
+pub(crate) fn request_ip(
+    headers: &HeaderMap,
+    extensions: &axum::http::Extensions,
+    trusted: &[IpNet],
+) -> Option<IpAddr> {
+    let peer = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    let xff = header_values(headers, header::HeaderName::from_static("x-forwarded-for"));
+    client_ip(peer, &xff, trusted)
+}
+
 impl FromRequestParts<AppState> for ClientCtx {
     type Rejection = Response;
 
@@ -115,15 +127,11 @@ impl FromRequestParts<AppState> for ClientCtx {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let peer = parts
-            .extensions
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|c| c.0.ip());
-        let xff = header_values(
+        let ip = request_ip(
             &parts.headers,
-            header::HeaderName::from_static("x-forwarded-for"),
+            &parts.extensions,
+            &state.web.trusted_proxies,
         );
-        let ip = client_ip(peer, &xff, &state.web.trusted_proxies);
         if let Err(retry) = state.limiter.check(ip, Instant::now()) {
             return Err(rate_limited(retry));
         }
