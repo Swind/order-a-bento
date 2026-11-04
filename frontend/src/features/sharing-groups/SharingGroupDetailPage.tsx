@@ -10,7 +10,7 @@ export function SharingGroupDetailPage() {
   const { id = "" } = useParams();
   const group = useSharingGroup(id);
   const members = useSharingMembers(id);
-  const mutation = useSharingMutation(id);
+  const mutation = useSharingMutation();
   const lookup = useSharingUserLookup(id);
   const [name, setName] = useState<string | null>(null);
   const [userId, setUserId] = useState("");
@@ -40,7 +40,7 @@ export function SharingGroupDetailPage() {
             onSubmit={(event) => {
               event.preventDefault();
               if (!currentName.trim()) return;
-              mutation.mutate({ method: "PATCH", body: { name: currentName.trim() } });
+              mutation.mutate({ type: "rename", groupId: id, body: { name: currentName.trim() } });
             }}
           >
             <label className="space-y-1">
@@ -112,7 +112,7 @@ export function SharingGroupDetailPage() {
               </select>
             </label>
             <Button type="button" disabled={mutation.isPending || lookup.isPending || !userId} onClick={() => mutation.mutate(
-              { suffix: "/members", body: { userId, role } },
+              { type: "addMember", groupId: id, body: { userId, role } },
               { onSuccess: () => { setUserId(""); setEmail(""); lookup.reset(); } },
             )}>加入成員</Button>
           </form>
@@ -148,9 +148,8 @@ export function SharingGroupDetailPage() {
                     value={member.role ?? "member"}
                     disabled={mutation.isPending}
                     onChange={(event) => mutation.mutate({
-                      suffix: `/members/${encodeURIComponent(member.id)}`,
-                      method: "PATCH",
-                      body: { role: event.target.value },
+                      type: "changeRole", groupId: id, userId: member.id,
+                      body: { role: event.target.value === "admin" ? "admin" : "member" },
                     })}
                   >
                     <option value="member">成員</option>
@@ -161,8 +160,7 @@ export function SharingGroupDetailPage() {
                     showLabel
                     pending={mutation.isPending}
                     onConfirm={() => mutation.mutate({
-                      suffix: `/members/${encodeURIComponent(member.id)}`,
-                      method: "DELETE",
+                      type: "removeMember", groupId: id, userId: member.id,
                     })}
                   />
                 </div>

@@ -769,6 +769,34 @@ fn oa_happy_script() -> Vec<Reply> {
 }
 
 #[tokio::test]
+async fn provider_hook_preserves_missing_usage_and_explicit_zero() {
+    for missing in [false, true] {
+        let e = env().await;
+        let mut reply = chat_end_turn("請補充說明");
+        if missing {
+            reply.as_object_mut().unwrap().remove("usage");
+        } else {
+            reply["usage"] = json!({"prompt_tokens":0,"completion_tokens":0,"total_tokens":0});
+        }
+        let (url, mock) = start_openai(vec![Reply::Message(reply)]).await;
+        RigImportAgent::new(oa_config(&url))
+            .unwrap()
+            .run(e.ctx.clone(), input())
+            .await
+            .unwrap();
+        assert_eq!(mock.calls(), 1);
+        assert_eq!(e.ctx.turns(), 1);
+        let expected = if missing { None } else { Some(0) };
+        assert_eq!(e.ctx.observed_usage().input_tokens, expected);
+        assert_eq!(e.ctx.observed_usage().output_tokens, expected);
+        assert_eq!(
+            e.ctx.observed_model().as_deref(),
+            Some("deepseek-v4.1-flash")
+        );
+    }
+}
+
+#[tokio::test]
 async fn openai_happy_path_request_shape_and_usage() {
     let e = env().await;
     let (url, mock) = start_openai(oa_happy_script()).await;

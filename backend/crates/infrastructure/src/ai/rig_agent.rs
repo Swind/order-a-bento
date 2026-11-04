@@ -227,10 +227,8 @@ impl AgentHook for TurnHook {
         event: ModelTurnFinished<'_>,
     ) -> impl std::future::Future<Output = ModelTurnAction> + Send {
         // Usage per turn, so that failed runs still report what they cost.
-        self.ctx.add_usage(Usage {
-            input_tokens: event.usage.input_tokens.unwrap_or(0),
-            output_tokens: event.usage.output_tokens.unwrap_or(0),
-        });
+        self.ctx
+            .observe_usage(event.usage.input_tokens, event.usage.output_tokens);
         if let Some(r) = event.usage.reasoning_tokens {
             tracing::debug!(reasoning_tokens = r, "AI model turn reasoning");
         }
@@ -239,6 +237,7 @@ impl AgentHook for TurnHook {
         seen.call_started = std::time::Instant::now();
         if let Some(m) = raw.get("model").and_then(|m| m.as_str()) {
             seen.model = Some(m.to_owned());
+            self.ctx.observe_model(m);
         }
         let refused = raw.get("stop_reason").and_then(|s| s.as_str()) == Some("refusal")
             || matches!(

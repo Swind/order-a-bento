@@ -57,6 +57,110 @@ async fn add(c: &Client, g: &str, id: &str, role: &str) {
 }
 
 #[tokio::test]
+async fn sharing_list_uses_injected_repository_with_authenticated_actor() {
+    use application::sharing::{
+        SharingError, SharingGroup, SharingGroupId, SharingRepo, SharingUser,
+    };
+    use domain::identity::OrganizerId;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct FakeSharingRepo {
+        actor: OrganizerId,
+        group: SharingGroup,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl SharingRepo for FakeSharingRepo {
+        async fn list(&self, actor: OrganizerId) -> Result<Vec<SharingGroup>, SharingError> {
+            assert_eq!(actor, self.actor);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![self.group.clone()])
+        }
+        async fn create(&self, _: OrganizerId, _: &str) -> Result<SharingGroup, SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn get(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+        ) -> Result<SharingGroup, SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn rename(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+            _: &str,
+        ) -> Result<SharingGroup, SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn members(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+        ) -> Result<Vec<SharingUser>, SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn lookup(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+            _: &str,
+        ) -> Result<Vec<SharingUser>, SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn add(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+            _: OrganizerId,
+            _: &str,
+        ) -> Result<(), SharingError> {
+            unreachable!("only list is expected")
+        }
+        async fn change(
+            &self,
+            _: OrganizerId,
+            _: SharingGroupId,
+            _: OrganizerId,
+            _: Option<&str>,
+        ) -> Result<(), SharingError> {
+            unreachable!("only list is expected")
+        }
+    }
+
+    let mut c = Client::new().await;
+    let id = SharingGroupId::new();
+    let fake = Arc::new(FakeSharingRepo {
+        actor: user(&c).await.parse().unwrap(),
+        group: SharingGroup {
+            id,
+            name: "Injected group".into(),
+            role: "member".into(),
+        },
+        calls: AtomicUsize::new(0),
+    });
+    let t = c.base._t.as_mut().unwrap();
+    t.state.sharing = fake.clone();
+    c.base.app = crate::router(t.state.clone());
+    let (status, groups) = c.send("GET", "/api/v1/sharing-groups", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        groups,
+        json!([{"id":id.to_string(),"name":"Injected group","role":"member"}])
+    );
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+    let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM sharing_groups")
+        .fetch_one(&c.base._t.as_ref().unwrap().state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn sharing_management_and_exact_identity_lookup() {
     let admin = Client::new().await;
     let member = admin.other().await;
@@ -518,6 +622,35 @@ fn sharing_openapi_contract() {
             .any(|p| p["name"] == "sharingGroupId")
     );
     let _: Value = spec;
+}
+
+#[test]
+fn sharing_openapi_client_contract_has_unique_operations_and_query_parameters() {
+    let spec = serde_json::to_value(crate::openapi()).unwrap();
+    let mut operations = std::collections::HashSet::new();
+    for path in spec["paths"].as_object().unwrap().values() {
+        for operation in path.as_object().unwrap().values() {
+            if let Some(id) = operation["operationId"].as_str() {
+                assert!(operations.insert(id), "duplicate operationId: {id}");
+            }
+        }
+    }
+    for (path, name) in [
+        ("/api/v1/rosters", "sharingGroupId"),
+        ("/api/v1/vendors", "sharingGroupId"),
+        ("/api/v1/sharing-groups/{groupId}/users/lookup", "email"),
+    ] {
+        let params = spec["paths"][path]["get"]["parameters"].as_array().unwrap();
+        let parameter = params.iter().find(|p| p["name"] == name).unwrap();
+        assert_eq!(parameter["in"], "query", "{path}: {name}");
+    }
+    let groups = &spec["paths"]["/api/v1/sharing-groups"];
+    assert_eq!(groups["get"]["operationId"], "list_sharing_groups");
+    assert_eq!(groups["post"]["operationId"], "create_sharing_group");
+    assert_eq!(
+        groups["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/GroupNameRequest"
+    );
 }
 
 fn order_mutations(order: &Value) -> Vec<(&'static str, String, Value)> {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use application::ports::UaParser;
+use application::sharing::SharingRepo;
 use application::{AiImportService, AuthService, DirectoryService, OrderingService};
 use infrastructure::sqlite::Db;
 use infrastructure::ua::WootheeUaParser;
@@ -82,6 +83,7 @@ pub struct AppState {
     pub auth: Arc<AuthService>,
     pub directory: Arc<DirectoryService>,
     pub ordering: Arc<OrderingService>,
+    pub sharing: Arc<dyn SharingRepo>,
     pub web: Arc<WebSettings>,
     pub ua_parser: Arc<dyn UaParser>,
     /// Per-client-IP limiter for the public endpoints.
@@ -117,6 +119,7 @@ impl AppState {
         auth: AuthService,
         directory: DirectoryService,
         ordering: OrderingService,
+        sharing: Arc<dyn SharingRepo>,
         web: WebSettings,
     ) -> Self {
         Self {
@@ -125,6 +128,7 @@ impl AppState {
             auth: Arc::new(auth),
             directory: Arc::new(directory),
             ordering: Arc::new(ordering),
+            sharing,
             web: Arc::new(web),
             ua_parser: Arc::new(WootheeUaParser),
             limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, unwrap, ApiError } from "@/shared/api/client";
-import { invalidateSharingAccessOnError } from "@/features/sharing-groups/hooks";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
 import type { GroupOrderDetail, GroupSummary, ParticipantRow, PatchGroupOrderBody } from "@/shared/api/types";
 
 export interface CreateGroupOrderInput {

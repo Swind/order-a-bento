@@ -1986,13 +1986,10 @@
         "parameters": [
           {
             "name": "sharingGroupId",
-            "in": "path",
-            "required": true,
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -2488,7 +2485,7 @@
     },
     "/api/v1/sharing-groups": {
       "get": {
-        "operationId": "list",
+        "operationId": "list_sharing_groups",
         "responses": {
           "200": {
             "content": {
@@ -2519,7 +2516,7 @@
         ]
       },
       "post": {
-        "operationId": "create",
+        "operationId": "create_sharing_group",
         "requestBody": {
           "content": {
             "application/json": {
@@ -2857,7 +2854,7 @@
           },
           {
             "name": "email",
-            "in": "path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"
@@ -2904,13 +2901,10 @@
         "parameters": [
           {
             "name": "sharingGroupId",
-            "in": "path",
-            "required": true,
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],

@@ -27,7 +27,7 @@ bump: ## Set the version in Cargo.toml, Cargo.lock and the frontend: make bump V
 	@test -n "$(V)" || { echo 'usage: make bump V=X.Y.Z' >&2; exit 1; }
 	scripts/version.sh bump "$(V)"
 
-check: ## Run all CI checks (version sync, backend fmt/clippy/test, OpenAPI sync, frontend typecheck/test/build)
+check: ## Run CI checks (version, backend fmt/clippy/test, OpenAPI/types sync, frontend typecheck/lint/test/build)
 	scripts/version.sh check
 	cd backend && cargo fmt --all --check
 	cd backend && cargo clippy --workspace --all-targets -- -D warnings
@@ -36,7 +36,9 @@ check: ## Run all CI checks (version sync, backend fmt/clippy/test, OpenAPI sync
 	git diff --exit-code -- frontend/openapi.json
 	cd frontend && npm ci --prefer-offline --no-audit --no-fund
 	cd frontend && npm run gen:api
+	git diff --exit-code -- frontend/src/shared/api/schema.d.ts
 	cd frontend && npm run typecheck
+	cd frontend && npm run lint
 	cd frontend && npm test -- --run
 	cd frontend && npm run build
 

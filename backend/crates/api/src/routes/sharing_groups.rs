@@ -6,13 +6,12 @@ use crate::{
     session::AuthenticatedOrganizer,
     state::AppState,
 };
-use application::sharing::{SharingError, SharingGroup, SharingRepo, SharingUser};
+use application::sharing::{SharingError, SharingGroup, SharingUser};
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use infrastructure::sharing_repo::SqliteSharingRepo;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -108,11 +107,13 @@ impl SharingRoleDto {
     }
 }
 #[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct LookupQuery {
     pub email: String,
 }
 #[derive(Debug, Default, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
 pub struct SharingScopeQuery {
     pub sharing_group_id: Option<String>,
 }
@@ -122,13 +123,13 @@ impl SharingScopeQuery {
     }
 }
 
-#[utoipa::path(get,path="/sharing-groups",security(("cookieAuth"=[])),responses((status=200,body=Vec<SharingGroupDto>),(status=401,body=ProblemDetails)))]
+#[utoipa::path(get,path="/sharing-groups",operation_id="list_sharing_groups",security(("cookieAuth"=[])),responses((status=200,body=Vec<SharingGroupDto>),(status=401,body=ProblemDetails)))]
 pub async fn list(
     State(s): State<AppState>,
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
 ) -> Result<Json<Vec<SharingGroupDto>>, AppError> {
     Ok(Json(
-        SqliteSharingRepo::new(s.db)
+        s.sharing
             .list(o.id)
             .await
             .map_err(sharing_error)?
@@ -137,7 +138,7 @@ pub async fn list(
             .collect(),
     ))
 }
-#[utoipa::path(post,path="/sharing-groups",security(("cookieAuth"=[])),request_body=GroupNameRequest,responses((status=201,body=SharingGroupDto),(status=422,body=ProblemDetails)))]
+#[utoipa::path(post,path="/sharing-groups",operation_id="create_sharing_group",security(("cookieAuth"=[])),request_body=GroupNameRequest,responses((status=201,body=SharingGroupDto),(status=422,body=ProblemDetails)))]
 pub async fn create(
     State(s): State<AppState>,
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
@@ -146,7 +147,7 @@ pub async fn create(
     Ok((
         StatusCode::CREATED,
         Json(
-            SqliteSharingRepo::new(s.db)
+            s.sharing
                 .create(o.id, &r.name)
                 .await
                 .map_err(sharing_error)?
@@ -160,7 +161,7 @@ pub async fn get(
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
     Path(id): Path<String>,
 ) -> Result<Json<SharingGroupDetail>, AppError> {
-    let repo = SqliteSharingRepo::new(s.db);
+    let repo = s.sharing;
     let id = parse_id(&id)?;
     let group = repo.get(o.id, id).await.map_err(sharing_error)?.into();
     let members = repo
@@ -180,7 +181,7 @@ pub async fn rename(
     ApiJson(r): ApiJson<GroupNameRequest>,
 ) -> Result<Json<SharingGroupDto>, AppError> {
     Ok(Json(
-        SqliteSharingRepo::new(s.db)
+        s.sharing
             .rename(o.id, parse_id(&id)?, &r.name)
             .await
             .map_err(sharing_error)?
@@ -194,7 +195,7 @@ pub async fn members(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<SharingUserDto>>, AppError> {
     Ok(Json(
-        SqliteSharingRepo::new(s.db)
+        s.sharing
             .members(o.id, parse_id(&id)?)
             .await
             .map_err(sharing_error)?
@@ -211,7 +212,7 @@ pub async fn lookup(
     Query(q): Query<LookupQuery>,
 ) -> Result<Json<Vec<SharingUserDto>>, AppError> {
     Ok(Json(
-        SqliteSharingRepo::new(s.db)
+        s.sharing
             .lookup(o.id, parse_id(&id)?, &q.email)
             .await
             .map_err(sharing_error)?
@@ -227,7 +228,7 @@ pub async fn add(
     Path(id): Path<String>,
     ApiJson(r): ApiJson<AddSharingMemberRequest>,
 ) -> Result<StatusCode, AppError> {
-    SqliteSharingRepo::new(s.db)
+    s.sharing
         .add(o.id, parse_id(&id)?, parse_id(&r.user_id)?, r.role.as_str())
         .await
         .map_err(sharing_error)?;
@@ -240,7 +241,7 @@ pub async fn change(
     Path((id, user)): Path<(String, String)>,
     ApiJson(r): ApiJson<SharingRoleRequest>,
 ) -> Result<StatusCode, AppError> {
-    SqliteSharingRepo::new(s.db)
+    s.sharing
         .change(
             o.id,
             parse_id(&id)?,
@@ -257,7 +258,7 @@ pub async fn remove(
     AuthenticatedOrganizer(o): AuthenticatedOrganizer,
     Path((id, user)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    SqliteSharingRepo::new(s.db)
+    s.sharing
         .change(o.id, parse_id(&id)?, parse_id(&user)?, None)
         .await
         .map_err(sharing_error)?;

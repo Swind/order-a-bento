@@ -1,6 +1,8 @@
 //! Tests of the AI import tools and service against real SQLite repositories.
 #[path = "ai_draft_tests.rs"]
 mod draft_tests;
+#[path = "ai_quota_tests.rs"]
+mod quota_tests;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1499,7 +1501,10 @@ async fn photo_run(e: &Env) -> domain::ai_import::ImportRun {
         "m".into(),
         SystemTime::now(),
     );
-    e.runs.create(&run, Some(pending_photo())).await.unwrap();
+    e.runs
+        .reserve_run(&run, Some(pending_photo()), 100)
+        .await
+        .unwrap();
     run.propose(
         Default::default(),
         "s".into(),
@@ -1834,7 +1839,10 @@ async fn pending_photo_discard_failed_cas_and_maintenance_cleanup() {
         "m".into(),
         SystemTime::now(),
     );
-    e.runs.create(&failed, Some(pending_photo())).await.unwrap();
+    e.runs
+        .reserve_run(&failed, Some(pending_photo()), 100)
+        .await
+        .unwrap();
     failed
         .fail("test".into(), Usage::default(), SystemTime::now())
         .unwrap();
@@ -1860,7 +1868,10 @@ async fn pending_photo_discard_failed_cas_and_maintenance_cleanup() {
         "m".into(),
         SystemTime::UNIX_EPOCH,
     );
-    e.runs.create(&stuck, Some(pending_photo())).await.unwrap();
+    e.runs
+        .reserve_run(&stuck, Some(pending_photo()), 100)
+        .await
+        .unwrap();
     let terminal = photo_run(&e).await;
     sqlx::query("UPDATE ai_import_runs SET status='discarded' WHERE id=?")
         .bind(terminal.id.to_string())

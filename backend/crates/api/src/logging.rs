@@ -4,10 +4,29 @@ use std::borrow::Cow;
 
 use axum::body::Body;
 use axum::http::Request;
+use axum::middleware::Next;
+use axum::response::Response;
 use tower_http::trace::{DefaultOnResponse, OnRequest, TraceLayer};
 use tracing::{Level, Span};
 
 pub const TOKEN_PLACEHOLDER: &str = ":token";
+
+#[derive(Clone, Copy)]
+struct RequestId(uuid::Uuid);
+
+/// Always generate locally; never trust a caller's correlation header.
+pub async fn request_id(mut req: Request<Body>, next: Next) -> Response {
+    let id = uuid::Uuid::now_v7();
+    req.extensions_mut().insert(RequestId(id));
+    let mut response = next.run(req).await;
+    response.headers_mut().insert(
+        "x-request-id",
+        id.to_string()
+            .parse()
+            .expect("UUID is a valid header value"),
+    );
+    response
+}
 
 /// Replace the share token in `/api/v1/public/g/{token}...` and `/g/{token}...`
 /// with `:token`. Other paths are returned untouched (borrowed).
@@ -31,6 +50,7 @@ pub fn redact_path(path: &str) -> Cow<'_, str> {
 pub fn make_span(req: &Request<Body>) -> Span {
     tracing::info_span!(
         "request",
+        request_id = %req.extensions().get::<RequestId>().map(|id| id.0.to_string()).unwrap_or_default(),
         method = %req.method(),
         path = %redact_path(req.uri().path()),
     )

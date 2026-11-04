@@ -1,58 +1,43 @@
-import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { ApiError, toApiError } from "@/shared/api/client";
-import type { RosterSummary, VendorSummary, SharingGroup, SharingGroupDetail, SharingMember } from "@/shared/api/types";
-
-export interface DirectoryScope {
-  sharingGroupId?: string | null;
-  canManage?: boolean;
-}
-
-export async function sharingRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(`${location.origin}/api/v1/${path}`, {
-    method,
-    credentials: "include",
-    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
-  });
-  if (!response.ok) throw await toApiError(response);
-  return response.status === 204 ? undefined as T : response.json();
-}
-
-export function scopePath(resource: string, sharingGroupId?: string) {
-  return `${resource}${sharingGroupId ? `?sharingGroupId=${encodeURIComponent(sharingGroupId)}` : ""}`;
-}
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, unwrap } from "@/shared/api/client";
+import { invalidateSharingAccessOnError, invalidateSharingQueries } from "@/shared/api/access";
+import { listRosters, listVendors } from "@/shared/api/directory";
+import type { components } from "@/shared/api/schema";
+import type { RosterSummary, VendorSummary } from "@/shared/api/types";
 
 export function useSharingGroups() {
-  return useQuery({ queryKey: ["sharing-groups"], queryFn: () => sharingRequest<SharingGroup[]>("sharing-groups") });
+  return useQuery({ queryKey: ["sharing-groups"], queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/sharing-groups", { signal })) });
 }
 
 export function useSharingGroup(id: string) {
-  return useQuery({ queryKey: ["sharing-group", id], queryFn: () => sharingRequest<SharingGroupDetail>(`sharing-groups/${id}`) });
+  return useQuery({ queryKey: ["sharing-group", id], queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/sharing-groups/{groupId}", { params: { path: { groupId: id } }, signal })) });
 }
 
 export function useSharingMembers(id: string) {
-  return useQuery({ queryKey: ["sharing-members", id], queryFn: () => sharingRequest<SharingMember[]>(`sharing-groups/${id}/members`) });
+  return useQuery({ queryKey: ["sharing-members", id], queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/sharing-groups/{groupId}/members", { params: { path: { groupId: id } }, signal })) });
 }
 
-function invalidateSharingQueries(qc: QueryClient) {
-  // Membership changes affect listings, already-open details, and import permissions.
-  return Promise.all(
-    ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run", "group-orders", "group-order"]
-      .map((key) => qc.invalidateQueries({ queryKey: [key] })),
-  );
-}
+type S = components["schemas"];
+export type SharingCommand =
+  | { type: "create"; body: S["GroupNameRequest"] }
+  | { type: "rename"; groupId: string; body: S["GroupNameRequest"] }
+  | { type: "addMember"; groupId: string; body: S["AddSharingMemberRequest"] }
+  | { type: "changeRole"; groupId: string; userId: string; body: S["SharingRoleRequest"] }
+  | { type: "removeMember"; groupId: string; userId: string };
 
-export function invalidateSharingAccessOnError(qc: QueryClient, error: unknown) {
-  if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
-    return invalidateSharingQueries(qc);
-  }
-}
-
-export function useSharingMutation(id?: string) {
+export function useSharingMutation() {
   const qc = useQueryClient();
   return useMutation({
     onError: (error) => invalidateSharingAccessOnError(qc, error),
-    mutationFn: ({ suffix = "", method = "POST", body }: { suffix?: string; method?: string; body?: unknown }) =>
-      sharingRequest<SharingGroup>(`sharing-groups${id ? `/${id}` : ""}${suffix}`, method, body),
+    mutationFn: async (command: SharingCommand) => {
+      switch (command.type) {
+        case "create": return unwrap(await api.POST("/api/v1/sharing-groups", { body: command.body }));
+        case "rename": return unwrap(await api.PATCH("/api/v1/sharing-groups/{groupId}", { params: { path: { groupId: command.groupId } }, body: command.body }));
+        case "addMember": return unwrap(await api.POST("/api/v1/sharing-groups/{groupId}/members", { params: { path: { groupId: command.groupId } }, body: command.body }));
+        case "changeRole": return unwrap(await api.PATCH("/api/v1/sharing-groups/{groupId}/members/{userId}", { params: { path: { groupId: command.groupId, userId: command.userId } }, body: command.body }));
+        case "removeMember": return unwrap(await api.DELETE("/api/v1/sharing-groups/{groupId}/members/{userId}", { params: { path: { groupId: command.groupId, userId: command.userId } } }));
+      }
+    },
     onSuccess: () => invalidateSharingQueries(qc),
   });
 }
@@ -60,19 +45,22 @@ export function useSharingMutation(id?: string) {
 export function useSharingUserLookup(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (email: string) => sharingRequest<SharingMember[]>(
-      `sharing-groups/${id}/users/lookup?email=${encodeURIComponent(email.trim())}`,
-    ),
+    mutationFn: async (email: string) => unwrap(await api.GET("/api/v1/sharing-groups/{groupId}/users/lookup", {
+      params: { path: { groupId: id }, query: { email: email.trim() } },
+    })),
     onError: (error) => invalidateSharingAccessOnError(qc, error),
   });
 }
 
-export function useAccessibleDirectory<T extends RosterSummary | VendorSummary>(resource: "rosters" | "vendors") {
+export function useAccessibleRosters() { return useAccessibleDirectory("rosters", listRosters); }
+export function useAccessibleVendors() { return useAccessibleDirectory("vendors", listVendors); }
+
+function useAccessibleDirectory<T extends RosterSummary | VendorSummary>(resource: "rosters" | "vendors", list: (scope?: string, signal?: AbortSignal) => Promise<T[]>) {
   const groups = useSharingGroups();
   const scopes = [undefined, ...(groups.data ?? []).map((group) => group.id)];
   const queries = useQueries({ queries: scopes.map((scope) => ({
     queryKey: [resource, scope ?? "personal"],
-    queryFn: () => sharingRequest<(T & DirectoryScope)[]>(scopePath(resource, scope)),
+    queryFn: ({ signal }: { signal: AbortSignal }) => list(scope, signal),
   })) });
   return {
     data: queries.flatMap((query, index) => (query.isError ? [] : query.data ?? []).map((item) => ({

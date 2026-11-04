@@ -9,6 +9,7 @@ pub mod tools;
 
 pub use agent::{
     AgentInput, AgentOutcome, AiError, EditSession, ImageInput, ImportAgent, ImportToolContext,
+    ObservedUsage, TurnDraftOutcome, TurnExecution, TurnMetrics,
 };
 mod draft_service;
 pub use draft_service::DraftTurnCmd;

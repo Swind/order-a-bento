@@ -4,6 +4,8 @@
 > 程式基準：`3887edef9dc4cbb406513318dcc429a366b7e3d1`（`main`）  
 > 方法：以實際程式、migration、測試案例與 CI 定義進行靜態審查；設計文件只作輔助。本文不修改產品程式。
 
+> 後續更新（2026-11-04）：`c499a31` 加上尚未提交的 A–G 工作目錄已完成對應改善及整合檢查，待主 agent 最終核准；未 commit／push／部署。見[施工與驗證紀錄](architecture-improvement-workplan.md)。本文以下發現仍保留 `3887edef` 審查時點，不改寫成施工後現況；R3 長任務與 R7 草稿格式等 H 類範圍仍未施工。
+
 後續施工規格：[架構改善工作包](architecture-improvement-workplan.md)（含修改接點、相容性要求、測試矩陣與接手 agent 提示詞）。
 
 ## 一、結論摘要

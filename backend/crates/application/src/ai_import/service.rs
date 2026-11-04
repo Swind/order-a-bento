@@ -16,7 +16,7 @@ use domain::shared::text::{
 use domain::shared::{DomainError, ItemName, Money, NameKey, PersonName, RosterName, VendorName};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentInput, AiError, ImageInput, ImportAgent, ImportToolContext};
+use super::{AgentInput, AiError, ImageInput, ImportAgent, ImportToolContext, ObservedUsage};
 use crate::ports::{
     Clock, ImportApplyRepo, ImportApplyStep, ImportRunRepo, PortError, RepoError, RosterRepo,
     VendorRepo,
@@ -188,6 +188,20 @@ pub enum AiImportError {
     Internal(String),
 }
 
+impl AiImportError {
+    pub(super) fn log_code(&self) -> &'static str {
+        match self {
+            Self::NotFound => "access_revoked",
+            Self::QuotaExceeded => "quota",
+            Self::Agent { error, .. } => error.code(),
+            Self::InvalidState(_) => "invalid_state",
+            Self::InvalidChanges(_) | Self::Domain(_) => "validation",
+            Self::Conflict => "stale",
+            Self::Internal(_) => "internal",
+        }
+    }
+}
+
 impl From<PortError> for AiImportError {
     fn from(e: PortError) -> Self {
         Self::Internal(e.0)
@@ -231,6 +245,7 @@ pub struct AiImportService {
 
 impl AiImportService {
     /// Run the agent on the photo and return the run in `Proposed` state.
+    #[tracing::instrument(name = "ai_import", skip_all, fields(run = tracing::field::Empty, turn = "initial"))]
     pub async fn start(
         &self,
         org: OrganizerId,
@@ -270,13 +285,6 @@ impl AiImportService {
         }
 
         let now = self.clock.now();
-        let since = now
-            .checked_sub(Duration::from_secs(24 * 3600))
-            .unwrap_or(std::time::UNIX_EPOCH);
-        if self.runs.count_since(org, since).await? >= u64::from(self.config.daily_quota) {
-            return Err(AiImportError::QuotaExceeded);
-        }
-
         let mut run = ImportRun::start(
             org,
             cmd.mode,
@@ -287,6 +295,7 @@ impl AiImportService {
             now,
         );
         run.sharing_group_id = cmd.sharing_group_id;
+        tracing::Span::current().record("run", tracing::field::display(run.id));
         if cmd.pending_photo.is_some() {
             run.pending_photo_expires_at = Some(now + Duration::from_secs(24 * 3600));
         }
@@ -297,7 +306,9 @@ impl AiImportService {
             },
             None => cmd.image,
         };
-        self.runs.create(&run, cmd.pending_photo).await?;
+        self.runs
+            .reserve_run(&run, cmd.pending_photo, self.config.daily_quota)
+            .await?;
 
         let mut ctx = ImportToolContext::new(
             org,
@@ -316,41 +327,92 @@ impl AiImportService {
             target_vendor_id: cmd.target_vendor_id,
         };
 
-        match self.run_agent(&ctx, input).await {
-            Ok(outcome) => {
-                run.model = outcome.model;
-                // Includes failed earlier attempts when the agent reports per turn.
-                let usage = match ctx.usage() {
-                    u if u != Usage::default() => u,
-                    _ => outcome.usage,
-                };
-                run.tool_calls = ctx.tool_calls_json();
-                run.propose(
-                    ctx.snapshot().await,
-                    outcome.summary,
-                    usage,
-                    self.clock.now(),
-                )?;
-                self.runs.save(&run, ImportRunStatus::Running).await?;
-                // The agent can run for a long time; do not return shared
-                // proposal data after the initiating actor was revoked.
-                self.rosters
-                    .check_scope(org, run.sharing_group_id, true)
-                    .await?;
-                self.hide_unavailable_photo(&mut run);
-                Ok(run)
+        let started = std::time::Instant::now();
+        let mut observed = ObservedUsage::default();
+        let mut model = None;
+        let mut execution = "failed";
+        tracing::info!(
+            event = "ai_import_started",
+            quota_reserved = true,
+            quota_unit = "internal_operation_24h",
+            usage_kind = "observed_tokens_not_invoice",
+            model = ?model,
+            input_tokens = ?observed.input_tokens,
+            output_tokens = ?observed.output_tokens,
+            duration_ms = 0_u64,
+            execution = "pending",
+            outcome = "pending",
+            error_code = ?None::<&str>,
+        );
+        let result = async {
+            let agent_result = self.run_agent(&ctx, input).await;
+            observed = if ctx.turns() > 0 {
+                ctx.observed_usage()
+            } else if let Ok(out) = &agent_result {
+                ObservedUsage {
+                    input_tokens: Some(out.usage.input_tokens),
+                    output_tokens: Some(out.usage.output_tokens),
+                }
+            } else {
+                ObservedUsage::default()
+            };
+            model = ctx.observed_model();
+            if let Ok(out) = &agent_result {
+                execution = "completed";
+                if ctx.turns() == 0 {
+                    model = Some(out.model.clone());
+                }
             }
-            Err(e) => {
-                tracing::warn!(run = %run.id, error = %e, "AI import failed");
-                run.tool_calls = ctx.tool_calls_json();
-                run.fail(e.to_string(), ctx.usage(), self.clock.now())?;
-                self.runs.save(&run, ImportRunStatus::Running).await?;
-                Err(AiImportError::Agent {
-                    run_id: run.id,
-                    error: e,
-                })
+            match agent_result {
+                Ok(outcome) => {
+                    run.model = outcome.model;
+                    // Includes failed earlier attempts when the agent reports per turn.
+                    let usage = match ctx.usage() {
+                        u if u != Usage::default() => u,
+                        _ => outcome.usage,
+                    };
+                    run.tool_calls = ctx.tool_calls_json();
+                    run.propose(
+                        ctx.snapshot().await,
+                        outcome.summary,
+                        usage,
+                        self.clock.now(),
+                    )?;
+                    self.runs.save(&run, ImportRunStatus::Running).await?;
+                    // The agent can run for a long time; do not return shared
+                    // proposal data after the initiating actor was revoked.
+                    self.rosters
+                        .check_scope(org, run.sharing_group_id, true)
+                        .await?;
+                    self.hide_unavailable_photo(&mut run);
+                    Ok(run)
+                }
+                Err(e) => {
+                    run.tool_calls = ctx.tool_calls_json();
+                    run.fail(e.to_string(), ctx.usage(), self.clock.now())?;
+                    self.runs.save(&run, ImportRunStatus::Running).await?;
+                    Err(AiImportError::Agent {
+                        run_id: run.id,
+                        error: e,
+                    })
+                }
             }
         }
+        .await;
+        tracing::info!(
+            event = "ai_import_completed",
+            quota_reserved = true,
+            quota_unit = "internal_operation_24h",
+            usage_kind = "observed_tokens_not_invoice",
+            model = ?model,
+            input_tokens = ?observed.input_tokens,
+            output_tokens = ?observed.output_tokens,
+            duration_ms = started.elapsed().as_millis(),
+            execution,
+            outcome = if result.is_ok() { "proposed" } else { "rejected" },
+            error_code = ?result.as_ref().err().map(AiImportError::log_code),
+        );
+        result
     }
 
     /// The agent call with one retry of a retryable failure, all under the timeout.

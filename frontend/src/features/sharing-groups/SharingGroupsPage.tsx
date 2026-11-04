@@ -15,7 +15,7 @@ export function SharingGroupsPage() {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
-    create.mutate({ body: { name: name.trim() } }, { onSuccess: () => setName("") });
+    create.mutate({ type: "create", body: { name: name.trim() } }, { onSuccess: () => setName("") });
   }
   return (
     <div className="space-y-5">

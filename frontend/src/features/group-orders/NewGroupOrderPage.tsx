@@ -2,9 +2,8 @@ import { Check } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
-import { useAccessibleDirectory, useSharingGroups } from "@/features/sharing-groups/hooks";
+import { useAccessibleRosters, useAccessibleVendors, useSharingGroups } from "@/features/sharing-groups/hooks";
 import { ScopeSelect } from "@/features/sharing-groups/ScopeSelect";
-import type { RosterSummary, VendorSummary } from "@/shared/api/types";
 import { DeliveryAddressSelect } from "@/features/delivery-addresses/DeliveryAddressSelect";
 import { ApiError } from "@/shared/api/client";
 import { errorMessage, fieldError } from "@/shared/api/errors";
@@ -130,8 +129,8 @@ function ListState({
 
 export function NewGroupOrderPage() {
   const navigate = useNavigate();
-  const rosters = useAccessibleDirectory<RosterSummary>("rosters");
-  const vendors = useAccessibleDirectory<VendorSummary>("vendors");
+  const rosters = useAccessibleRosters();
+  const vendors = useAccessibleVendors();
   const create = useCreateGroupOrder();
   const sharingGroups = useSharingGroups();
 

@@ -112,5 +112,6 @@ pub fn router_with_assets(state: AppState, assets: web::Assets) -> Router {
         ))
         .layer(logging::trace_layer())
         .layer(axum::middleware::from_fn(routes::vendor_images::no_store))
+        .layer(axum::middleware::from_fn(logging::request_id))
         .with_state(state)
 }

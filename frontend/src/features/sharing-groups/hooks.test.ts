@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/shared/api/client";
-import { invalidateSharingAccessOnError } from "./hooks";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
 
 const families = ["sharing-groups", "sharing-group", "sharing-members", "rosters", "roster", "vendors", "vendor", "import-run", "group-orders", "group-order"];
 

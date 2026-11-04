@@ -8,7 +8,7 @@ import { ConfirmDeleteButton } from "@/shared/components/ConfirmDeleteButton";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/shared/ui/dialog";
 import { useMe } from "@/features/auth/hooks";
-import { invalidateSharingAccessOnError } from "@/features/sharing-groups/hooks";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
 import { useVendorImageMutation } from "./hooks";
 
 const MAX_BYTES = 5 * 1024 * 1024;

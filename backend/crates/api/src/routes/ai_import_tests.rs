@@ -1,5 +1,8 @@
 //! API tests for `/api/v1/ai/import-runs` with scripted agents.
 
+#[path = "ai_logging_tests.rs"]
+mod logging_tests;
+
 use std::sync::Arc;
 
 use application::ai_import::tools::{
@@ -803,6 +806,31 @@ async fn quota_exceeded_is_429() {
     let (s, v) = upload(&c, JPEG, &[]).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(v["code"], "ai_quota_exceeded");
+}
+
+#[tokio::test]
+async fn initial_imports_and_draft_turns_share_quota_429_contract() {
+    for turn_first in [false, true] {
+        let c = client_with(test_app_ai(fake_vendor_agent(), 2, None, false).await).await;
+        let (status, run) = upload(&c, JPEG, &[]).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let path = format!("/ai/import-runs/{}", run["id"].as_str().unwrap());
+        let (status, draft) = c.get(&format!("{path}/draft")).await;
+        assert_eq!(status, StatusCode::OK);
+        let request = json!({"revision":draft["revision"],"turnId":"quota-turn","instruction":"請說明","vendors":draft["vendors"]});
+        let (status, body) = if turn_first {
+            assert_eq!(
+                c.post(&format!("{path}/turns"), request).await.0,
+                StatusCode::OK
+            );
+            upload(&c, JPEG, &[]).await
+        } else {
+            assert_eq!(upload(&c, JPEG, &[]).await.0, StatusCode::CREATED);
+            c.post(&format!("{path}/turns"), request).await
+        };
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["code"], "ai_quota_exceeded");
+    }
 }
 
 #[tokio::test]

@@ -663,6 +663,14 @@ pub trait UaParser: Send + Sync {
 /// `ai_import_runs` persistence. Every lookup is scoped by `organizer_id`.
 #[async_trait]
 pub trait ImportRunRepo: Send + Sync {
+    /// Finalize only an existing (run, turn, organizer) reservation, without draft writes.
+    /// First finalization wins; it is independent of current scope permission/revision.
+    async fn finish_turn(
+        &self,
+        run: &ImportRun,
+        turn_id: &str,
+        metrics: &crate::ai_import::TurnMetrics,
+    ) -> PortResult<()>;
     async fn draft(&self, run: &ImportRun) -> RepoResult<domain::ai_import::DraftState>;
     /// CAS plus run status, owner, scope and 24-hour expiry checks in one transaction.
     /// A turn reservation atomically consumes the shared daily quota once.
@@ -675,8 +683,14 @@ pub trait ImportRunRepo: Send + Sync {
         quota: Option<u32>,
     ) -> RepoResult<()>;
     async fn draft_image(&self, run: &ImportRun, now: SystemTime) -> PortResult<Option<Vec<u8>>>;
-    async fn create(&self, run: &ImportRun, photo: Option<NormalizedVendorImage>)
-    -> PortResult<()>;
+    /// Atomically reserve shared rolling-24h quota and persist run plus photo.
+    /// `run.created_at` is the reservation's time basis; quota failure writes nothing.
+    async fn reserve_run(
+        &self,
+        run: &ImportRun,
+        photo: Option<NormalizedVendorImage>,
+        quota: u32,
+    ) -> RepoResult<()>;
     async fn find(
         &self,
         organizer_id: OrganizerId,
@@ -687,7 +701,7 @@ pub trait ImportRunRepo: Send + Sync {
     /// `RepoError::Domain(Invalid { field: "status" })`; a vanished row is
     /// `RepoError::NotFound`).
     async fn save(&self, run: &ImportRun, expected: ImportRunStatus) -> RepoResult<()>;
-    /// Number of runs of this organizer created at or after `since`.
+    /// Number of runs plus draft turns created at or after `since` (query only).
     async fn count_since(&self, organizer_id: OrganizerId, since: SystemTime) -> PortResult<u64>;
 }
 

@@ -21,6 +21,7 @@ use infrastructure::ordering_repo::{
     SqliteGroupOrderRepo, SqliteOrderReadModel, SqliteSettlementRepo, SqliteSubmissionRepo,
 };
 use infrastructure::password::Argon2PasswordHasher;
+use infrastructure::sharing_repo::SqliteSharingRepo;
 use infrastructure::sqlite::Db;
 use infrastructure::tokens::OsRngTokenGenerator;
 
@@ -158,11 +159,20 @@ pub fn build_state(config: &Config, db: Db) -> anyhow::Result<AppState> {
     .with_trusted_proxies(trusted)
     .with_display_offset(config.display_utc_offset);
     let ai = ai_import_service(config, &db)?;
-    let mut state = AppState::new(db, !config.is_production(), auth, directory, ordering, web)
-        .with_rate_limit(RateLimitConfig {
-            burst: config.public_rate_limit_burst,
-            per_sec: config.public_rate_limit_per_sec,
-        });
+    let sharing = Arc::new(SqliteSharingRepo::new(db.clone()));
+    let mut state = AppState::new(
+        db,
+        !config.is_production(),
+        auth,
+        directory,
+        ordering,
+        sharing,
+        web,
+    )
+    .with_rate_limit(RateLimitConfig {
+        burst: config.public_rate_limit_burst,
+        per_sec: config.public_rate_limit_per_sec,
+    });
     if let Some((service, demo)) = ai {
         state = state.with_ai_import(service, demo);
     }

@@ -25,8 +25,9 @@ pub struct ImportToolContext {
     pub proposal: tokio::sync::Mutex<Proposal>,
     /// Token usage reported so far (all attempts). Agents add to it as turns
     /// finish so that a failed or timed-out run still has its usage.
-    usage: std::sync::Mutex<Usage>,
-    /// Model calls finished so far (one per [`Self::add_usage`]).
+    usage: std::sync::Mutex<ObservedUsage>,
+    model: std::sync::Mutex<Option<String>>,
+    /// Model calls finished so far (one per [`Self::observe_usage`]).
     turns: std::sync::atomic::AtomicU32,
     /// Tool calls made so far, as `{ "name", "args" }` (debug log).
     tool_calls: std::sync::Mutex<Vec<serde_json::Value>>,
@@ -49,7 +50,8 @@ impl ImportToolContext {
             vendors,
             clock,
             proposal: tokio::sync::Mutex::new(Proposal::default()),
-            usage: std::sync::Mutex::new(Usage::default()),
+            usage: std::sync::Mutex::new(ObservedUsage::default()),
+            model: std::sync::Mutex::new(None),
             turns: std::sync::atomic::AtomicU32::new(0),
             tool_calls: std::sync::Mutex::new(Vec::new()),
         }
@@ -86,9 +88,18 @@ impl ImportToolContext {
 
     /// Add the usage of one finished model turn.
     pub fn add_usage(&self, u: Usage) {
+        self.observe_usage(Some(u.input_tokens), Some(u.output_tokens));
+    }
+
+    /// Missing provider fields remain unknown; observed totals may be partial.
+    pub fn observe_usage(&self, input: Option<u64>, output: Option<u64>) {
         let mut g = self.usage.lock().unwrap_or_else(|e| e.into_inner());
-        g.input_tokens += u.input_tokens;
-        g.output_tokens += u.output_tokens;
+        if let Some(n) = input {
+            g.input_tokens = Some(g.input_tokens.unwrap_or(0).saturating_add(n));
+        }
+        if let Some(n) = output {
+            g.output_tokens = Some(g.output_tokens.unwrap_or(0).saturating_add(n));
+        }
         self.turns
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
@@ -100,7 +111,23 @@ impl ImportToolContext {
 
     /// Usage reported through [`Self::add_usage`] (all attempts).
     pub fn usage(&self) -> Usage {
+        let u = self.observed_usage();
+        Usage {
+            input_tokens: u.input_tokens.unwrap_or(0),
+            output_tokens: u.output_tokens.unwrap_or(0),
+        }
+    }
+
+    pub fn observed_usage(&self) -> ObservedUsage {
         *self.usage.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn observe_model(&self, model: &str) {
+        *self.model.lock().unwrap_or_else(|e| e.into_inner()) = Some(model.to_owned());
+    }
+
+    pub fn observed_model(&self) -> Option<String> {
+        self.model.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Record a tool invocation (name and arguments as the model sent them).
@@ -200,6 +227,56 @@ pub struct AgentOutcome {
     pub model: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ObservedUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TurnExecution {
+    Completed,
+    Failed,
+}
+
+impl TurnExecution {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TurnDraftOutcome {
+    Applied,
+    Unchanged,
+    Rejected,
+}
+
+impl TurnDraftOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+/// Internal telemetry only: never changes a draft or the initial run's usage.
+#[derive(Debug, Clone)]
+pub struct TurnMetrics {
+    pub finished_at: std::time::SystemTime,
+    pub usage: ObservedUsage,
+    pub model: Option<String>,
+    pub duration: std::time::Duration,
+    pub execution: TurnExecution,
+    pub draft: TurnDraftOutcome,
+    pub error_code: Option<&'static str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AiError {
     /// The model refused (safety classifier); `category` when known.
@@ -214,6 +291,18 @@ pub enum AiError {
     InvalidImage(String),
     #[error("AI quota exceeded")]
     QuotaExceeded,
+}
+
+impl AiError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Refused { .. } => "refused",
+            Self::Unavailable { .. } => "unavailable",
+            Self::Timeout => "timeout",
+            Self::InvalidImage(_) => "invalid_image",
+            Self::QuotaExceeded => "quota",
+        }
+    }
 }
 
 /// The AI agent. It looks at the image, calls the tools in

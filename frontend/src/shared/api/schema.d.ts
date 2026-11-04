@@ -497,9 +497,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list"];
+        get: operations["list_sharing_groups"];
         put?: never;
-        post: operations["create"];
+        post: operations["create_sharing_group"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3163,11 +3163,11 @@ export interface operations {
     };
     list_rosters: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sharingGroupId: string | null;
+            query?: {
+                sharingGroupId?: string;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -3522,7 +3522,7 @@ export interface operations {
             };
         };
     };
-    list: {
+    list_sharing_groups: {
         parameters: {
             query?: never;
             header?: never;
@@ -3549,7 +3549,7 @@ export interface operations {
             };
         };
     };
-    create: {
+    create_sharing_group: {
         parameters: {
             query?: never;
             header?: never;
@@ -3788,11 +3788,12 @@ export interface operations {
     };
     lookup: {
         parameters: {
-            query?: never;
+            query: {
+                email: string;
+            };
             header?: never;
             path: {
                 groupId: string;
-                email: string;
             };
             cookie?: never;
         };
@@ -3818,11 +3819,11 @@ export interface operations {
     };
     list_vendors: {
         parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                sharingGroupId: string | null;
+            query?: {
+                sharingGroupId?: string;
             };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

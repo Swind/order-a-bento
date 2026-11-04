@@ -6,10 +6,9 @@ import { useAuthConfig } from "@/features/auth/hooks";
 import { useRoster } from "@/features/rosters/hooks";
 import { DeliveryAddressImportConfirmation } from "@/features/delivery-addresses/ImportConfirmation";
 import { ScopeBadge } from "@/features/sharing-groups/ScopeSelect";
-import { sharingRequest } from "@/features/sharing-groups/hooks";
-import { ApiError } from "@/shared/api/client";
+import { api, unwrap, ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
-import type { ImportRun, VendorDetail } from "@/shared/api/types";
+import type { ImportRun } from "@/shared/api/types";
 import { ConfirmActionButton } from "@/shared/components/ConfirmActionButton";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -122,7 +121,7 @@ function ConfirmView({ run, demo, verificationFailed = false }: { run: ImportRun
   const existingId = photoTarget?.kind === "existing" ? photoTarget.existingId : "";
   const vendor = useQuery({
     queryKey: ["vendor", existingId],
-    queryFn: () => sharingRequest<VendorDetail>(`vendors/${existingId}`),
+    queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/vendors/{vendorId}", { params: { path: { vendorId: existingId } }, signal })),
     enabled: run.mode === "vendor" && !!existingId,
   });
   const busy = apply.isPending || discard.isPending || verificationFailed || conversation.busy || saving;

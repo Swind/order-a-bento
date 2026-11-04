@@ -1,6 +1,8 @@
 # 訂便當系統（order-a-bento）設計文件
 
-> 版本：v0.3（草案）　日期：2026-10-17
+> 現況校正：2026-11-04，基準 `c499a31` 加 A–G 工作目錄；驗證／核准狀態見[施工紀錄](architecture-improvement-workplan.md)。
+> 下列 v0.3 變更是 2026-10-17 的歷史設計沿革；明確標示的 schema／示意碼／里程碑不是現行完整實作規格。
+> 版本沿革：v0.3（草案）　日期：2026-10-17
 >
 > v0.3 變更：
 > - 下單改為「重新送出即覆蓋」：每次送出新增一筆送出紀錄，每人以最新一筆為準（舊紀錄保留）。
@@ -20,16 +22,16 @@
 ### 1.2 目標
 | # | 目標 |
 |---|------|
-| G1 | 開團者用 Google 帳號登入，管理「人員名單」與「便當店（含菜單）」 |
+| G1 | 開團者用通用 OIDC 登入，或指定本機管理員備援登入，管理個人／共用群組的名單與店家菜單 |
 | G2 | 開團時選一份人員名單 + 一間便當店，產生一個**不可猜測**的訂購連結 |
 | G3 | 參與者在手機上打開連結（多半是 LINE 內建瀏覽器），不需登入即可：選自己 → 選便當與數量 → 看到價格 → 送出；反悔就用自己的名字再送一次 |
 | G4 | 開團者在管理介面看到：品項統計、總金額、每人明細、領取／繳費 checklist、每人的送出歷史 |
 | G5 | AI 輔助：上傳名單照片或便當傳單，AI agent 透過 tools 提出要新增／覆蓋的名單或店家資料，開團者確認後寫入 |
 
-### 1.3 非目標（MVP 不做）
+### 1.3 非目標（目前未提供）
 - 線上金流付款
 - 參與者帳號系統（參與者不登入）
-- 多位開團者共同管理同一團（日後可擴充）
+- 跨群組全域管理員、參與者身分驗證、邀請信及資料 scope 轉移（本地共用群組／群組團已實作，見 4.3(d)）
 - 與便當店直接串接下單
 
 ---
@@ -38,7 +40,7 @@
 
 | 角色 | 認證方式 | 可做的事 |
 |------|----------|----------|
-| **開團者 Organizer** | Google OAuth（OIDC） | 管理名單、店家、開團、看統計、勾選領取/繳費、使用 AI 匯入 |
+| **開團者 Organizer** | 通用 OIDC；指定 `ADMIN_EMAIL` 的本機帳密備援 | 管理個人資料及有權限的群組資料／團；本機備援帳號不授予跨使用者權限 |
 | **參與者 Participant** | 不需登入，持有團購連結（capability URL）即可 | 選擇自己、送出訂單、重新送出（覆蓋上一次）、取消（團關閉前） |
 
 ### 2.1 主要流程
@@ -48,16 +50,17 @@ sequenceDiagram
     actor O as 開團者
     participant W as Web (React)
     participant A as API (Rust)
-    participant G as Google
-    participant C as Claude (via rig)
+    participant G as OIDC Provider
+    participant C as AI Provider (via rig)
     actor P as 參與者 (LINE)
 
-    O->>W: 點「用 Google 登入」
-    W->>A: GET /auth/google/login
+    O->>W: 開啟受保護頁／選擇單一登入
+    W->>A: GET /auth/login 或 /auth/oidc/login
     A->>G: 302 授權 (PKCE + state + nonce)
-    G->>A: callback?code=...
+    G->>A: GET /auth/oidc/callback?code=...&state=...
     A->>A: 驗證 id_token、建立 session
     A-->>W: Set-Cookie: sid (HttpOnly)
+    Note over O,A: 備援入口 /ops/bento-access → POST /auth/password-login；一般 /login 不顯示管理員表單
 
     O->>W: 上傳名單照片 / 便當傳單（可附一句指示）
     W->>A: POST /ai/import-runs
@@ -106,7 +109,7 @@ sequenceDiagram
 └─────────────────────────────────────────────────────────────────────────────────┘
           │                              │
           ▼                              ▼
-   Google OAuth/OIDC              Anthropic Claude API（經 rig）
+   通用 OIDC／本機備援            四種 AI provider wire（經 rig）
 ```
 
 **前後端同源部署**：不需處理 CORS、session cookie 可用 `SameSite=Lax`、部署只有一個 container。
@@ -120,6 +123,7 @@ sequenceDiagram
 | Context | 職責 | 主要聚合 |
 |---------|------|----------|
 | **Identity** | 開團者帳號、登入 session | `Organizer` |
+| **Sharing** | 本地群組及 admin／member 資格，不取自 OIDC roles | `SharingGroup` |
 | **Directory** | 可重複使用的主資料 | `Roster`（人員名單）、`Vendor`（便當店 + 菜單） |
 | **Ordering** | 開團與下單（核心領域） | `GroupOrder`（開團）、`OrderSubmission`（送出紀錄，只新增） |
 | **Settlement** | 領取與繳費追蹤 | `Settlement`（每團每人一筆） |
@@ -137,6 +141,7 @@ sequenceDiagram
 | 菜單品項 | `MenuItem` | 名稱、價格、說明、分類 |
 | 名稱鍵 | `NameKey` | 正規化後的名稱，用來判斷「同名」 |
 | 開團 / 一次團購 | `GroupOrder` | 避免使用 SQL 保留字 `group` |
+| 共用群組 | `SharingGroup` | 可共用名單／店家，與一次 `GroupOrder` 的快照與管理權不同 |
 | 團員（快照） | `Participant` | 開團時從名單複製 |
 | 團菜單（快照） | `OfferedItem` | 開團時從店家菜單複製 |
 | 送出紀錄 | `OrderSubmission` / `SubmissionLine` | 某人某次按「送出」的完整內容；只新增，不修改 |
@@ -166,11 +171,17 @@ sequenceDiagram
   - 搭配裝置資訊，冒名下單時開團者查得出來。
 
 #### (c) 主資料以名稱為 key，同名覆蓋
-- 名單成員以「名單 + 名稱」為 key；店家以「開團者 + 店名」為 key；菜單品項以「店家 + 品名」為 key。
+- 名單成員以「名單 + 名稱」為 key；店家以「個人／共用群組 scope + 店名」為 key；菜單品項以「店家 + 品名」為 key。
 - 寫入時名稱已存在 → 覆蓋該筆的其他欄位；不存在 → 新增。
 - 「同名」以 `NameKey` 判斷：NFKC 正規化（全形轉半形）、trim、連續空白合併成一個、英文轉小寫。「王小明」「王小明 」「ＡＭＹ」與「amy」各自視為同名。
 - 覆蓋時**空值不覆蓋**：新資料沒有電話，不會把原本的電話清空。
 - 覆蓋不刪除：照片中沒出現的成員或品項維持原樣。要刪除由開團者在一般編輯頁手動操作。
+
+#### (d) 本地共用群組與團的權限（目前實作）
+- `SharingGroup` 的 admin 可維護該 scope 的名單、店家、照片與成員；member 可查看及選用開團。最後一位 admin 不可移除或降級，授權與計數／修改在同一 SQLite 交易內。
+- `GroupOrder` 可屬於個人或群組；群組團由目前群組成員查看，群組 admin 或仍為成員的原開團者管理。個人團不因加入群組而分享，送餐地址主資料仍私有。
+- 撤銷成員資格即失去群組來源資料與群組團權限（原開團者亦同）；已開團保留快照。封存團一律唯讀，持分享 token 的公開訂餐仍依期限／狀態運作。
+- 群組 HTTP handlers 使用注入的 `Arc<dyn SharingRepo>`，由 server wiring 建立 SQLite adapter；不是全域角色或新 service。完整行為見 [README](../README.md#本地共用群組)。
 
 ### 4.4 聚合與不變條件
 
@@ -183,7 +194,7 @@ sequenceDiagram
 - `id, organizer_id, name, name_key, phone?, address?, note?, menu: Vec<MenuItem>`
 - `MenuItem { id, name, name_key, price: Money, description?, category?, sort_order, archived }`
 - 行為：`update_info(VendorInfoPatch)`（空值不覆蓋）、`upsert_menu_items(Vec<MenuItemInput>) -> UpsertReport`。
-- 不變條件：同一開團者底下店名 `name_key` 唯一；同一店家內品名 `name_key` 唯一；價格 `1 ≤ price ≤ 100_000`；至少一個未封存品項才可用於開團。
+- 不變條件：同一個人／群組 scope 內店名 `name_key` 唯一；同一店家內品名 `name_key` 唯一；單價為 1–10,000,000 **分**（外部 0.01–100,000 元）；至少一個未封存品項才可用於開團。
 
 #### `GroupOrder`（聚合根）
 - `id, organizer_id, title, share_token, status, deadline_at?, note?`
@@ -229,10 +240,10 @@ sequenceDiagram
 #### `Settlement`（聚合根，key = `(group_order_id, participant_id)`）
 - `picked_up_at?`, `paid_at?`, `paid_amount?`
 - 標記繳費時記下當下的應付金額 `paid_amount`。之後如果參與者又重新送出，`應付 - paid_amount ≠ 0`，checklist 顯示「尚差 $N」或「應退 $N」。
-- 只有開團者能改；勾選為冪等的 set 操作（`{ paid: true }`），不是 toggle，重複送出不會出錯。
+- 只有該團的目前管理者能改（封存後不可改）；勾選為冪等的 set 操作（`{ paid: true }`），不是 toggle，重複送出不會出錯。
 
 #### `ImportRun`（聚合根，AI Import）
-- `id, organizer_id, instruction?, mode（roster | vendor；舊資料可能為空）, status, proposal: Proposal, summary?, usage`
+- `id, organizer_id, sharing_group_id?, instruction?, mode（roster | vendor | deliveryAddress；舊資料可能為空）, status, proposal: Proposal, summary?, usage`
 - 狀態機：`Running → Proposed → Applied | Discarded`，或 `Running → Failed`。
 - `Proposal` 是 agent 透過 propose 類 tools 累積的待確認變更，按目標分組：
   - `RosterTarget { roster: Existing(id) | New(name), members: Vec<ProposedMember> }`
@@ -242,13 +253,13 @@ sequenceDiagram
 - 不變條件：只有 `Proposed` 狀態可以 apply；apply 時重新以當下資料計算差異並驗證，不信任提案當時的 `before`。
 
 #### 值物件
-- `Money(i64)`：新台幣「元」，整數，不用浮點數。
+- `Money(i64)`：新台幣整數「分」，100 分 = 1 元；API、AI、proposal／draft JSON 維持「元」，最多小數兩位。7.5 元內部為 750 分，不以浮點數做帳務運算；詳見 [小數金額及 0010 升級說明](decimal-money.md)。歷史快照及成交價不跟現行菜單改價。
 - `ShareToken`：32 bytes CSPRNG → base64url（43 字元）。
 - `PersonName`：1–50 字元；`ItemName`：1–50 字元。
 - `NameKey`：見 4.3(c)。
 
-### 4.5 Domain Events（MVP 僅記錄於 log，未來可做通知）
-`GroupOrderOpened`、`OrderSubmitted`、`GroupOrderClosed`、`SettlementUpdated`、`ImportProposed`、`ImportApplied`
+### 4.5 Domain Events（未來提案，尚未實作事件系統）
+`GroupOrderOpened`、`OrderSubmitted`、`GroupOrderClosed`、`SettlementUpdated`、`ImportProposed`、`ImportApplied` 是事件命名提案，不代表每個操作已有 audit log／outbox 或事件通知。現有 HTTP trace 與 AI 摘要日誌見 9.9，不能替代完整業務稽核紀錄。
 
 ---
 
@@ -263,19 +274,21 @@ sequenceDiagram
 | AI agent | [`rig`](https://github.com/0xPlaygrounds/rig)（官方 0.46.0） | `AgentBuilder` + 自訂 `Tool`（見 9） |
 | JSON Schema | `schemars` | 產生 tool 參數的 JSON Schema |
 | DB | `sqlx`（sqlite feature） | 用執行期的 `query_as::<_, T>`（不用編譯期檢查的 `query!` 巨集，免去 `DATABASE_URL`／`sqlx-cli` 依賴），以 `#[sqlx::test]` 整合測試確保 SQL 正確；`sqlx::migrate!` 內建 migration |
-| OAuth / OIDC | `openidconnect` crate | 驗證 Google id_token（簽章、aud、iss、nonce） |
+| OAuth / OIDC | `openidconnect` crate | 通用 issuer discovery、PKCE、id_token／UserInfo 驗證；本機密碼以 Argon2id 雜湊 |
 | UA 解析 | `woothee`（或 `uaparser`）+ 自訂 LINE 規則 | LINE 內建瀏覽器的 UA 含 `Line/x.y.z` |
 | 名稱正規化 | `unicode-normalization` | `NameKey` 的 NFKC |
 | 序列化 | `serde`, `serde_json` | |
 | 錯誤 | `thiserror`（domain/app）、`anyhow`（infra 邊界） | API 回傳 RFC 7807 `application/problem+json` |
 | 隨機 / 雜湊 | `rand::rngs::OsRng`, `sha2` | |
 | ID | `uuid` v7 | 時間有序；單一程序產生，可直接用來排序「最新」 |
-| 速率限制 | `tower_governor` | 保護公開端點與 AI 端點 |
+| 速率限制 | 程序內 `RateLimiter`／`KeyedLimiter` | 保護公開、登入、AI／圖片端點；不跨實例共享 |
 | Log / tracing | `tracing`, `tracing-subscriber` | |
 | 靜態檔 | `rust-embed` | 前端 build 產物嵌入 binary |
 | 測試 | `cargo test`, `sqlx::test` | |
 
 ### 5.2 Workspace 結構（依賴方向由外向內）
+
+以下為早期概念分層示意，不是目前逐檔目錄。實際入口為 `application/src/{ports.rs,sharing.rs,ai_import/}`、`infrastructure/src/{sqlite.rs,sharing_repo.rs,ai_import_repo.rs,oidc.rs}`、`api/src/{state.rs,logging.rs,routes/}` 與 `server/src/wiring.rs`。
 
 ```
 backend/
@@ -333,7 +346,7 @@ backend/
 ```
 
 **依賴規則**
-- `domain` ← `application` ← `infrastructure` / `api` ← `server`
+- 實際為 `application → domain`、`infrastructure → application/domain`、`api → application/domain/infrastructure`，由 `server` 組裝。不是宣稱 api 已完全不依賴 infrastructure；Db health、圖片正規化及時間轉換等仍保留 adapter 接點。
 - `domain` 不得引用 `sqlx`、`axum`、`rig`。
 - `application` 只依賴 `domain` 與自己定義的 port trait。
 - agent tools 的**業務邏輯**放在 `application::ai_import::tools`（查資料、驗證、算差異、寫入提案）；`infrastructure::ai` 只負責把它們包成 rig 的 `Tool`。換 AI 框架時不用重寫業務邏輯。
@@ -368,7 +381,7 @@ impl SubmitOrder {
 
 ### 5.4 併發控制
 - SQLite 開 `journal_mode=WAL`、`busy_timeout=5000`、`foreign_keys=ON`。
-- 寫入連線池大小 1（或用 `BEGIN IMMEDIATE`），讀取池多連線。
+- 寫入連線池大小 1，需原子檢查／寫入的流程另用 `BEGIN IMMEDIATE`；讀取池最多 8 條連線。單寫 pool 不等同交易外 check-then-act 自動原子化。
 - 下單只有 INSERT，結算是冪等的 set，**整個下單流程不需要樂觀鎖或版本號**。
 - 「最新」以 UUIDv7 `id` 排序（單一程序產生，單調遞增），不依賴時鐘精度。
 - 重複送出（連點、LINE 瀏覽器網路重送）：`UNIQUE(group_order_id, idempotency_key)`，重送時回傳既有結果。
@@ -379,7 +392,9 @@ impl SubmitOrder {
 
 ## 6. 資料庫設計（SQLite）
 
-> 時間一律存 UTC ISO-8601 TEXT；金額 INTEGER（元）；ID 為 UUIDv7 TEXT。
+> 現行時間為 UTC ISO-8601 TEXT，金額 INTEGER（**分**），ID 為 UUIDv7 TEXT。權威 schema 是 `backend/migrations/0001`–`0011`；以下 CREATE TABLE 區塊是早期 0001／0002 的簡化歷史示意（仍有 `google_sub`、舊價格 CHECK），**不可拿來建立或重建現行 DB**。
+>
+> 後續版本加入地址（0003）、通用 OIDC `(oidc_issuer, oidc_sub)`（0004）、本地群組／群組團歸屬（0005／0006）、店家及 AI 暫存照片（0007／0008）、draft revision／turn quota ledger（0009）。`0010_money_cents.sql` 將主資料、訂單快照、成交價及結算轉成分，JSON 仍是元；`0011_ai_turn_metrics.sql` 僅對既有 turn ledger 追加 nullable 用量／結果摘要，**不再次轉換金額**。舊 ledger 全部新欄位保持 NULL；未知不是零。升級／成套回退見 [部署 §9](deploy.md#9-升級)。
 >
 > `organizers` 在 `0001_init.sql` 是 `google_sub NOT NULL`；`0002_local_accounts.sql` 以 SQLite 的 12 步驟重建資料表（SQLite 無法移除 NOT NULL）。重建時 `DROP TABLE` 在 `foreign_keys=ON` 下會連帶 `ON DELETE CASCADE` 刪光 sessions／rosters／…，而 `PRAGMA foreign_keys` 在 transaction 內無效，所以該檔以 `-- no-transaction` 開頭（sqlx 不包 transaction），自行 `PRAGMA foreign_keys=OFF; BEGIN; … COMMIT; PRAGMA foreign_keys=ON;`。測試會用 0001 的資料升級並驗證資料、FK 與 cascade 都還在。
 
@@ -622,10 +637,11 @@ HAVING names > 1;
 - **Code-first**：Rust 程式碼是唯一來源，**不手寫 openapi.yaml**。
   - DTO `#[derive(Serialize, Deserialize, ToSchema)]`；handler 加 `#[utoipa::path(...)]`。
   - 路由用 `utoipa_axum::router::OpenApiRouter` 註冊：同一份定義同時產生 axum Router 與 OpenAPI 文件，不會出現「有路由、沒文件」的不一致。
-  - 執行期提供 `GET /api/openapi.json`；`/api/docs` 為 Scalar UI（僅非 production 或登入後開放）。
+  - 執行期提供 `GET /api/openapi.json`；`/api/docs` 為由 `docs_enabled` 控制的 Scalar UI，server wiring 在 production 停用，不是登入後便可開啟。
   - `cargo run -p server --bin export_openapi > frontend/openapi.json`：不啟動 server 就能輸出文件。
 - **前端型別**：`openapi-typescript frontend/openapi.json -o src/shared/api/schema.d.ts`，再用 `openapi-fetch` 呼叫。
-  - `frontend/openapi.json` 是**產生物**，commit 進 repo 以便 code review 看得到 API 變更；CI 會重新產生並 `git diff --exit-code`。
+   - `frontend/openapi.json` 是**產生物**，commit 進 repo 以便 code review 看得到 API 變更；CI 會重新產生並 `git diff --exit-code`。
+   - `schema.d.ts` 同樣提交及檢查生成差異。sharing、directory、group-order、AI draft 均使用 path literal／generated params／body；不再用任意 path 與 caller 宣告 response 的 `sharingRequest<T>`。修改 API 後用 `make gen-api` 同步兩份產物。
 - 路徑前綴 `/api/v1`；JSON 欄位 `camelCase`。
 - 錯誤一律 `application/problem+json`（`type, title, status, detail, code`）。
 - 認證：`cookieAuth`（`sid`，HttpOnly、Secure、SameSite=Lax）。修改類請求另驗證 `Origin` 標頭防 CSRF。
@@ -635,10 +651,11 @@ HAVING names > 1;
 **Auth**
 | Method | Path | 說明 |
 |--------|------|------|
-| GET | `/auth/google/login?returnTo=` | 302 到 Google（PKCE、state、nonce） |
-| GET | `/auth/google/callback` | 交換 code、驗證 id_token、建立 session、302 回前端 |
-| POST | `/auth/password-login` | `{ email, password }`，本機帳號登入，成功 204 並設定與 Google 登入相同的 session cookie；失敗一律 401 `invalid_credentials`（email 不存在／密碼錯誤／無密碼無法區分，帳號不存在時仍做一次 dummy 驗證以拉平時間）；每個 client IP burst 10、每 5 秒補 1 次，超過回 429；`PASSWORD_LOGIN_ENABLED=false` 時不註冊（404） |
-| GET | `/auth/config` | 公開；`{ googleEnabled, passwordLoginEnabled, devLoginEnabled, aiImportEnabled, aiDemo }`，登入頁只顯示啟用的登入方式 |
+| GET | `/auth/login?returnTo=` | 預設單一登入入口；有設定則導向 OIDC，否則回一般登入頁 |
+| GET | `/auth/oidc/login?returnTo=` | 302 到設定的 issuer（PKCE、state、nonce） |
+| GET | `/auth/oidc/callback` | 交換 code、驗證 id_token／UserInfo、建立 session、302 回前端；不再提供 `/auth/google/*` |
+| POST | `/auth/password-login` | `{ email, password }`，僅 `ADMIN_EMAIL` 指定的本機備援帳號，成功 204 並設定同一種 session cookie；失敗一律 401 `invalid_credentials`，包含 dummy 驗證；每 IP burst 10、每 5 秒補 1 次，超過 429；停用則不註冊（404） |
+| GET | `/auth/config` | 公開；`{ oidcEnabled, passwordLoginEnabled, devLoginEnabled, aiImportEnabled, aiDemo }`；一般 `/login` 不顯示備援表單，備援入口為 `/ops/bento-access` |
 | POST | `/auth/logout` | 刪除 session |
 | GET | `/me` | 目前登入者資訊（401 表示未登入） |
 
@@ -661,6 +678,9 @@ HAVING names > 1;
 | GET | `/ai/import-runs/{runId}` | 讀取匯入作業（重新整理頁面時用）；必回 `hasPendingPhoto` 與 nullable `pendingPhotoExpiresAt`，不回圖片 bytes／URL |
 | POST | `/ai/import-runs/{runId}/apply` | `{ accepted: [...使用者確認／修改後的變更], savePhoto?: boolean }`；省略依未到期 pending 預設。重新驗證後同一 transaction upsert 資料、可選存圖並清 pending；true 缺圖／到期／非單一 vendor 回 `422 invalid_save_photo` 並 rollback。成功 response 不變 |
 | POST | `/ai/import-runs/{runId}/discard` | 放棄 |
+| GET / PUT | `/ai/import-runs/{runId}/draft` | 讀取／以 revision CAS 保存 vendor 手改草稿，不動正式店家 |
+| POST | `/ai/import-runs/{runId}/turns` | 以 turn ID、revision、當前 vendors 與文字指示修正草稿；相同 turn 重送不重跑模型 |
+| POST | `/ai/import-runs/{runId}/undo` | 復原上一個可復原的 AI 編輯；手改後不以舊 Undo 蓋掉新資料 |
 
 **Group Orders（需登入）**
 | Method | Path | 說明 |
@@ -764,7 +784,8 @@ frontend/
 ### 8.3 頁面
 | 路徑 | 頁面 | 重點 |
 |------|------|------|
-| `/login` | 登入 | 一顆「使用 Google 登入」按鈕 |
+| `/login` | 一般登入 | 顯示已設定的 OIDC／開發登入，不顯示本機管理員表單 |
+| `/ops/bento-access` | 備援登入 | 僅指定本機管理員帳密登入，不授予跨使用者資料權限 |
 | `/` | 儀表板 | 進行中的團、快速開團 |
 | `/rosters`, `/rosters/:id` | 名單管理 | 貼上多行文字批次 upsert；「📷 從照片匯入」 |
 | `/vendors`, `/vendors/:id` | 店家管理 | 菜單表格編輯；「📷 從傳單匯入」 |
@@ -826,6 +847,8 @@ frontend/
 - 開團者可在此「代為送出」修正訂單（記為 `submitted_by: organizer`）。
 
 ### 8.7 AI 匯入確認畫面
+- Vendor 提案可在同份草稿繼續文字修正、手動保存及 Undo。每次文字指示傳權威草稿與最近最多六輪歷史，草稿最多 20 輪、每次指示最多 500 字；僅 opt-in、未超過 run 建立後 24h 的暫存圖可供後續模型參考，非無限原生 chat history。
+- draft revision CAS、pending lease 與 turn ID 保護晚回應及重送；手改／撤權／到期後不能套用舊模型結果。重試使用 frozen request，不將網路不確定結果當成新的 turn。確認 apply 才改正式店家，詳見[草稿對話說明](vendor-import-conversation.md)。
 - 從名單頁或店家頁按「📷 從照片匯入」→ 選照片（前端壓縮）→ 可選填一句指示（例如「加到業務部名單」）→ 送出，顯示進度動畫。
 - 回來後顯示 agent 的摘要與變更清單：
 
@@ -856,8 +879,8 @@ AI 摘要：辨識出「好吃便當」的 12 個品項，其中 1 個價格不�
 ### 9.1 設計原則
 1. **agent 自己操作 tools**：agent 先查現有的名單／店家，再決定要新增到哪裡、覆蓋什麼。
 2. **寫入類 tools 只寫「待確認變更」**，不碰正式資料。使用者在 8.7 的畫面確認後，由 `ApplyImportRun` use case 寫入。
-3. **不提供刪除 tool**，agent 只能提出新增與覆蓋。
-4. **所有 tools 都限定在登入者自己的資料**：`organizer_id` 由後端在建立 tool 時注入，不是 tool 參數，agent 無法指定別人的資料。
+3. **初次辨識不提供刪除正式資料的 tool**；文字對話的 `submit_draft_edits` 可刪除草稿列，但仍須確認 apply，不能直接刪正式資料。
+4. **tools 限定於登入者可管理的個人／群組 scope**：organizer、run 與 scope 由後端注入，執行 tools 及 apply 重新驗證目前權限，模型不能自行指定其他 scope。
 5. **tool 回傳驗證結果**：參數不合規則時，tool 回傳具體錯誤（例如「price 必須介於 0.01–100000，最多小數兩位」），讓 agent 修正後重新呼叫。
 
 ### 9.2 流程
@@ -963,7 +986,7 @@ let res = agent
 - **模型設定**：預設 `claude-opus-5-5`（`AI_MODEL` 可改成 `claude-sonnet-5-5`）。這兩個模型都不支援「強制指定要呼叫哪個 tool」，所以 tool choice 用 auto（rig 預設不送 `tool_choice`），靠 system prompt 指引流程。推論強度 `low`：rig 會送 `thinking: {type: "adaptive"}` + `output_config.effort: "low"`（Opus 5.5 的 thinking 本來就無法關閉）。`AI_MAX_TOKENS` 明確設每輪輸出上限，預設 16_384，server 與 eval 共用 wiring。
 - **嚴格 tool schema**：用 rig 的 `model.wire.with_strict_tools()`，每個 tool 送 `"strict": true`，rig 會補 `additionalProperties: false` 與 `required`；我們自己的 schema 產生器（schemars 1.x、inline subschemas）作為第二道保險。
 - **tool 錯誤回饋**（spike 驗證）：參數 JSON 型別錯誤時，rig 自動回 `tool_result`（`is_error: true` + 解析錯誤訊息），模型會在下一輪修正。業務規則錯誤（價格超出範圍、名字過長）**不要用 `Err` 回傳**——rig 預設會把 `Err` 遮成「tool failed」，模型看不到原因；改成 `Ok(ProposalDiffSummary { errors: [...] })` 回傳具體訊息。
-- **refusal 與 usage**：rig 把 refusal 呈現為 `PromptError::Provider(ProviderError::Response("…finish_reason=ContentFilter…"))`，不含類別與說明。以一個 `AgentHook`（`on_model_turn_finished`）讀取 `finish_reason` 與原始回應中的 `stop_reason`／`stop_details`，判定為 `AiError::Refused { category }`；同一個 hook 累計每輪 usage，執行失敗時也能記錄花費。
+- **refusal 與 usage**：以 `AgentHook::on_model_turn_finished` 讀取 `finish_reason` 與原始回應中的 `stop_reason`／`stop_details`，判定為 `AiError::Refused { category }`；同一 hook 跨 retry 累計已回報 usage。失敗時保留已觀測 token，不能把未知填零或將它視為完整供應商花費。
 - **錯誤、重試與逾時**：rig 不重試、也沒有預設逾時。HTTP 錯誤為 `PromptError::Report(ErrorReport { retryable, http_status, code, … })`。策略：`retryable` 的錯誤（529、5xx、連線錯誤）由 application 層重試 1 次（間隔 2 秒），整體包在 `tokio::time::timeout(AI_RUN_TIMEOUT_SECS)` 內（預設 90 秒）；另外 reqwest client 以 `AI_REQUEST_TIMEOUT_SECS` 設單次請求逾時（預設 60 秒）。單次請求逾時會回報為「model call timed out after N s」且**不重試**（慢 gateway 再等一次整個逾時只會耗盡整體時限）。兩者的預設值依 provider 而異，見 9.7。
 - **server-side fallback**：rig 原生支援，`AnthropicConfig::…with_beta(SERVER_SIDE_FALLBACK_BETA)` + `AnthropicOptions::default().fallbacks(Fallbacks::Default)`，以設定 `AI_FALLBACKS=default`（預設開啟，設 `off` 關閉）控制。
 - **並行 tool 呼叫**：模型可能在同一輪平行呼叫多個 tool，`propose_*` 寫入提案時以 mutex 保護「同一目標以最新一次為準」的邏輯。
@@ -1114,9 +1137,10 @@ Traditional Chinese, one sentence each, only things the organizer needs to check
 - 菜單匯入預設勾選「確認匯入後，同時儲存菜單照片」，可在開始辨識前取消；只有 vendor 且 multipart `savePhoto=true` 才會把正規化的辨識用 JPEG 存入私有 `ai_import_photos`，不典藏原檔。前端支援 JPEG／PNG／WebP 經 Canvas 白底壓縮成 JPEG（非空、最多 5 MiB）；店家獨立直接上傳端點仍只收靜態 JPEG／PNG 原檔，不擴支援 WebP。
 - 待確認圖固定在 run 建立後 24 小時到期，GET run 必回 `hasPendingPhoto` 與 nullable `pendingPhotoExpiresAt`，重新整理確認頁不需保留 File 或本機持久儲存。僅唯一 proposed／accepted 店家且有資料變更時可保存；已有照片會被取代，可取消。apply 明確送 `{accepted, savePhoto}`，同一 DB 交易套用資料、保存照片及清 pending；false 僅匯入資料並清 pending。缺圖／到期／多目標的 true 回 422 `invalid_save_photo`，整筆 rollback，不存在「菜單成功、照片失敗」的部分成功。
 - 24 小時是嚴格可用期限，非精準磁碟刪除承諾：到期後 apply 即拒絕保存，待下一輪既有 maintenance 邏輯刪除（啟動約 30 秒後首跑、預設每 24 小時，停機可更久）；failed／discard／成功 apply 也清 pending。不保證 DB 空間立即回收、WAL／磁碟頁面／舊備份安全抹除。保存後的店家照片沿用店家權限，不公開至點餐／OG／LINE。
-- 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、compatible provider 預設 300 秒）；失敗回 `502`（`code: "ai_unavailable"`），前端顯示「辨識失敗，請重試或手動輸入」。
-- Claude 可能回傳 `stop_reason: "refusal"`（照片觸發安全分類器）。由 9.3 的 hook 判定為 `AiError::Refused`，回 `422`（`code: "ai_refused"`），前端提示改用手動輸入。
-- 每位開團者每日額度（`AI_DAILY_QUOTA_PER_USER`），以 `ai_import_runs` 加 `ai_import_turn_usage` 計數；Vendor 多輪草稿的狀態、復原與並行保護見 [草稿對話說明](vendor-import-conversation.md)。
+- 整個 agent 執行（含 1 次重試）逾時 `AI_RUN_TIMEOUT_SECS`（`anthropic` 預設 90 秒、compatible provider 預設 300 秒）；初次匯入的 unavailable／timeout 回 `502`（`code: "ai_unavailable"`），可改手動輸入。文字對話的模型失敗通常回 200 與 `turn.status=failed` 並保留可編輯草稿；若權限、期限或 CAS 失敗，仍回原有 404／409 等錯誤，不把模型完成當成套用成功。
+- 初次匯入可能遇到 `stop_reason: "refusal"`／content filter，由 hook 判定 `AiError::Refused`，回 `422`（`code: "ai_refused"`），提示改用手動輸入；對話則沿用上項草稿失敗語意。
+- 配額是每位開團者**滾動 24h 的應用程式操作次數**，不是日曆日、token 上限或帳單。初次 run（含 opt-in photo）與新 turn 都在 `BEGIN IMMEDIATE` 內檢查 `ai_import_runs + ai_import_turn_usage` 並原子保留；`created_at >= since` 包含邊界。失敗仍占一次，內部 retry 不重扣，相同 turn replay 不重跑或再扣；滿額維持 `429/ai_quota_exceeded`。
+- `ImportRun.usage` 仍只表示初次辨識；`0011` 在既有 turn ledger 記已觀測 input／output tokens、model、monotonic duration、execution／draft outcomes、finished_at 與 error_code。token 欄位獨立 nullable，可為部分用量，未知不能補 0。模型完成卻因手改 CAS／撤權／到期無法套用時仍記內部用量，不向失權者回傳草稿；telemetry 寫入失敗只記靜態錯誤事件，不回滾已成功草稿。
 - 金鑰 `AI_API_KEY`（舊名 `ANTHROPIC_API_KEY`）只存在後端環境變數，絕不送到前端。
 - 測試：`FakeImportAgent` 實作同一個 port，直接呼叫 tools 的業務邏輯產生固定提案，CI 不呼叫真實 API。
 
@@ -1170,6 +1194,12 @@ Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數�
 - 預設只跑 `core` 案例（7 個，每案 1 次，共 7 次模型呼叫）以節省 token；`expected.json` 可加選用欄位 `"tier": "extended"`（預設 `core`）標記簡單、必過的合成案例（01、03、07），加 `--all` 才會一併執行。`--filter` 在所選集合內再篩選；`--repeat` 預設 1，Makefile 不會預設帶更大的值。名稱比對（成員、菜單、店家）在 NameKey 之外再移除所有空白（「VIP餐盒」＝「VIP 餐盒」）。
 - 輸出可讀表格並寫出 JSON 報告（`--out`；`make ai-eval` 預設寫到 `eval/report.json`，可用 `AI_REPORT` 改，已列入 .gitignore，內含完整提案與 tool 呼叫紀錄供檢查失敗原因）；`--filter`、`--repeat N`、`--timeout SECS` 可調整。
 
+### 9.9 Request／AI 摘要與限制（目前實作）
+- 每個 HTTP request 由 server 產生 UUID v7，回傳 `x-request-id` 並加入既有 request span；忽略 client 自訂 ID，保留 method、遮罩 path、status、latency，不記 query／Authorization／Cookie。
+- 初次 run 與 draft turn 使用 async-safe `instrument(skip_all)` span，發出 started／completed／replay 摘要，含 run／turn、model、耗時、nullable 已觀測 token、execution／draft outcome 及固定錯誤類別；不自動記 prompt、圖片、完整 payload 或 provider raw error。client turn ID 以 debug escape 記錄，換行不產生新實體行。文字日誌的 `None` 是未知，不是零。
+- `quota_unit=internal_operation_24h` 及 `usage_kind=observed_tokens_not_invoice` 明示內部計數／觀測用量；replay 標 `not_started/not_reobserved`，不是新模型執行。沒有 OTel／新 JSON 開關或完整 audit pipeline，沿用 `RUST_LOG`。
+- 初次匯入仍為同步 HTTP，沒有初次 client-operation 冪等或 durable worker。程序硬中斷、連線遺失或 telemetry DB 失敗可留下未知摘要；不能由一次內部 reservation 推論供應商 billing exactly-once，也不能聲稱未知消耗為零。24h 可編輯／圖片有效期不等於歷史對話／ledger 已刪除，目前沒有整體歷史用量保存期限。
+
 ---
 
 ## 10. 安全與隱私
@@ -1185,10 +1215,10 @@ Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數�
 | Session 竊取 | Cookie `HttpOnly; Secure; SameSite=Lax`；DB 只存 token 的 SHA-256；14 天滑動過期 |
 | CSRF | SameSite=Lax + 狀態變更請求檢查 `Origin` 與 host 相符 |
 | 密碼登入暴力破解 | Argon2id（預設參數 19 MiB／t=2／p=1，在 `spawn_blocking` 執行）；`/auth/password-login` 每個 client IP 限速 burst 10、0.2/s（另受公開端點限速）；統一的 401 `invalid_credentials` 不洩漏帳號是否存在；帳號不存在時做 dummy 驗證拉平回應時間；沿用 Origin（CSRF）檢查；請求內容（email／密碼）不寫入日誌；密碼長度 10～256 |
-| 本機帳號建立 | 網頁沒有註冊功能；只能用 CLI `server admin create`（互動輸入或 `--password-stdin`）或啟動時的 `ADMIN_EMAIL`／`ADMIN_PASSWORD` bootstrap（帳號已存在就不動，永不以環境變數覆寫密碼）。Google 登入不會依 email 綁定本機帳號 |
+| 本機帳號建立 | 網頁沒有註冊功能；只能用 CLI 或 bootstrap 建立指定備援管理員；OIDC 帳號以 `(issuer, sub)` 識別，不會依 email 綁定／合併本機帳號 |
 | OAuth 攻擊 | PKCE、`state`、`nonce`，驗證 id_token 的 `iss`、`aud`、`exp`、簽章；只接受 `email_verified=true` |
-| 越權存取 | 所有管理端 repo 查詢都帶 `organizer_id`；找不到一律回 404（不洩漏存在與否） |
-| AI 越權 | tools 的 `organizer_id` 由後端注入，不在 tool 參數中；沒有刪除 tool；寫入類 tool 只寫提案 |
+| 越權存取 | 個人 owner／群組 membership／admin／團 manager 依各入口驗證；失去 membership 即撤權，不以建立者快照繞過。不存在／不可存取多以 404 遮蔽，已知群組的非 admin 操作可回 403，不能概括稱所有拒絕都是 404 |
+| AI 越權 | organizer／scope 後端注入且重新驗證；tools 只改提案／草稿，正式資料僅確認 apply 可寫 |
 | Prompt injection（傳單上的文字） | system prompt 明示照片文字只是資料；agent 只能提出新增／覆蓋，且需使用者逐筆確認；apply 時重新驗證 |
 | AI 濫用 / 成本 | 每位開團者速率限制 + 每日額度；圖片大小限制；記錄 token 用量；agent 最多 8 次模型呼叫 |
 | XSS | React 預設跳脫；CSP `default-src 'self'`；OG 注入時對標題做 HTML escape |
@@ -1201,12 +1231,12 @@ Eval（`make ai-eval`，10 案例 × 2 次，無 strict、無 reasoning 參數�
 ```
 APP_BASE_URL=https://bento.example.com
 DATABASE_URL=sqlite:///data/bento.db
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_OAUTH_ENABLED=              # 空＝自動（兩個憑證都有才啟用）；false＝停用；true＝缺憑證時拒絕啟動
-PASSWORD_LOGIN_ENABLED=true        # 本機帳號 email + 密碼登入
-ADMIN_EMAIL=                       # 與 ADMIN_PASSWORD 成對；啟動時帳號不存在才建立（容器 bootstrap，優先用 CLI）
-ADMIN_PASSWORD=
+OIDC_ISSUER_URL=https://auth.example.com
+OIDC_CLIENT_ID=your-client-id
+# OIDC_CLIENT_SECRET=             # public client 留空；機密 client 可設
+PASSWORD_LOGIN_ENABLED=true        # 僅 ADMIN_EMAIL 指定的本機備援管理員
+ADMIN_EMAIL=you@example.com         # CLI 建立後仍需保留；不是全域資料權限
+# ADMIN_PASSWORD=                 # 選填首次 bootstrap，既有密碼不覆寫，建議用 CLI
 AI_API_KEY=...                   # 舊名 ANTHROPIC_API_KEY 仍可用（僅 anthropic／anthropic-compatible）
 # AI_BASE_URL=...                # 覆寫 API 位址（gateway／測試）；openai-compatible 必填
 AI_MODEL=claude-opus-5-5         # openai-compatible 必須明確設定
@@ -1232,13 +1262,13 @@ CLIENT_INFO_RETENTION_DAYS=90
 - 多階段 Dockerfile：`node` build 前端 → `rust` build（嵌入前端）→ `distroless` / `debian-slim` 執行。
 - SQLite 檔案放在 volume；以停機打包 volume 手動備份（見 docs/deploy.md §7）。
 - 可部署於 Fly.io / Railway / 自有 VPS（單機即可；SQLite 不適合多實例水平擴充）。
-- 背景工作（`tokio` interval，每日一次）：清除過期 session、oauth_states、超過保存期限的 ClientInfo。
-- 健康檢查 `/healthz`。
+- 背景 maintenance 啟動約 30 秒首跑、預設每 24h：清 session／oauth_states／過期 ClientInfo、將卡住逾十分鐘的初次 run 標 failed，並清到期／terminal run 的待存圖；不保證準點實體抹除或持續背景執行 AI。
+- `/healthz` 僅以 read pool `SELECT 1` 檢查程序／DB 連線基本狀態；不保證可寫、AI 可用、備份／還原成功。升級必須停舊服務並備份，0010 的 image＋DB 成套回退限制見 [部署指南](deploy.md#9-升級)。
 
 **CI（GitHub Actions）**
 1. 後端：`cargo fmt --check` → `cargo clippy -D warnings` → `cargo test`
 2. OpenAPI 同步檢查：`cargo run -p server --bin export_openapi > frontend/openapi.json` → `git diff --exit-code`
-3. 前端：`openapi-typescript` 產生型別 → `tsc --noEmit` → `vitest` → `vite build`
+3. 前端：`openapi-typescript` → generated `schema.d.ts` 差異檢查 → typecheck → `npm run lint`（保留現有 warnings，不放寬規則）→ tests → build
 4. E2E：Playwright（iPhone viewport）跑「開團 → 下單 → 重新送出 → 統計」流程
 
 ---
@@ -1259,7 +1289,7 @@ CLIENT_INFO_RETENTION_DAYS=90
 
 ---
 
-## 13. 里程碑
+## 13. 早期里程碑（歷史規劃，非目前待辦）
 
 | 階段 | 內容 | 產出 |
 |------|------|------|
@@ -1276,7 +1306,7 @@ CLIENT_INFO_RETENTION_DAYS=90
 
 1. 參與者是否需要「簡易驗證」（例如每人一個 4 位數 PIN）以防冒名？MVP 不做，先靠送出歷史與裝置資訊查核。
 2. 加價選項（加飯 +10）目前寫在店家備註、由參與者在品項備註註明；是否要變成正式的品項選項並自動算錢，留待 v2。
-3. 是否需要多位開團者共同管理（共享名單/店家）？會影響 `organizer_id` 的權限模型，建議 v2 引入 `Team`。
+3. 本地 SharingGroup／群組團已實作（見 4.3(d)）；邀請信、scope 轉移或更細角色等擴充仍需另定需求，不再把共享名單／店家列為未實作。
 4. 已封存的團是否自動清除？建議保留 1 年（ClientInfo 90 天即清除）。
 5. 截止時間到達後是否自動關閉（需背景排程）？MVP 以「讀取時判斷」實作。
 6. AI 匯入是否要支援多張照片（例如菜單正反面）？目前一次一張；agent 對同一店家再匯入一次即可合併（同名覆蓋）。

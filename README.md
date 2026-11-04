@@ -47,7 +47,7 @@
 
 ```
 backend/                 Cargo workspace（DDD + Clean Architecture）
-  crates/domain/         實體、值物件、業務規則，不依賴任何框架
+  crates/domain/         實體、值物件、業務規則（含 serde 邊界），無 HTTP／SQL／AI SDK
   crates/application/    use case、port（repository、clock、AI agent…）、AI 匯入的 prompt 和 tool
   crates/infrastructure/ port 的實作：SQLite repository、Argon2id、OIDC、rig AI agent
   crates/api/            axum 路由、DTO、驗證、CSRF、限流、OpenAPI
@@ -62,7 +62,7 @@ eval/cases/              AI 匯入評測案例（圖片 + 期望結果）
 docs/                    design.md（設計）、plan.md（開發計畫）、deploy.md（部署細節）
 ```
 
-依賴方向是 `api / infrastructure → application → domain`，`server` 負責把它們組起來。domain 和 application 不碰 HTTP、SQL 或 AI SDK，都透過 port 介面，所以 use case 可以用 fake 實作做單元測試。
+主要依賴方向是 `api / infrastructure → application → domain`，`server` 負責組裝（包括注入 SharingRepo）。API 仍保留 Db health／圖片等 infrastructure 接點，並非完全無 adapter 依賴；domain 和 application 不碰 HTTP、SQL 或 AI SDK。現況與限制見[設計文件](docs/design.md)、[架構改善施工紀錄](docs/architecture-improvement-workplan.md)。
 
 ## 本機開發
 
@@ -86,13 +86,15 @@ make admin EMAIL=you@example.com NAME="你的名字"   # 互動輸入密碼
 
 | 指令 | 說明 |
 |---|---|
-| `make check` | 所有 CI 檢查：版本一致、fmt、clippy、後端測試、OpenAPI 同步、前端 typecheck、測試、build |
+| `make check` | CI 靜態／單元檢查：版本一致、fmt、clippy、後端測試、OpenAPI／generated types 同步、前端 typecheck、lint、測試、build；E2E 另跑 |
 | `make e2e` | 建置 release 執行檔後跑 Playwright（本機：`CHROME_PATH=/usr/bin/google-chrome make e2e`） |
 | `make gen-api` | 後端 API 改動後，重新匯出 `openapi.json` 並產生前端型別 |
 | `make ai-eval` | 用真實模型跑 AI 匯入評測（會花 token，不在 CI 中） |
 | `make docker-build` | 建置 Docker 映像 `order-a-bento:latest` |
 | `make version` | 印出目前版本 |
 | `make bump V=X.Y.Z` | 升版：更新 Cargo.toml、Cargo.lock、前端 package.json／lock（不會 commit） |
+
+`make check` 的生成檔守門比較工作檔與 Git index；API 修改後先 `make gen-api`，將預期 OpenAPI／`schema.d.ts` 差異一併 review 並納入提交。刻意保留未 stage 的新生成差異會使同步檢查失敗，這不是產生器不確定，也不應關閉守門規則。
 
 ## 本地共用群組
 
@@ -179,7 +181,9 @@ AI 匯入的請求最長會等 `AI_RUN_TIMEOUT_SECS`（預設 90 秒，compatibl
 
 Vendor 圖片匯入後可在同份草稿繼續文字對話修改、手動編輯與復原上一輪，最後確認才寫入；額度、保存與並行保護見 [草稿對話說明](docs/vendor-import-conversation.md)。
 
-菜單支援小數兩位（例如水餃單價 7.5 元、3 顆 22.5 元）。API 金額仍用元，資料庫改用整數分；升級與回退注意事項見 [小數金額說明](docs/decimal-money.md)。
+菜單支援小數兩位（例如水餃單價 7.5 元、3 顆 22.5 元）。API／AI JSON 用元，Rust／DB 用整數分；`0010` 為金額資料轉換，回退必須 image＋DB 成套恢復。`0011` 另為 nullable 對話用量摘要，不重算金額；詳見[小數金額說明](docs/decimal-money.md)與[部署升級章節](docs/deploy.md#9-升級)。
+
+AI 配額為每人滾動 24h 的內部操作次數，初次 run／新 turn 原子共用；失敗保留一次、retry／相同 turn replay 不再加扣。`ImportRun.usage` 僅初次辨識，對話 ledger 記可能不完整的已觀測 tokens，未知為 NULL，不是零或供應商帳單。每個 HTTP 回應有 server-generated `x-request-id`，可關聯遮罩 HTTP trace 與 AI 摘要；沒有 durable worker、初次匯入冪等或完整 audit log。詳細[診斷與限制](docs/deploy.md#ai-草稿配額與診斷)。
 
 ### 5. AI provider 範例
 
@@ -220,8 +224,8 @@ docker start bento
 ```
 
   不要在服務執行中只複製 `bento.db` 單檔（會漏掉 `-wal`）。還原方式見 [docs/deploy.md](docs/deploy.md) §7。
-- 升級：建置新映像，停掉舊容器，用同樣的 volume 和參數啟動。migration 在啟動時自動執行。
-- 健康檢查：`GET /healthz`，映像內建 Docker `HEALTHCHECK`。
+- 升級：先取得新固定 image，停舊服務並備份整個 volume 及對應 image／設定，再啟動新版自動 migration。不可假設任何變更都可只換回舊 binary；停機包含備份／migration／驗證，詳見 [部署 §9](docs/deploy.md#9-升級)。
+- 健康檢查：`GET /healthz` 只以 read pool `SELECT 1` 確認基本程序／DB 連線，不保證寫入、AI 或備份成功；映像內建 Docker `HEALTHCHECK`。
 
 ## 版本
 

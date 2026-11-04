@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap, ApiError } from "@/shared/api/client";
-import type { MenuItemInput, VendorSummary, VendorDetail } from "@/shared/api/types";
-import { invalidateSharingAccessOnError, scopePath, sharingRequest } from "@/features/sharing-groups/hooks";
+import type { MenuItemInput } from "@/shared/api/types";
+import type { components } from "@/shared/api/schema";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
+import { listVendors } from "@/shared/api/directory";
 
 const listKey = ["vendors"] as const;
 const detailKey = (id: string) => ["vendor", id] as const;
@@ -42,14 +44,14 @@ export interface VendorFields {
 export function useVendors(sharingGroupId?: string) {
   return useQuery({
     queryKey: [...listKey, sharingGroupId || "personal"],
-    queryFn: () => sharingRequest<VendorSummary[]>(scopePath("vendors", sharingGroupId)),
+    queryFn: ({ signal }) => listVendors(sharingGroupId, signal),
   });
 }
 
 export function useVendor(id: string) {
   return useQuery({
     queryKey: detailKey(id),
-    queryFn: () => sharingRequest<VendorDetail>(`vendors/${id}`),
+    queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/vendors/{vendorId}", { params: { path: { vendorId: id } }, signal })),
   });
 }
 
@@ -57,7 +59,7 @@ export function useCreateVendor() {
   const qc = useQueryClient();
   return useMutation({
     onError: (error) => invalidateSharingAccessOnError(qc, error),
-    mutationFn: (body: VendorFields & { sharingGroupId?: string }) => sharingRequest<VendorDetail>("vendors", "POST", body),
+    mutationFn: async (body: components["schemas"]["CreateVendorRequest"]) => unwrap(await api.POST("/api/v1/vendors", { body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: listKey }),
   });
 }

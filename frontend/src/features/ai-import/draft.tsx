@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { components } from "@/shared/api/schema";
 import type { ImportRun } from "@/shared/api/types";
-import { ApiError } from "@/shared/api/client";
-import { sharingRequest } from "@/features/sharing-groups/hooks";
+import { api, unwrap, ApiError } from "@/shared/api/client";
 import { errorMessage } from "@/shared/api/errors";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
@@ -47,11 +46,15 @@ export function useDraftConversation(run: ImportRun, state: TargetState[], repla
   const [error, setError] = useState("");
   const [uncertain, setUncertain] = useState(false);
   const mounted = useRef(true);
-  const request = useRef<{ revision: number; turnId: string; instruction: string; vendors: DraftVendor[] } | null>(null);
+  const request = useRef<components["schemas"]["TurnRequest"] | null>(null);
   const latest = useRef(state);
   latest.current = state;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const path = `ai/import-runs/${run.id}`;
+  const params = { path: { runId: run.id } };
+  const sendTurn = async (body: components["schemas"]["TurnRequest"]) =>
+    unwrap(await api.POST("/api/v1/ai/import-runs/{runId}/turns", { params, body }));
+  const saveDraft = async (body: components["schemas"]["DraftRequest"]) =>
+    unwrap(await api.PUT("/api/v1/ai/import-runs/{runId}/draft", { params, body }));
   const invalidPrices = state.some((t) => t.type === "vendor" && t.menu.some((m) => Number.isNaN(parsePrice(m.price))));
 
   function adopt(next: DraftState) {
@@ -84,14 +87,14 @@ export function useDraftConversation(run: ImportRun, state: TargetState[], repla
       request.current = body;
       // Even a quota/validation rejection may have initialized the server draft.
       if (!draft) setDraft({ revision: 0, vendors: body.vendors, turns: [], undo: null, pending: null, pendingUntil: null });
-      return sharingRequest<DraftState>(`${path}/turns`, "POST", body);
+      return sendTurn(body);
     });
   }
   async function persist(): Promise<number | undefined> {
     if (run.mode !== "vendor") return undefined;
     if (!draft && !uncertain) return undefined;
     if (uncertain || busy || draft?.pending) throw new Error("請先確認本輪結果，草稿尚未送出");
-    const next = await sharingRequest<DraftState>(`${path}/draft`, "PUT", { revision: draft?.revision ?? 0, vendors: stateToDraft(latest.current) });
+    const next = await saveDraft({ revision: draft?.revision ?? 0, vendors: stateToDraft(latest.current) });
     setDraft(next);
     return next.revision;
   }
@@ -117,16 +120,19 @@ export function useDraftConversation(run: ImportRun, state: TargetState[], repla
       {invalidPrices && <p role="alert" className="text-sm text-destructive">請先修正價格格式再保存或送出指示；手動內容尚未送出。</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" disabled={busy || uncertain || invalidPrices || !!draft?.pending || !instruction.trim() || [...instruction].length > 500 || (draft?.turns.length ?? 0) >= 20} onClick={() => void send()}>{busy ? "處理中…" : "送出修改指示"}</Button>
-        <Button type="button" variant="outline" disabled={busy || uncertain || invalidPrices || !!draft?.pending} onClick={() => void perform(() => sharingRequest<DraftState>(`${path}/draft`, "PUT", { revision: draft?.revision ?? 0, vendors: stateToDraft(state) }))}>儲存草稿</Button>
+        <Button type="button" variant="outline" disabled={busy || uncertain || invalidPrices || !!draft?.pending} onClick={() => void perform(() => saveDraft({ revision: draft?.revision ?? 0, vendors: stateToDraft(state) }))}>儲存草稿</Button>
         <Button type="button" variant="outline" disabled={busy || uncertain || !undoTurn || manualChanged || !!draft?.pending} onClick={() => {
           if (manualChanged || !undoTurn) return;
           if (!window.confirm("復原最近一次有變更的 AI 回合，回到該輪送出前的草稿（包含當時手動編輯）。確定復原？")) return;
-          void perform(() => sharingRequest<DraftState>(`${path}/undo`, "POST", { revision: draft!.revision, turnId: undoTurn!.id }));
+          void perform(async () => unwrap(await api.POST("/api/v1/ai/import-runs/{runId}/undo", { params, body: { revision: draft!.revision, turnId: undoTurn!.id } })));
         }}>復原上一輪</Button>
-        {uncertain && request.current && <Button type="button" variant="outline" disabled={busy} onClick={() => void perform(() => sharingRequest<DraftState>(`${path}/turns`, "POST", request.current))}>重試本輪（不重複計費）</Button>}
+        {uncertain && request.current && <Button type="button" variant="outline" disabled={busy} onClick={() => {
+          const body = request.current;
+          if (body) void perform(() => sendTurn(body));
+        }}>重試本輪（不重複計費）</Button>}
         {(uncertain || draft?.pending) && <Button type="button" variant="outline" disabled={busy} onClick={() => {
           if (!window.confirm("重新讀取伺服器草稿會取代尚未送出的手動修改。確定？")) return;
-          void perform(() => sharingRequest<DraftState>(`${path}/draft`));
+          void perform(async () => unwrap(await api.GET("/api/v1/ai/import-runs/{runId}/draft", { params })));
         }}>重新讀取草稿</Button>}
       </div>
     </section>

@@ -3,7 +3,17 @@ use application::ai_import::DraftTurnCmd;
 use application::ports::ImportRunRepo;
 use domain::ai_import::{DraftEdit, DraftState, ImportRun};
 
-async fn draft_run(e: &Env) -> ImportRun {
+#[path = "ai_turn_metrics_tests.rs"]
+mod metrics_tests;
+
+pub(super) async fn draft_run(e: &Env) -> ImportRun {
+    draft_run_in_scope(e, None).await
+}
+
+async fn draft_run_in_scope(
+    e: &Env,
+    sharing_group_id: Option<domain::sharing::SharingGroupId>,
+) -> ImportRun {
     let a = FakeImportAgent::new(
         vec![FakeToolCall::ProposeVendor(vargs(json!({
             "target":"new", "info":{"name":"原店名"},
@@ -16,6 +26,7 @@ async fn draft_run(e: &Env) -> ImportRun {
             e.org,
             StartImportCmd {
                 mode: ImportMode::Vendor,
+                sharing_group_id,
                 ..cmd()
             },
         )

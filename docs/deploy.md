@@ -1,5 +1,7 @@
 # 部署指南
 
+> 現況校正：2026-11-04，基準 `c499a31` 加 A–G 工作目錄；檢查及核准狀態見[施工紀錄](architecture-improvement-workplan.md)。
+
 單一 Docker 映像（前端已內嵌於後端執行檔）+ 一個 SQLite 檔（`/data/bento.db`）。**只能跑單一實例**（SQLite 單寫入者）。
 
 ## 1. 前置需求
@@ -9,7 +11,7 @@
 
 ### 共用群組與升級注意事項
 
-本地共用群組不需要額外環境變數或 Zitadel 設定。群組角色只控制群組名單／店家菜單與成員管理，不等同 `ADMIN_EMAIL` 的本機備援登入身分，也不授權存取其他主辦人的團。
+本地共用群組不需要額外環境變數或 Zitadel 設定。群組 admin 維護共用名單／店家菜單及成員，member 可查看及選用；群組團由目前成員查看，群組 admin 或仍是成員的原開團者管理。撤權後原開團者也失去群組團存取，封存團一律唯讀。這些角色不等同 `ADMIN_EMAIL` 備援登入，也不授權讀取別人的個人團。SharingGroup 與一次 GroupOrder、公開 share token 是不同權限模型。
 
 升級前請依備份章節備份 SQLite 資料庫；啟動新版會執行資料庫 migration。原有名單、店家菜單、地址及訂單不會自動公開或加入群組。同 Email 的本機／OIDC 帳號仍以不同本站使用者 ID 管理，加入成員時需確認選對身分。
 
@@ -22,6 +24,15 @@ AI 菜單匯入預設勾選「確認匯入後，同時儲存菜單照片」，�
 暫存固定在 run 建立後 **24 小時失去可用資格**，apply 嚴格驗到期，即使 row 尚在也不能保存；實際邏輯刪除等下一輪 maintenance（啟動約 30 秒首跑，預設間隔 24 小時，可能再等近 24 小時，停機更久）。不是準時 24 小時實體抹除，也沒有每人三張限制；沿用既有 AI quota／限流與 request 大小限制。不新增排程、volume 或環境變數。
 
 照片存在同一 SQLite 的 `vendor_images` BLOB 子表，無需新增 volume、環境變數或 uploads 目錄。禁止把 `/data` 或 DB 備份掛成公開靜態檔；照片只經登入與店家授權的 API 讀取（private/no-store），不出現在公開點餐、OG 或 LINE 分享。多位管理者同時替換／刪除時，以最後成功提交為準，沒有版本衝突保護。
+
+### AI 草稿、配額與診斷
+
+- Vendor 匯入可在同一草稿文字修正、手動保存及 Undo，最後確認才寫正式店家。每輪使用最新草稿、最近最多六輪歷史及仍有效的 opt-in 暫存圖；每份草稿最多 20 輪、每次指示最多 500 字，run 建立後 24h 不再可編輯。revision CAS／turn ID／pending lease 防止晚回應覆蓋手改或重跑相同 turn；詳見[草稿對話說明](vendor-import-conversation.md)。
+- `AI_DAILY_QUOTA_PER_USER` 是**每人滾動 24h 操作次數**，不是日曆日、token 或帳單上限。初次 run＋可選照片與新 turn 共享 `BEGIN IMMEDIATE` 內的配額檢查／保留；滿額為 `429/ai_quota_exceeded`，沒有超額 run／photo 殘留。失敗保留一次配額，內部 retry 不再加扣，相同 turn replay 不再模型呼叫或扣次數；初次重新上傳尚無 client-operation 冪等。
+- `ImportRun.usage` 只代表初次辨識。`0011` 在既有 `ai_import_turn_usage` 追加 nullable 的 input／output tokens、model、duration_ms、finished_at、execution_outcome、draft_outcome、error_code；是可能不完整的**已觀測**用量。舊資料、未觀測欄位及硬中斷後未知摘要保持 NULL，不補零。CAS／撤權／期限阻擋草稿套用時仍可記內部用量，不繞過權限回傳草稿；telemetry 落盤失敗不回滾成功草稿。
+- 每個 HTTP 回應的 `x-request-id` 由 server 產生 UUID v7，不沿用 client ID，可用它關聯 method／遮罩 path／status／latency 與 AI run／turn started／completed／replay 摘要。摘要含 model、monotonic duration、nullable tokens、execution／draft outcome 及固定錯誤類別；`quota_unit=internal_operation_24h`、`usage_kind=observed_tokens_not_invoice` 不是供應商帳單，replay 為 `not_started/not_reobserved`。文字日誌 `None` 表示未知。
+- 新增診斷日誌不記 public token、query、Authorization／Cookie、prompt、圖片或 provider raw error；client turn ID 以 debug escape 處理換行。沿用 `RUST_LOG` 文字格式，沒有新增 JSON 開關、OTel 或完整業務 audit log。
+- 初次及文字對話仍是同步 HTTP，沒有 durable worker／程序重啟續跑；取消等待不保證外部已停止計費。模型斷線、程序 crash 或 telemetry DB 失敗可能留下未知用量，不能聲稱零消耗或 billing exactly-once。24h 期限不是對話／ledger 的刪除政策，目前尚無整體歷史用量保留期限。
 
 ## 2. 建置映像
 
@@ -61,7 +72,7 @@ OIDC_ADDITIONAL_AUDIENCES=395789596295692298
 
 ### 3.1 本機備援管理員（email + 密碼）
 
-- 保留 `ADMIN_EMAIL` 指定唯一可用本機帳密登入的帳號；其他舊本機帳號及其資料不刪除，但不能再登入，舊 session 也不再接受。不新增角色權限：備援管理員仍只能操作自己擁有的資料。
+- 保留 `ADMIN_EMAIL` 指定唯一可用本機帳密登入的帳號；其他舊本機帳號及其資料不刪除，但不能再登入，舊 session 也不再接受。不新增全域角色權限：備援管理員只能操作自己的個人資料及目前群組資格授權的資料／團。
 - `PASSWORD_LOGIN_ENABLED` 未設定時，有 `ADMIN_EMAIL` 才開啟；明確設 `true` 卻沒有 `ADMIN_EMAIL` 會拒絕啟動。設為 `false` 時端點回 404。每個 IP 限速，失敗一律回相同的 401 `invalid_credentials`。
 - 不開放註冊；OIDC 與本機帳號即使 email 相同也完全獨立。
 
@@ -256,17 +267,29 @@ docker start bento
 
 ## 8. 健康檢查
 
-`GET /healthz`（會查詢資料庫）成功回 200 與 `{"status":"ok"...}`。映像已內建 `HEALTHCHECK`（每 30 秒）；`docker ps` 顯示 `healthy`。外部監控請對公開網址呼叫 `/healthz`。
+`GET /healthz` 透過 read pool 執行 `SELECT 1`，成功回 200 與 `{"status":"ok","version":"..."}`。它只確認程序與 DB 連線的基本可讀狀態，**不驗證磁碟可寫、交易可提交、AI／OIDC 可用、備份或還原成功**。映像內建 `HEALTHCHECK`（每 30 秒）；`healthy` 不代表上述外部依賴全數健康，仍需獨立監控與備份還原演練。
 
 ## 9. 升級
 
+**不要把所有 migration 都當成可直接降版的向前相容變更。**目前 schema 至 `0011`：
+
+- `0010_money_cents.sql` 是資料單位切換：菜單單價、開團快照、已送單成交價及已收款轉成整數「分」，API／proposal／draft JSON 仍用「元」。舊 binary 不可直接讀轉換後 DB；詳見 [小數金額升級／回退](decimal-money.md)。
+- `0011_ai_turn_metrics.sql` 僅追加 turn ledger 的 nullable 用量／結果欄位，不轉換或重算任何金額；舊 ledger 新欄位全部未知 NULL，不偽造零 token／完成時間。這不等於已保證任何舊 binary 能通過新版 migration 檢查或可安全直接回退。
+- 已發布 migrations 不改寫，也沒有自動降版 migration。停機時間包含備份、migration、啟動及驗證，取決於 DB／WAL／照片量與磁碟速度，不只是容器重啟時間。
+
+建議流程：先在副本演練、確認可用磁碟空間與還原，再取得新版 image，記錄舊版不可變 image tag／digest 及對應設定；**停舊服務後備份整個 volume，才啟動新版**，不可讓新舊服務同時寫入。
+
 ```sh
-docker build -t order-a-bento:latest .   # 或拉取新映像
-docker stop bento && docker rm bento
-docker run ...                           # 同樣的 volume 與參數
+docker pull ghcr.io/swind/order-a-bento:sha-NEW   # 換成已確認的固定 tag
+docker stop bento
+# 依 §7 停機備份整個 volume，記錄對應舊 image digest；此時不要先重啟舊服務
+docker rm bento
+docker run ...                           # 新固定 image、同一 volume 與已確認參數，見 §5
 ```
 
-資料庫 migration 於啟動時自動執行（向前相容，無降版 migration）；升級前建議先依 §7 做一次備份。停機時間約為容器重啟時間。
+新版啟動自動執行 migration。確認啟動日誌、`/healthz` version、登入、讀寫與核心流程後再恢復流量；health 成功不等於 migration 後所有業務驗證完成。
+
+**回退**：停新版服務，恢復升級前一致的 DB／WAL／volume 備份及相配的舊 image／設定，再啟動驗證；尤其跨 `0010` 必須 image＋DB 成套回退，不能只換回舊 image，也不能手動除以 100 猜資料格式。還原會失去備份後的新寫入，先評估並保留故障現場的受保護副本。備份、照片與 ledger 皆含私有資料，不可公開或輸出 secrets 到操作日誌。
 
 ## 10. 安全檢查清單
 

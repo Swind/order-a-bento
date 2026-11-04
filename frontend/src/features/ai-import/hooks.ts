@@ -1,14 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError, toApiError, unwrap } from "@/shared/api/client";
 import type { AcceptedChange, ImportMode, ImportRun } from "@/shared/api/types";
-import { invalidateSharingAccessOnError, sharingRequest } from "@/features/sharing-groups/hooks";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
 
 const runKey = (id: string) => ["import-run", id] as const;
 
 export function useImportRun(runId: string) {
   return useQuery({
     queryKey: runKey(runId),
-    queryFn: () => sharingRequest<ImportRun>(`ai/import-runs/${runId}`),
+    queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/ai/import-runs/{runId}", { params: { path: { runId } }, signal })),
   });
 }
 

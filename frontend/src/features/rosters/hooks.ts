@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/shared/api/client";
-import type { MemberInput, RosterSummary, RosterDetail } from "@/shared/api/types";
-import { invalidateSharingAccessOnError, scopePath, sharingRequest } from "@/features/sharing-groups/hooks";
+import type { MemberInput } from "@/shared/api/types";
+import type { components } from "@/shared/api/schema";
+import { invalidateSharingAccessOnError } from "@/shared/api/access";
+import { listRosters } from "@/shared/api/directory";
 
 const listKey = ["rosters"] as const;
 const detailKey = (id: string) => ["roster", id] as const;
@@ -9,7 +11,7 @@ const detailKey = (id: string) => ["roster", id] as const;
 export function useRosters(sharingGroupId?: string) {
   return useQuery({
     queryKey: [...listKey, sharingGroupId || "personal"],
-    queryFn: () => sharingRequest<RosterSummary[]>(scopePath("rosters", sharingGroupId)),
+    queryFn: ({ signal }) => listRosters(sharingGroupId, signal),
   });
 }
 
@@ -17,7 +19,7 @@ export function useRoster(id: string) {
   return useQuery({
     queryKey: detailKey(id),
     enabled: !!id,
-    queryFn: () => sharingRequest<RosterDetail>(`rosters/${id}`),
+    queryFn: async ({ signal }) => unwrap(await api.GET("/api/v1/rosters/{rosterId}", { params: { path: { rosterId: id } }, signal })),
   });
 }
 
@@ -25,8 +27,8 @@ export function useCreateRoster() {
   const qc = useQueryClient();
   return useMutation({
     onError: (error) => invalidateSharingAccessOnError(qc, error),
-    mutationFn: (body: { name: string; members?: MemberInput[]; sharingGroupId?: string }) =>
-      sharingRequest<RosterDetail>("rosters", "POST", body),
+    mutationFn: async (body: components["schemas"]["CreateRosterRequest"]) =>
+      unwrap(await api.POST("/api/v1/rosters", { body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: listKey }),
   });
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { components } from "@/shared/api/schema";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -17,9 +18,9 @@ const undoable = (): DraftState => {
   s.turns = [{ id: "edit", instruction: "改價", reply: "完成", status: "completed", changes: ["價格 60 → 7.5"], undone: false }];
   return s;
 };
-function Harness({ initial, unlocked = false }: { initial?: DraftState; unlocked?: boolean }) {
+function Harness({ initial, unlocked = false, onReplace }: { initial?: DraftState; unlocked?: boolean; onReplace?: (state: TargetState[]) => void }) {
   const [state, setState] = useState<TargetState[]>(() => initial ? draftToState(initial) : initState(VENDOR_RUN.proposal));
-  const chat = useDraftConversation({ ...VENDOR_RUN, draft: initial }, state, setState);
+  const chat = useDraftConversation({ ...VENDOR_RUN, draft: initial }, state, (next) => { onReplace?.(next); setState(next); });
   const first = state[0];
   if (first.type !== "vendor") return null;
   return <>
@@ -126,13 +127,14 @@ describe("vendor draft conversation", () => {
   });
 
   it("keeps manual edits on HTTP failure and retries the same turn ID without duplicate work", async () => {
-    const bodies: { turnId: string; vendors: DraftVendor[] }[] = [];
+    const bodies: components["schemas"]["TurnRequest"][] = [];
     server.use(http.post("*/api/v1/ai/import-runs/run1/turns", async ({ request }) => {
       const body = await request.json() as typeof bodies[number]; bodies.push(body);
       if (bodies.length === 1) return problem(503, "ai_unavailable");
       return HttpResponse.json({ ...base(), revision: 2, vendors: body.vendors, turns: [{ id: body.turnId, instruction: "第一項改 110 元", reply: "請問是哪一類？", status: "completed", changes: [], undone: false }] });
     }));
-    render(<Harness />);
+    const initial = { ...base(), revision: 6 };
+    render(<Harness initial={initial} />);
     await userEvent.clear(screen.getByLabelText("手動品名"));
     await userEvent.type(screen.getByLabelText("手動品名"), "錯誤不丟");
     await send();
@@ -141,8 +143,52 @@ describe("vendor draft conversation", () => {
     await userEvent.click(screen.getByRole("button", { name: /重試本輪/ }));
     await screen.findByText("AI：請問是哪一類？");
     expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[0]).toMatchObject({ revision: 6, instruction: "第一項改 7.5 元" });
     expect(screen.getByText("本輪未修改草稿")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "復原上一輪" })).toBeDisabled();
+  });
+
+  it.each([401, 403, 404, 429])("preserves edits after %s without marking an accepted turn uncertain", async (status) => {
+    const bodies: components["schemas"]["TurnRequest"][] = [];
+    server.use(http.post("*/api/v1/ai/import-runs/run1/turns", async ({ request }) => {
+      bodies.push(await request.json() as components["schemas"]["TurnRequest"]);
+      return problem(status, status === 429 ? "ai_quota_exceeded" : "access_denied");
+    }));
+    render(<Harness initial={{ ...base(), revision: 4 }} />);
+    await userEvent.type(screen.getByLabelText("手動品名"), "保留手改");
+    const name = screen.getByLabelText("手動品名").getAttribute("value");
+    await send();
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("手動品名")).toHaveValue(name);
+    expect(screen.queryByRole("button", { name: /重試本輪/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "送出修改指示" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "送出修改指示" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1].turnId).not.toBe(bodies[0].turnId);
+    expect(bodies[1].revision).toBe(4);
+    expect(bodies[1].vendors).toEqual(bodies[0].vendors);
+  });
+
+  it.each([false, true])("ignores a late response after unmount (failure=%s)", async (failure) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let received = false;
+    server.use(http.post("*/api/v1/ai/import-runs/run1/turns", async ({ request }) => {
+      received = true;
+      await gate;
+      // A sent mutation is not aborted just because its editor unmounted.
+      expect(request.signal.aborted).toBe(false);
+      return failure ? problem(503, "ai_unavailable") : HttpResponse.json({ ...base(), revision: 2 });
+    }));
+    const replace = vi.fn();
+    const view = render(<Harness onReplace={replace} />);
+    await send();
+    await waitFor(() => expect(received).toBe(true));
+    view.unmount();
+    await act(async () => { release(); await gate; });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("手動品名")).not.toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it("does not replace newer manual input with a late response", async () => {
@@ -157,6 +203,31 @@ describe("vendor draft conversation", () => {
     await screen.findByText(/未覆蓋手動內容/);
     expect(screen.getByLabelText("手動品名")).toHaveValue("較新手改");
     expect(screen.getByRole("button", { name: "送出修改指示" })).toBeDisabled();
+  });
+
+  it("keeps newer edits and the frozen retry body after a late server error", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const bodies: components["schemas"]["TurnRequest"][] = [];
+    server.use(http.post("*/api/v1/ai/import-runs/run1/turns", async ({ request }) => {
+      bodies.push(await request.json() as components["schemas"]["TurnRequest"]);
+      if (bodies.length === 1) await gate;
+      return problem(503, "ai_unavailable");
+    }));
+    render(<Harness unlocked initial={{ ...base(), revision: 9 }} />);
+    await send();
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    await userEvent.clear(screen.getByLabelText("手動品名"));
+    await userEvent.type(screen.getByLabelText("手動品名"), "等待中的新手改");
+    await act(async () => { release(); });
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("手動品名")).toHaveValue("等待中的新手改");
+    expect(screen.getByRole("button", { name: "送出修改指示" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /重試本輪/ }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[1].revision).toBe(9);
+    expect(screen.getByLabelText("手動品名")).toHaveValue("等待中的新手改");
   });
 
   it("restores saved drafts and keeps values when undo conflicts", async () => {

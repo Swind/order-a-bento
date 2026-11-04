@@ -14,6 +14,7 @@ use infrastructure::ordering_repo::{
     SqliteGroupOrderRepo, SqliteOrderReadModel, SqliteSettlementRepo, SqliteSubmissionRepo,
 };
 use infrastructure::password::Argon2PasswordHasher;
+use infrastructure::sharing_repo::SqliteSharingRepo;
 use infrastructure::sqlite::{Db, TempDir};
 use infrastructure::tokens::OsRngTokenGenerator;
 
@@ -126,8 +127,9 @@ pub async fn test_app_with(
     )
     .with_password_login(true)
     .with_trusted_proxies(trusted_proxies);
+    let sharing = Arc::new(SqliteSharingRepo::new(db.clone()));
     TestApp {
-        state: AppState::new(db, true, auth, directory, ordering, web)
+        state: AppState::new(db, true, auth, directory, ordering, sharing, web)
             .with_rate_limit(rate)
             .with_login_rate_limit(rate),
         _dir: dir,

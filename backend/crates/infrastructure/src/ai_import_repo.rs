@@ -34,6 +34,32 @@ fn bad_status() -> RepoError {
     RepoError::Domain(DomainError::invalid("status", "狀態已變更，不能執行此操作"))
 }
 
+async fn count_usage(
+    conn: &mut sqlx::SqliteConnection,
+    org: OrganizerId,
+    since: SystemTime,
+) -> PortResult<u64> {
+    let (n,): (i64,) = sqlx::query_as("SELECT (SELECT count(*) FROM ai_import_runs WHERE organizer_id=? AND created_at>=?) + (SELECT count(*) FROM ai_import_turn_usage WHERE organizer_id=? AND created_at>=?)")
+        .bind(org.to_string()).bind(to_text(since)).bind(org.to_string()).bind(to_text(since))
+        .fetch_one(conn).await.map_err(port)?;
+    Ok(n as u64)
+}
+
+async fn check_quota(
+    conn: &mut sqlx::SqliteConnection,
+    org: OrganizerId,
+    now: SystemTime,
+    quota: u32,
+) -> RepoResult<()> {
+    let since = now
+        .checked_sub(std::time::Duration::from_secs(86400))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    if count_usage(conn, org, since).await? >= u64::from(quota) {
+        return Err(DomainError::invalid("quota", "daily AI quota exceeded").into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub struct SqliteImportRunRepo {
     db: Db,
@@ -136,6 +162,40 @@ impl RunRow {
 
 #[async_trait]
 impl ImportRunRepo for SqliteImportRunRepo {
+    async fn finish_turn(
+        &self,
+        run: &ImportRun,
+        turn_id: &str,
+        metrics: &application::ai_import::TurnMetrics,
+    ) -> PortResult<()> {
+        // Validate before writing; never wrap provider counters into negative SQL integers.
+        let input = metrics
+            .usage
+            .input_tokens
+            .map(i64::try_from)
+            .transpose()
+            .map_err(port)?;
+        let output = metrics
+            .usage
+            .output_tokens
+            .map(i64::try_from)
+            .transpose()
+            .map_err(port)?;
+        let duration = i64::try_from(metrics.duration.as_millis()).map_err(port)?;
+        let done = sqlx::query("UPDATE ai_import_turn_usage SET finished_at=?,input_tokens=?,output_tokens=?,model=?,duration_ms=?,execution_outcome=?,draft_outcome=?,error_code=? WHERE run_id=? AND turn_id=? AND organizer_id=? AND finished_at IS NULL")
+            .bind(to_text(metrics.finished_at)).bind(input).bind(output).bind(&metrics.model).bind(duration)
+            .bind(metrics.execution.as_str()).bind(metrics.draft.as_str()).bind(metrics.error_code).bind(run.id.to_string()).bind(turn_id).bind(run.organizer_id.to_string())
+            .execute(&self.db.write).await.map_err(port)?;
+        if done.rows_affected() == 0 {
+            let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM ai_import_turn_usage WHERE run_id=? AND turn_id=? AND organizer_id=?")
+                .bind(run.id.to_string()).bind(turn_id).bind(run.organizer_id.to_string()).fetch_optional(&self.db.read).await.map_err(port)?;
+            if exists.is_none() {
+                return Err(port("turn reservation not found"));
+            }
+        }
+        Ok(())
+    }
+
     async fn draft(&self, run: &ImportRun) -> RepoResult<domain::ai_import::DraftState> {
         let state = domain::ai_import::DraftState::from_proposal(&run.proposal);
         // Initialization is idempotent; all later writes use a revision CAS.
@@ -162,17 +222,7 @@ impl ImportRunRepo for SqliteImportRunRepo {
             .map_err(port)?;
         crate::directory_repo::scope_admin(&mut tx, run.organizer_id, run.sharing_group_id).await?;
         if let Some(quota) = quota {
-            let since = now
-                .checked_sub(std::time::Duration::from_secs(86400))
-                .unwrap_or(std::time::UNIX_EPOCH);
-            let (n,): (i64,) = sqlx::query_as("SELECT (SELECT count(*) FROM ai_import_runs WHERE organizer_id=? AND created_at>=?) + (SELECT count(*) FROM ai_import_turn_usage WHERE organizer_id=? AND created_at>=?)")
-                .bind(run.organizer_id.to_string()).bind(to_text(since)).bind(run.organizer_id.to_string()).bind(to_text(since)).fetch_one(&mut *tx).await.map_err(port)?;
-            if n >= i64::from(quota) {
-                return Err(RepoError::Domain(DomainError::invalid(
-                    "quota",
-                    "daily AI quota exceeded",
-                )));
-            }
+            check_quota(&mut tx, run.organizer_id, now, quota).await?;
         }
         let since = now
             .checked_sub(std::time::Duration::from_secs(86400))
@@ -195,17 +245,19 @@ impl ImportRunRepo for SqliteImportRunRepo {
             .bind(run.id.to_string()).bind(run.organizer_id.to_string()).bind(to_text(now)).fetch_optional(&self.db.read).await.map_err(port)?;
         Ok(row.map(|r| r.0))
     }
-    async fn create(
+    async fn reserve_run(
         &self,
         run: &ImportRun,
         photo: Option<application::ports::NormalizedVendorImage>,
-    ) -> PortResult<()> {
+        quota: u32,
+    ) -> RepoResult<()> {
         let mut tx = self
             .db
             .write
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(port)?;
+        check_quota(&mut tx, run.organizer_id, run.created_at, quota).await?;
         let proposal = serde_json::to_string(&run.proposal).map_err(port)?;
         sqlx::query(concat!(
             "INSERT INTO ai_import_runs (",
@@ -222,8 +274,8 @@ impl ImportRunRepo for SqliteImportRunRepo {
         .bind(proposal)
         .bind(&run.summary)
         .bind(&run.model)
-        .bind(run.usage.input_tokens as i64)
-        .bind(run.usage.output_tokens as i64)
+        .bind(i64::try_from(run.usage.input_tokens).map_err(port)?)
+        .bind(i64::try_from(run.usage.output_tokens).map_err(port)?)
         .bind(&run.error)
         .bind(&run.tool_calls)
         .bind(to_text(run.created_at))
@@ -275,8 +327,8 @@ impl ImportRunRepo for SqliteImportRunRepo {
         .bind(proposal)
         .bind(&run.summary)
         .bind(&run.model)
-        .bind(run.usage.input_tokens as i64)
-        .bind(run.usage.output_tokens as i64)
+        .bind(i64::try_from(run.usage.input_tokens).map_err(port)?)
+        .bind(i64::try_from(run.usage.output_tokens).map_err(port)?)
         .bind(&run.error)
         .bind(&run.tool_calls)
         .bind(run.finished_at.map(to_text))
@@ -306,17 +358,8 @@ impl ImportRunRepo for SqliteImportRunRepo {
     }
 
     async fn count_since(&self, org: OrganizerId, since: SystemTime) -> PortResult<u64> {
-        let (n,): (i64,) = sqlx::query_as(
-            "SELECT (SELECT COUNT(*) FROM ai_import_runs WHERE organizer_id = ? AND created_at >= ?) + (SELECT COUNT(*) FROM ai_import_turn_usage WHERE organizer_id = ? AND created_at >= ?)",
-        )
-        .bind(org.to_string())
-        .bind(to_text(since))
-        .bind(org.to_string())
-        .bind(to_text(since))
-        .fetch_one(&self.db.read)
-        .await
-        .map_err(port)?;
-        Ok(n as u64)
+        let mut conn = self.db.read.acquire().await.map_err(port)?;
+        count_usage(&mut conn, org, since).await
     }
 }
 
