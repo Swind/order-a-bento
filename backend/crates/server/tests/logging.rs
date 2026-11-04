@@ -370,9 +370,10 @@ async fn json_http_ai_replay_failure_and_parallel_requests_keep_safe_context() {
         assert_eq!(failed["fields"]["error_code"], "unavailable");
         assert_eq!(failed["fields"]["execution"], "failed");
         for field in ["input_tokens", "output_tokens", "model"] { assert!(failed["fields"][field].is_null()); }
-        let responses: Vec<_> = lines.iter().filter(|v| v["fields"]["message"] == "finished processing request").collect();
+        let responses: Vec<_> = lines.iter().filter(|v| v["fields"]["event"] == "http_request_completed").collect();
         assert_eq!(responses.len(), 8); // two imports, draft, turn, replay, failed turn/import, public
         for line in responses {
+            assert_eq!(line["fields"]["message"], format!("{} {}", line["span"]["method"].as_str().unwrap(), line["span"]["path"].as_str().unwrap()));
             assert!(line["span"]["path"].as_str().unwrap().starts_with("/api/"));
             assert!(line["fields"]["status"].is_u64());
             assert!(line["fields"]["duration_ms"].is_u64());

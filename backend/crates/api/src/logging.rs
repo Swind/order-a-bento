@@ -24,7 +24,7 @@ pub async fn trace_api(
         let ip =
             crate::client::request_ip(req.headers(), req.extensions(), &state.web.trusted_proxies);
         req.extensions_mut().insert(ClientIp(ip));
-        match trace_layer().layer(next).oneshot(req).await {
+        match trace_layer(&req).layer(next).oneshot(req).await {
             Ok(response) => response.map(Body::new),
             Err(never) => match never {},
         }
@@ -89,8 +89,10 @@ impl<B> OnRequest<B> for NoRequestLog {
     fn on_request(&mut self, _: &Request<B>, _: &Span) {}
 }
 
-#[derive(Clone, Copy)]
-pub struct ResponseLog;
+#[derive(Clone)]
+pub struct ResponseLog {
+    message: String,
+}
 
 impl<B> OnResponse<B> for ResponseLog {
     fn on_response(
@@ -101,9 +103,10 @@ impl<B> OnResponse<B> for ResponseLog {
     ) {
         tracing::info!(
             target: "tower_http::trace::on_response",
+            event = "http_request_completed",
             status = response.status().as_u16(),
             duration_ms = latency.as_millis() as u64,
-            "finished processing request"
+            "{}", self.message
         );
     }
 }
@@ -125,6 +128,7 @@ impl OnFailure<ServerErrorsFailureClass> for FailureLog {
         };
         tracing::error!(
             target: "tower_http::trace::on_failure",
+            event = "http_request_failed",
             classification,
             duration_ms = latency.as_millis() as u64,
             "response failed"
@@ -143,11 +147,13 @@ pub type HttpTraceLayer = TraceLayer<
 >;
 
 /// HTTP trace layer: one INFO line per response, inside the redacted span.
-pub fn trace_layer() -> HttpTraceLayer {
+pub fn trace_layer(req: &Request<Body>) -> HttpTraceLayer {
     TraceLayer::new_for_http()
         .make_span_with(make_span as fn(&Request<Body>) -> Span)
         .on_request(NoRequestLog)
-        .on_response(ResponseLog)
+        .on_response(ResponseLog {
+            message: format!("{} {}", req.method(), redact_path(req.uri().path())),
+        })
         .on_failure(FailureLog)
 }
 
